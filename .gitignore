@@ -1,1 +1,4 @@
 demo-app
+
+# Per-session git worktrees managed by the Claude Code harness
+.claude/worktrees/
