@@ -1,6 +1,6 @@
 # Architecture
 
-> **Deep-dive companion to [`../README.md`](../README.md).** That file gives the 60-second story; this one explains every component and the design constraints that hold them together.
+Component-level companion to [`../README.md`](../README.md): every component and the constraints that hold them together.
 
 The signal path in one line: **writer pods → MXL domain (tmpfs) → mxl-k8s gateway/agent RDMA bridge → the consumer node's mirrored domain**. From there, two independent zero-copy consumers feed the browser: **mediamtx** reads each flow directly (per-flow tiles → the Multiviewer grid) and the **compositor** builds a 2 × 2 mosaic (→ the Composite tab); both are served through Caddy over WHEP/HLS.
 
@@ -19,7 +19,7 @@ Four writer Deployments (`writer-mxl-1` through `writer-mxl-4`) each produce exa
 | writer-mxl-3 | `d4d00000-…-000000000003` | gamut | MXL-3 |
 | writer-mxl-4 | `d4d00000-…-000000000004` | checkers-8 | MXL-4 |
 
-The last hex digit of the UUID is the tile index (`n`); this is referred to informally as the `d4d0…000n` scheme.
+The last hex digit of the UUID is the tile index (`n`) — the `d4d0…000n` scheme.
 
 **Placement and RDMA vs local:** Writer placement is left to the scheduler (`nodeSelector` is absent). When a writer lands on the same node as the compositor, its flow is read locally from `/run/mxl/domain` with no gateway mirror. When it lands on a different node, the mxl-k8s gateway bridges the flow grains across the EFA fabric (see §3 below). The per-flow metrics panel exposes `sourceNode` and `provider` so the local-vs-RDMA distinction is always visible.
 
@@ -37,7 +37,9 @@ The mxl-k8s control plane is what makes a cross-node write look local to the con
 
 **Agent DaemonSet:** Runs on every node. On the compositor's node, it receives bridged grains from the gateway and materialises the mirror at `/run/mxl/domain`, making the flow look local. It also manages the lifecycle of `MxlReceiver` and `MxlFlowMirror` CRs: when the intent-shim reports that a pod wants to open a flow, the agent creates the `MxlReceiver`; the operator reconciles that into a `MxlFlowMirror`; and the gateway starts bridging.
 
-**Intent shim (`libmxl-intent.so`):** An init container (`install-intent-shim`) drops the shim into a shared `emptyDir`. The main container loads it via `LD_PRELOAD`. The shim intercepts the first `mxlCreateFlowReader` call and blocks it until the agent signals that the mirror is locally available, preventing `FLOW_NOT_FOUND` races on startup or pod reschedule. The shim communicates with the agent over a Unix socket mounted from the host at `/run/mxl/agent.sock`.
+**Intent shim (`libmxl-intent.so`):** An init container (`install-intent-shim`) drops the shim into a shared `emptyDir`. The main container loads it via `LD_PRELOAD`. The shim intercepts the first `mxlCreateFlowReader` call and blocks it until the agent signals that the mirror is locally available, preventing `FLOW_NOT_FOUND` races on startup or pod reschedule. It reaches the agent over a Unix socket at `/run/mxl/agent.sock`.
+
+Consumer pods mount the whole `/run/mxl` host directory, not `domain/` and `agent.sock` separately. A single-file hostPath mount pins the socket's inode at container start, and the agent unlinks and recreates `agent.sock` on every restart — a consumer that mounted the file directly then holds a dead inode until it restarts itself, and on-demand mirror materialisation stops for any flow not already mirrored.
 
 **Custom resources:** Three CRs are used by the operator:
 - `MxlFlow` — cluster-scoped; one per UUID; records origin location and `OriginFresh` health condition.
@@ -83,11 +85,11 @@ _Source: `compositor/src/main.cpp`, `k8s/composite-deployment.yaml`_
 
 ## 4. mediamtx and Caddy
 
-**mediamtx** is the Qvest fork (`ghcr.io/qvest-digital/mediamtx-mxl`) from the `feature/mxl-static-source` branch — one of the two load-bearing qvest deltas (see §9). It runs as the primary container in the mediamtx Deployment.
+**mediamtx** is the Qvest fork (`ghcr.io/qvest-digital/mediamtx-mxl`) from the `feature/mxl-static-source` branch — one of the two load-bearing qvest deltas (see §8). It runs as the primary container in the mediamtx Deployment.
 
 **RTSP ingest:** The compositor pushes `rtsp://mediamtx:8554/composite` to a publisher-mode path. The four MXL tiles are configured as static-source paths (`mxl:///run/mxl/domain/d4d00000-…-00000000000n`), which mediamtx reads directly from the local domain using the MXL static-source plugin — the same zero-copy mechanism the compositor uses.
 
-**HLS:** Standard MPEG-TS HLS (not LL-HLS), `hlsAlwaysRemux: true`, 1-second segments, 7-segment window. Low-latency HLS was tried and caused monotonic clock rollback on the burned-in tile clocks; classic segmented HLS is stable and the extra latency is acceptable for a multiviewer. All paths set `mxlH264IDRPeriod: 30` to force a keyframe every 1 second, ensuring the HLS segmenter always has a cut point.
+**HLS:** Standard MPEG-TS HLS, `hlsAlwaysRemux: true`, 1-second segments, 7-segment window. Not LL-HLS: LL-HLS parts combined with hls.js edge-chasing make the player re-display frames it has already shown, so the burned-in tile clock appears to flap backwards even though the encoded stream stays monotonic. Classic segmented HLS costs a few seconds of latency, which a multiviewer tolerates. All paths set `mxlH264IDRPeriod: 30` to force a keyframe every second, so the segmenter always has a cut point — without it, high-complexity content can starve the muxer of keyframes and `index.m3u8` returns HTTP 500.
 
 **WebRTC (WHEP):** mediamtx serves WHEP signalling on `:8889`. ICE media goes over a dedicated UDP port (`:8189`) exposed by a separate LoadBalancer (`mediamtx-webrtc-udp.yaml`). `webrtcAdditionalHosts` advertises the LoadBalancer's external address as the ICE candidate so browsers reach the RTP path directly; the Caddy port at `:8080` is only for signalling and static assets.
 
@@ -109,7 +111,7 @@ _Source: `k8s/mediamtx-deployment.yaml`, `k8s/config/mediamtx.yml`, `k8s/config/
 A dependency-free Python HTTP server (`aggregator.py`) that runs as its own Deployment (`demo-metrics`). It requires no pip installs — only the Python standard library — so it runs on `python:3.12-slim` without a build step.
 
 **Data sources merged per flow:**
-- Nominal grain rate — per-flow `fps` and `mbps` are computed from the flow's *nominal* grain rate, not measured. The aggregator fetches the compositor's `/stats.json` but does not currently consume it for the per-flow panel; no consumer samples received fps/Mbit centrally.
+- `MxlFlow` definition — `fps` and `mbps` are *derived*, not measured: the declared `grain_rate` times the v210 grain size computed from the declared frame geometry (rows padded to a 48-pixel / 128-byte stride). Falls back to 29.97 fps and a 720p grain of 2 488 320 bytes when the definition is missing. Each tile travels producer → mirror → mediamtx, so no consumer is positioned to sample received fps centrally. The aggregator does fetch the compositor's `/stats.json`, but the per-flow rows do not use it.
 - Kubernetes pod API — writer pod `node`, `phase`, `ready`, `restarts`, `image`, `pattern`.
 - `MxlReceiver` CR — `phase`, `provider`, `boundMirror`.
 - `MxlFlowMirror` CR — `phase`, `sourceNode`, `provider`.
@@ -120,7 +122,7 @@ A dependency-free Python HTTP server (`aggregator.py`) that runs as its own Depl
 - `GET /api/flows` — returns the merged JSON for all four flows plus gateway status. The frontend polls this every 1.5 seconds.
 - `POST /api/kill/<n>` — deletes the `writer-mxl-<n>` pod to demonstrate kill-and-recover resilience. The Deployment's `Recreate` strategy brings it back automatically.
 
-**Namespace autodetect:** The aggregator reads its own service-account namespace from `/var/run/secrets/kubernetes.io/serviceaccount/namespace` at startup, so the same image works in both `demo-app` (sc cluster) and `default` (EKS). `GW_NS` defaults to `mxl-system`. An override is available via `DEMO_NS`.
+**Namespace autodetect:** The aggregator reads its own service-account namespace from `/var/run/secrets/kubernetes.io/serviceaccount/namespace` at startup, so the same manifests work under whatever `targetNamespace` Flux applies them to. `DEMO_NS` overrides it; `GW_NS` defaults to `mxl-system`.
 
 **Liveness classification:** A flow is considered `live` when its writer pod is ready, its `MxlFlow` `OriginFresh` condition is `True`, and either a `Ready` mirror exists (cross-node RDMA path) or no mirror exists at all (the writer is co-located with the consumer, so the flow is read directly from the local domain).
 
@@ -136,7 +138,7 @@ The frontend is a single `index.html` file served by the Caddy sidecar. It is a 
 
 **Visibility gate:** All player resources (WebRTC `PeerConnection` objects, hls.js instances, and polling timers) are tracked in a `MV` registry. On `visibilitychange`, if the tab becomes hidden, `MV.teardownAll()` closes every connection and clears every interval — preventing background WebRTC decode from starving other applications. When the tab becomes visible again, only the currently active scene's players are rebuilt from scratch.
 
-**`window.__mvDebug`:** A verification hook exposed on `window` for console use: `window.__mvDebug.counts()` returns `{pc: N, hls: M}` — the number of live `PeerConnection` and hls.js instances at the time of the call. When the tab is hidden, both counts should be zero.
+**`window.__mvDebug`:** A verification hook exposed on `window` for console use: `window.__mvDebug.counts()` returns `{pc: N, hls: M}` — the number of live `PeerConnection` and hls.js instances at the time of the call. Both read zero while the tab is hidden.
 
 **RDMA metrics panel:** The right-hand panel polls `GET /api/flows` every 1.5 seconds and renders per-flow grain rate, throughput, mirror status, receiver phase, origin freshness, and source node. Expandable "Details" rows show the full CR and pod state. "Kill" buttons call `POST /api/kill/<n>` to trigger a pod delete.
 
@@ -150,7 +152,7 @@ _Source: `k8s/config/index.html`_
 
 External traffic reaches the demo via a Gateway API `HTTPRoute` that attaches to the `istio-ingressgateway` Gateway in `istio-system` (sectionName `https`).
 
-**Hostname template:** `demo${hostname_suffix}.${cluster_domain}` — the suffix and domain are injected at kustomize render time, so the same manifests work for both the sc cluster and the EKS demo without editing the route.
+**Hostname template:** `demo${hostname_suffix}.${cluster_domain}` — both tokens are Flux `postBuild` substitution variables, resolved per environment at reconcile time, so one manifest serves every environment without editing the route. `mediamtx-webrtc-udp.yaml` uses the same two tokens for the WebRTC UDP LoadBalancer's external-dns record (`webrtc${hostname_suffix}.${cluster_domain}`), a sibling of the app hostname rather than a child of it, so it also resolves when `cluster_domain` is itself a delegated zone.
 
 **Backend:** All requests on the hostname route to `mediamtx:80` (the Caddy sidecar's port). Caddy dispatches from there: static assets and the multiviewer page are served directly; HLS, WebRTC signalling, API calls, and stats are proxied internally.
 
@@ -174,6 +176,6 @@ The demo depends on two changes that are not in upstream mediamtx:
 
 1. **MXL static-source plugin** (`feature/mxl-static-source` branch) — allows mediamtx paths to declare `source: mxl:///run/mxl/domain/<uuid>`, reading flows zero-copy from the local domain without a separate RTSP publisher. This is what enables the four per-tile mediamtx paths in `mediamtx.yml`.
 
-2. **Producer-pacing** — the upstream mediamtx had no way to pace the MXL reader to the flow's nominal grain rate; the qvest fork adds a pacing mechanism so mediamtx does not busy-read the ring buffer at maximum speed, which would interfere with other consumers on the same node.
+2. **Producer pacing** — paces the MXL reader to the flow's nominal grain rate. Without it mediamtx busy-reads the ring buffer at maximum speed and interferes with the other consumers on the node.
 
-Without both deltas, the image referenced in `k8s/mediamtx-deployment.yaml` (`ghcr.io/qvest-digital/mediamtx-mxl`) must be used — switching to upstream mediamtx removes MXL source support entirely.
+`k8s/mediamtx-deployment.yaml` therefore pins `ghcr.io/qvest-digital/mediamtx-mxl`. Upstream mediamtx has no MXL source support at all.

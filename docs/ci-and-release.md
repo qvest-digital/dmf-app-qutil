@@ -1,5 +1,9 @@
 # CI and Release
 
+How the two build outputs are produced, tagged, and released. [architecture.md](architecture.md) covers the components themselves.
+
+---
+
 ## 1. Overview
 
 There are two independent build outputs:
@@ -57,7 +61,7 @@ On each cluster a Flux `OCIRepository` watches this artifact repository and its 
 
 The image is built from `compositor/Dockerfile.mxlk8s` using `docker/build-push-action` with GitHub Actions layer caching (`scope=mxlk8s`).
 
-**Authentication note:** The existing `ghcr-pull-secret` rendered by ExternalSecrets (used for mediamtx) covers pulls of this image too — same registry, no extra secret to wire.
+The `ghcr-pull-secret` that ExternalSecrets renders for the mediamtx image covers this image too — same registry, no second secret.
 
 ---
 
@@ -70,7 +74,7 @@ Release management uses [release-please](https://github.com/googleapis/release-p
 - **Release type:** `simple` — release-please manages a single version file.
 - **Versioning:** `prerelease` with `prerelease-type: rc`, meaning each release increments the `rc.N` counter: `1.0.0-rc.0`, `1.0.0-rc.1`, `1.0.0-rc.2`, …
 - **Tags:** `include-v-in-tag: true` — tags are prefixed with `v` (e.g. `v1.0.0-rc.3`); the compositor image strips the `v` for Docker convention.
-- **Current version:** `1.0.0-rc.3` (from `release-please-manifest.json`).
+- **Current version:** tracked in `.github/release-please-manifest.json`.
 
 ### How it works
 
@@ -118,7 +122,7 @@ The compositor Dockerfile (`compositor/Dockerfile.mxlk8s`) pins `ghcr.io/qvest-d
 
 These PRs are classified as `deps(compositor)` commits (configured in `renovate.json` under `packageRules`). That commit type is visible in the changelog (`deps` → "Dependencies") and is included in the next release-please RC, so the go-mxl version bump becomes part of the release record.
 
-**Why this matters:** The `go-mxl` tag pinned in the compositor Dockerfile and the tag the mxl-k8s gateway was built from must match exactly — a mismatch causes cross-node mirror reads to fail silently or return `FLOW_INVALID`. See [architecture.md §8 — go-mxl lock-step](architecture.md#go-mxl-lock-step) for the full rationale.
+Renovate has no view of which tag the deployed mxl-k8s gateway links; merging one of these PRs while the gateway is on a different tag breaks cross-node mirror reads. See [architecture.md §8 — go-mxl lock-step](architecture.md#go-mxl-lock-step).
 
 ### Custom regex managers
 
@@ -133,7 +137,7 @@ Renovate matches the inline marker and the `ARG` line together:
 ARG GO_MXL_TAG=<currentValue>
 ```
 
-The marker is present in `compositor/Dockerfile.mxlk8s` directly above the `ARG GO_MXL_TAG` line. When a new version of `ghcr.io/qvest-digital/go-mxl-builder` is available, Renovate updates `<currentValue>` in place, which causes both build stages to use the new tag (the runtime stage reuses the same `${GO_MXL_TAG}` ARG).
+Updating `<currentValue>` moves both build stages at once — the runtime stage reuses the same `${GO_MXL_TAG}`.
 
 **2. Inline-marker k8s image pins** (`managerFilePatterns: /^k8s/.+\.yaml$/`):
 
