@@ -62,6 +62,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/mxl-compositor/bin/mxl-multi-compositor /usr/bin/
+# Audio-flow preview publisher. Same image, selected by overriding command in
+# k8s/audio-preview.yaml; the compositor stays the default entry point.
+COPY --from=build /opt/mxl-compositor/bin/mxl-audio-preview /usr/bin/
 
 WORKDIR /home/mxl
 ENTRYPOINT ["/usr/bin/mxl-multi-compositor"]

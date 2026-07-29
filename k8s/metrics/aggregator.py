@@ -779,16 +779,24 @@ def operator_flows():
 # operator actually knows about can be added — we validate the uuid against the
 # MxlFlow set first, and the flow must be node-local to mediamtx (its Service
 # node) for the mxl source to open.
+#
+# Audio flows go the other way round. mediamtx's mxlSource refuses them
+# ("flow <id> is not video (format=audio)"), so nothing can PULL an audio flow —
+# instead the audio-preview pod (k8s/audio-preview.yaml) reads it via libmxl and
+# PUSHES Opus over RTSP. mediamtx only has a publisher slot for a path that
+# exists, and mediamtx.yml declares just a couple, so the path is created in
+# publisher mode (empty config, no source) before the pod is asked to start.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://mediamtx:9997")
+AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API", "http://audio-preview:8090")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def _mtx(path, method="GET", body=None):
+def _http_json(base, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(MEDIAMTX_API + path, data=data, method=method)
+    req = urllib.request.Request(base + path, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -797,10 +805,26 @@ def _mtx(path, method="GET", body=None):
             return r.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
         try:
-            msg = e.read().decode()
+            raw = e.read().decode()
         except Exception:
-            msg = ""
-        return e.code, {"error": msg[:200]}
+            raw = ""
+        try:
+            return e.code, json.loads(raw)
+        except Exception:
+            return e.code, {"error": raw[:200]}
+    except Exception as e:
+        # Unreachable service (no audio-preview deployed, DNS, timeout): a
+        # status, not a traceback, so the caller can report it as a failed
+        # preview rather than a 500 on the whole endpoint.
+        return 503, {"error": str(e)}
+
+
+def _mtx(path, method="GET", body=None):
+    return _http_json(MEDIAMTX_API, path, method, body)
+
+
+def _audio_preview(path, method="GET"):
+    return _http_json(AUDIO_PREVIEW_API, path, method)
 
 
 def _known_flow(uuid):
@@ -819,13 +843,16 @@ def preview_add(uuid):
         return 404, {"error": "flow not known to the operator"}
     d = fl.get("spec", {}).get("definition", {}) or {}
     fmt = (d.get("format") or "").rsplit(":", 1)[-1]
+    if fmt == "audio":
+        return preview_add_audio(uuid)
     if fmt != "video":
-        # mediamtx's mxlSource refuses anything else ("flow <id> is not video
-        # (format=audio)") — and then retries the open every 5s forever, so
-        # adding the path anyway left a zombie behind spamming the log while the
-        # overlay sat on "buffering…". Refuse before creating it.
-        return 415, {"error": f"preview is video-only; this flow is "
-                              f"{fmt or 'of unknown format'}"}
+        # Only video can be pulled by mediamtx and only audio has a publisher to
+        # push it, so anything else (data/smpte291) has no route to a browser.
+        # Refuse before creating a path: mediamtx's mxlSource would retry the
+        # open every 5s forever, leaving a zombie path behind spamming the log
+        # while the overlay sat on "buffering…".
+        return 415, {"error": f"preview supports video and audio flows; this "
+                              f"one is {fmt or 'of unknown format'}"}
     name = "preview-" + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
@@ -836,14 +863,61 @@ def preview_add(uuid):
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
-    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8"}
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+                 "whep": f"/webrtc/{name}/whep", "format": "video"}
+
+
+def preview_add_audio(uuid):
+    """Create the publisher-mode path, then ask audio-preview to push into it."""
+    name = "preview-audio-" + uuid
+    code, _ = _mtx(f"/v3/config/paths/get/{name}")
+    if code != 200:
+        # Empty config == publisher mode: no source, mediamtx waits to be
+        # published to. The video branch above is the opposite — a source it
+        # pulls from.
+        code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", {})
+        if code != 200:
+            return code, {"error": res.get("error") or "mediamtx add failed"}
+    code, res = _audio_preview(f"/start?flow={uuid}", "POST")
+    if code != 200:
+        # Don't leave an orphan path waiting for a publisher that never comes.
+        _mtx(f"/v3/config/paths/delete/{name}", "DELETE")
+        return code, {"error": res.get("error") or "audio preview start failed"}
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+                 "whep": f"/webrtc/{name}/whep", "format": "audio"}
+
+
+def preview_status(uuid):
+    """Whether an audio preview is actually producing, for the overlay to poll.
+
+    /start only spawns the reader — opening the flow can take seconds while the
+    intent shim waits for the gateway to mirror it, and it can fail outright on
+    a flow that is not readable on that node. Without somewhere to surface that,
+    a failed session is a silently spinning overlay, which is the same fault as
+    the zombie video path this endpoint pair already had.
+    """
+    if not _UUID_RE.match(uuid or ""):
+        return 400, {"error": "bad flow id"}
+    code, res = _audio_preview("/status")
+    if code != 200:
+        return code, {"error": res.get("error") or "audio preview unreachable"}
+    for s in res.get("sessions", []):
+        if s.get("flow") == uuid:
+            return 200, s
+    return 404, {"error": "no session for this flow"}
 
 
 def preview_del(uuid):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
+    # Stop the publisher before dropping its path, so the pipeline sends EOS into
+    # a path that still exists. Both variants are attempted rather than looking
+    # the flow's format up again: the flow may have been deleted while the
+    # overlay was open, and whichever call does not apply is a harmless 404.
+    _audio_preview(f"/stop?flow={uuid}", "DELETE")
+    _mtx(f"/v3/config/paths/delete/preview-audio-{uuid}", "DELETE")
     _mtx(f"/v3/config/paths/delete/preview-{uuid}", "DELETE")
-    return 200, {"stopped": "preview-" + uuid}
+    return 200, {"stopped": uuid}
 
 
 class H(BaseHTTPRequestHandler):
@@ -871,6 +945,15 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, operator_flows())
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/preview/"):
+            # GET on the same collection POST/DELETE use: is this audio preview
+            # actually producing yet, or did its reader fail to open?
+            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
+            try:
+                code, res = preview_status(uuid)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
         elif self.path.startswith("/api/flows"):
             try:
                 self._send(200, build())

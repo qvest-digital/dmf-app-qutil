@@ -1,0 +1,143 @@
+---
+# Audible previews for MXL AUDIO flows.
+#
+# mediamtx cannot serve them: its mxlSource rejects any flow whose format is
+# not video ("flow <id> is not video (format=audio)") and then retries the open
+# every 5s forever, so there is no mxl:// path from an audio/float32 flow to a
+# browser. This pod reads the flow's per-channel ring buffers via libmxl,
+# interleaves them to F32LE, encodes Opus and RTSP-publishes to mediamtx, which
+# then serves it like any other path.
+#
+# On demand, not always-on: the multiviewer's Operator-flows list can hold any
+# number of audio flows and its preview overlay opens one at a time, so a pod
+# per flow would not scale. demo-metrics POSTs /start?flow=<uuid> to the
+# control API here when an overlay opens and DELETEs /stop?flow=<uuid> on close;
+# this single pod serves up to MXL_MAX_SESSIONS at once.
+#
+# The flow reaches this node the same way the txdarwin viewer's does: the
+# LD_PRELOAD intent shim makes mxlCreateFlowReader declare consumer intent, the
+# operator creates an MxlReceiver, and the gateway mirrors the flow here (or it
+# is already local when co-located with the producer).
+apiVersion: v1
+kind: Service
+metadata:
+  name: audio-preview
+  labels:
+    app: audio-preview
+spec:
+  selector:
+    app: audio-preview
+  ports:
+    - name: control
+      port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-preview
+  labels:
+    app: audio-preview
+    mxl.qvest-digital.com/role: consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audio-preview
+  template:
+    metadata:
+      labels:
+        app: audio-preview
+        mxl.qvest-digital.com/role: consumer
+    spec:
+      # Same placement rationale as txdarwin-output-viewer: pin to the composite
+      # node so consumers share one node, and prefer (never require) staying off
+      # producer nodes — a hard anti-affinity leaves no valid node on a two-node
+      # cluster where composite and the writers already share one.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: composite
+              topologyKey: kubernetes.io/hostname
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    mxl.qvest-digital.com/role: producer
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: "vpc.amazonaws.com/efa"
+          operator: "Exists"
+          effect: "NoSchedule"
+      imagePullSecrets:
+        - name: demo-app-ghcr-pull
+      initContainers:
+        - name: install-intent-shim
+          image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.3
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: intent-shim
+              mountPath: /shared
+      containers:
+        - name: audio-preview
+          image: ghcr.io/qvest-digital/mxl-dmf-demo-app/compositor-mxlk8s:latest
+          imagePullPolicy: Always
+          # Second entry point in the compositor image — same libmxl and
+          # GStreamer link line, sample API instead of the grain API.
+          command: ["/usr/bin/mxl-audio-preview"]
+          ports:
+            - name: control
+              containerPort: 8090
+          env:
+            - name: MXL_DOMAIN
+              value: /run/mxl/domain
+            - name: MXL_PREVIEW_RTSP_BASE
+              value: rtsp://mediamtx:8554/preview-audio-
+            - name: MXL_CONTROL_PORT
+              value: "8090"
+            - name: MXL_MAX_SESSIONS
+              value: "4"
+            - name: LD_PRELOAD
+              value: /opt/mxl-intent/libmxl-intent.so
+          securityContext:
+            capabilities:
+              # libmxl mlocks the tmpfs grain pages on the reader side too.
+              add: ["IPC_LOCK", "SYS_RESOURCE"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: control
+            periodSeconds: 10
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /run/mxl/domain
+              readOnly: false
+            - name: intent-shim
+              mountPath: /opt/mxl-intent
+              readOnly: true
+            - name: agent-sock
+              mountPath: /run/mxl/agent.sock
+          resources:
+            # Opus at 128kbit on a couple of channels is trivial next to the
+            # composite's x264 pass.
+            requests:
+              cpu: "250m"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: domain-volume
+          hostPath:
+            path: /run/mxl/domain
+            type: DirectoryOrCreate
+        - name: intent-shim
+          emptyDir: {}
+        - name: agent-sock
+          hostPath:
+            path: /run/mxl/agent.sock
+            type: Socket

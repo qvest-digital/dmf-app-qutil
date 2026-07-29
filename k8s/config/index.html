@@ -121,6 +121,10 @@
   .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; font-weight: 800; }
   .pv-head .btn { background: rgba(255,255,255,.12); color: #fff; }
   .pv-video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; display: block; }
+  /* Audio preview: meters replace the picture, the element keeps its controls. */
+  .pv-video.audio-only { aspect-ratio: auto; height: 54px; margin-top: 10px; }
+  .pv-audio { display: none; width: 100%; aspect-ratio: 4/1; background: #000; border-radius: 12px; }
+  .pv-audio.show { display: block; }
   .pv-state { font-size: 12px; opacity: .7; margin-top: 8px; min-height: 16px; }
   .btn {
     border-radius: var(--qv-radius-pill); border: 2px solid rgba(255,255,255,.5);
@@ -388,6 +392,10 @@
   <div id="pv" class="pv">
     <div class="pv-card">
       <div class="pv-head"><span id="pv-title">Preview</span><button id="pv-close" class="btn">✕</button></div>
+      <!-- Audio flows have nothing to show, so the meters take the video's
+           place and the element collapses to just its transport controls
+           (volume/mute still matter). -->
+      <canvas id="pva" class="pv-audio" width="1760" height="440"></canvas>
       <video id="pvv" class="pv-video" autoplay playsinline controls></video>
       <div id="pv-state" class="pv-state"></div>
     </div>
@@ -687,12 +695,15 @@
             '</span>'+
             '<span style="display:flex;gap:6px">'+
               '<button class="btn of-det" data-id="'+esc(f.id)+'">Details '+(isOpen?'▴':'▾')+'</button>'+
-              // Preview only exists for video: mediamtx's mxlSource rejects any
-              // other format outright, so offering the button elsewhere just
-              // produced an overlay that never loaded.
-              (fmt==='video'
-                ? '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'
-                : '<button class="btn" disabled title="Preview is video-only — mediamtx cannot read a '+esc(fmt||'non-video')+' flow">Preview</button>')+
+              // Video is pulled by mediamtx, audio is pushed by the
+              // audio-preview pod. Anything else (data/smpte291) has no route to
+              // a browser, so the button says so instead of opening an overlay
+              // that never loads.
+              ((fmt==='video'||fmt==='audio')
+                ? '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-format="'+esc(fmt)+'"'+
+                  ' data-channels="'+((f.detail&&f.detail.media&&f.detail.media.channels)||2)+'"'+
+                  ' data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'
+                : '<button class="btn" disabled title="No preview route for a '+esc(fmt||'flow of unknown format')+' flow">Preview</button>')+
             '</span>'+
           '</div>'+
           '<div class="of-meta">'+esc(f.id)+' &middot; <span class="loc">'+locs+'</span>'+
@@ -718,40 +729,200 @@
     }
     setInterval(pollOps, 3000); pollOps();
 
-    // ── Flow preview: ask demo-metrics to add a mediamtx path for the flow,
-    // play its HLS in the overlay, and tear the path down on close. ──
+    // ── Flow preview ──────────────────────────────────────────────────────
+    // Video: demo-metrics adds a mediamtx path that PULLS the flow (mxl://).
+    // Audio: mediamtx's mxlSource refuses audio, so the audio-preview pod reads
+    // the flow and PUSHES Opus into a publisher-mode path instead. Either way
+    // the overlay plays a normal mediamtx path and DELETE tears it down.
+    //
+    // The audio meters are drawn from the stream the browser has already
+    // decoded, so nothing extra is computed or shipped from the cluster.
     (function(){
       var modal=document.getElementById('pv'), pvv=document.getElementById('pvv'),
+          pvCanvas=document.getElementById('pva'),
           pvTitle=document.getElementById('pv-title'), pvState=document.getElementById('pv-state'),
-          curId=null, curHls=null;
-      function stopPlayer(){
-        if(curHls){ try{curHls.destroy();}catch(e){} curHls=null; }
-        try{ pvv.pause(); pvv.removeAttribute('src'); pvv.load(); }catch(e){}
+          curId=null, curHls=null, curPc=null, curPoll=0;
+
+      // ── Meters ──
+      // actx and elSrc are created once and reused: createMediaElementSource
+      // throws on a second call for the same element, so a re-opened preview
+      // must not build a new one.
+      var actx=null, elSrc=null, viz=null, vizRaf=0;
+
+      function vizStop(){
+        if(vizRaf){ cancelAnimationFrame(vizRaf); vizRaf=0; }
+        if(viz){
+          try{ viz.src.disconnect(); }catch(e){}
+          // The element source is permanent — only detach it from the graph.
+          if(viz.src!==elSrc){ try{ viz.src=null; }catch(e){} }
+          viz=null;
+        }
+        var g=pvCanvas.getContext('2d');
+        if(g) g.clearRect(0,0,pvCanvas.width,pvCanvas.height);
       }
-      function play(src){
+
+      function vizStart(stream, channels){
+        vizStop();
+        try { actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }
+        catch(e){ return; }
+        if(actx.state==='suspended') actx.resume();
+        var src;
+        try {
+          // MediaStream (WHEP): tap the stream and leave the element to make the
+          // sound — routing to destination as well would play it twice. HLS/MSE:
+          // the graph MUST reach destination or the element goes silent.
+          if(stream){ src=actx.createMediaStreamSource(stream); }
+          else { src = elSrc = elSrc || actx.createMediaElementSource(pvv); }
+        } catch(e){ return; }
+        var n=Math.min(Math.max(channels||2,1),8);
+        var split=actx.createChannelSplitter(n);
+        src.connect(split);
+        var chans=[];
+        for(var i=0;i<n;i++){
+          var an=actx.createAnalyser(); an.fftSize=2048; an.smoothingTimeConstant=0.4;
+          split.connect(an,i);
+          chans.push({an:an, t:new Float32Array(an.fftSize), peak:0, hold:0});
+        }
+        var spec=actx.createAnalyser(); spec.fftSize=1024; spec.smoothingTimeConstant=0.7;
+        src.connect(spec);
+        if(!stream) src.connect(actx.destination);
+        viz={src:src, chans:chans, spec:spec, f:new Uint8Array(spec.frequencyBinCount)};
+        draw();
+      }
+
+      // -60..0 dBFS -> 0..1
+      function norm(db){ return Math.max(0, Math.min(1, (db+60)/60)); }
+
+      function draw(){
+        vizRaf=requestAnimationFrame(draw);
+        if(!viz) return;
+        var g=pvCanvas.getContext('2d'), W=pvCanvas.width, H=pvCanvas.height;
+        g.clearRect(0,0,W,H);
+        var pad=18, barsW=Math.round(W*0.34), specX=barsW+pad*2;
+
+        // Level bars: RMS with a decaying peak-hold per channel.
+        var n=viz.chans.length, slot=(barsW-pad)/n;
+        for(var c=0;c<n;c++){
+          var ch=viz.chans[c];
+          ch.an.getFloatTimeDomainData(ch.t);
+          var sum=0;
+          for(var i=0;i<ch.t.length;i++) sum+=ch.t[i]*ch.t[i];
+          var rms=Math.sqrt(sum/ch.t.length);
+          var db=rms>0?20*Math.log10(rms):-120;
+          var v=norm(db);
+          if(v>=ch.peak){ ch.peak=v; ch.hold=performance.now(); }
+          else if(performance.now()-ch.hold>900){ ch.peak=Math.max(v, ch.peak-0.012); }
+
+          var x=pad+c*slot, w=slot*0.62, top=pad, bh=H-pad*2-16;
+          g.fillStyle='rgba(255,255,255,.07)';
+          g.fillRect(x, top, w, bh);
+          var lit=Math.round(bh*v);
+          // Lime up to -6dB, orange above it — the usual "too hot" cue.
+          g.fillStyle = db>-6 ? '#F05012' : '#C8F169';
+          g.fillRect(x, top+bh-lit, w, lit);
+          var py=top+bh-Math.round(bh*ch.peak);
+          g.fillStyle='#fff';
+          g.fillRect(x, Math.max(top,py-2), w, 2);
+          g.fillStyle='rgba(255,255,255,.55)';
+          g.font='11px system-ui,sans-serif'; g.textAlign='left';
+          g.fillText('ch'+(c+1)+'  '+(db<=-120?'-inf':db.toFixed(1))+' dB', x, H-pad+4);
+        }
+
+        // Spectrum: log-ish frequency buckets so the low end isn't a sliver.
+        viz.spec.getByteFrequencyData(viz.f);
+        var bins=viz.f.length, cols=64, sw=(W-specX-pad)/cols;
+        for(var k=0;k<cols;k++){
+          var lo=Math.floor(Math.pow(k/cols,2)*bins), hi=Math.floor(Math.pow((k+1)/cols,2)*bins);
+          if(hi<=lo) hi=lo+1;
+          var m=0;
+          for(var b=lo;b<hi&&b<bins;b++) m=Math.max(m,viz.f[b]);
+          var bh2=Math.round((H-pad*2-16)*(m/255));
+          g.fillStyle='rgba(200,241,105,'+(0.35+0.65*(m/255)).toFixed(3)+')';
+          g.fillRect(specX+k*sw, H-pad-16-bh2, Math.max(1,sw-1), bh2);
+        }
+        g.fillStyle='rgba(255,255,255,.45)';
+        g.font='11px system-ui,sans-serif'; g.textAlign='left';
+        g.fillText('spectrum', specX, H-pad+4);
+      }
+
+      function stopPlayer(){
+        if(curPoll){ clearTimeout(curPoll); curPoll=0; }
+        vizStop();
+        if(curHls){ try{curHls.destroy();}catch(e){} curHls=null; }
+        if(curPc){ try{curPc.close();}catch(e){} curPc=null; }
+        try{ pvv.pause(); pvv.srcObject=null; pvv.removeAttribute('src'); pvv.load(); }catch(e){}
+      }
+
+      function playHls(src, isAudio, channels){
         if(window.Hls && Hls.isSupported()){
           curHls=new Hls({liveSyncDurationCount:3,enableWorker:true,lowLatencyMode:false});
           curHls.loadSource(src); curHls.attachMedia(pvv);
-          curHls.on(Hls.Events.MANIFEST_PARSED,function(){ pvv.play(); pvState.textContent=''; });
+          curHls.on(Hls.Events.MANIFEST_PARSED,function(){
+            pvv.play(); pvState.textContent='';
+            if(isAudio) vizStart(null, channels);
+          });
           curHls.on(Hls.Events.ERROR,function(ev,d){ if(d.fatal){ pvState.textContent='buffering…'; setTimeout(function(){ if(curHls) curHls.loadSource(src); },4000); } });
         } else if(pvv.canPlayType('application/vnd.apple.mpegurl')){
           pvv.src=src; pvv.play();
+          if(isAudio) vizStart(null, channels);
         }
       }
-      function open(id,label){
+
+      // WHEP first for audio (sub-second, and the meters get the raw stream),
+      // HLS on failure — same order the per-flow tiles use.
+      function playAudio(j, channels){
+        var path=j.path;
+        curPc=whep(path, pvv,
+          function(){ playHls(j.hls, true, channels); },
+          function(stream){ pvState.textContent=''; vizStart(stream, channels); });
+      }
+
+      // /start only spawns the reader: opening the flow can take seconds while
+      // the intent shim waits for the gateway to mirror it, and it can fail. Poll
+      // until it is actually producing, so a dead session says so instead of
+      // spinning forever.
+      function awaitAudio(id, j, channels, tries){
+        if(curId!==id) return;
+        fetch('/api/preview/'+encodeURIComponent(id),{cache:'no-store'})
+          .then(function(r){ return r.json().then(function(s){ return {ok:r.ok,s:s}; }); })
+          .then(function(x){
+            if(curId!==id) return;
+            if(x.ok && x.s.error){ pvState.textContent='preview failed: '+x.s.error; return; }
+            if(x.ok && x.s.running && x.s.samples>0){
+              pvState.textContent='connecting audio…';
+              playAudio(j, x.s.channels||channels);
+              return;
+            }
+            if(tries<=0){ pvState.textContent='preview timed out — flow produced no audio'; return; }
+            pvState.textContent='waiting for the flow to be readable here…';
+            curPoll=setTimeout(function(){ awaitAudio(id,j,channels,tries-1); }, 1000);
+          })
+          .catch(function(){
+            if(tries<=0){ pvState.textContent='preview status unavailable'; return; }
+            curPoll=setTimeout(function(){ awaitAudio(id,j,channels,tries-1); }, 1000);
+          });
+      }
+
+      function open(id,label,fmt,channels){
         curId=id; modal.classList.add('show'); pvTitle.textContent=label||id;
         pvState.textContent='starting preview…'; stopPlayer();
+        var isAudio=(fmt==='audio');
+        pvv.classList.toggle('audio-only', isAudio);
+        pvCanvas.classList.toggle('show', isAudio);
         fetch('/api/preview/'+encodeURIComponent(id),{method:'POST'})
           .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
           .then(function(x){
+            if(curId!==id) return;
             if(!x.ok){ pvState.textContent='preview failed: '+(x.j.error||''); return; }
+            if(x.j.format==='audio'){ awaitAudio(id, x.j, channels, 30); return; }
             // Give mediamtx a moment to open the reader and cut the first segment.
-            setTimeout(function(){ if(curId===id) play(x.j.hls); }, 900);
+            curPoll=setTimeout(function(){ if(curId===id) playHls(x.j.hls,false,0); }, 900);
           })
           .catch(function(){ pvState.textContent='preview request failed'; });
       }
       function close(){
         modal.classList.remove('show'); stopPlayer();
+        pvCanvas.classList.remove('show'); pvv.classList.remove('audio-only');
         if(curId){ fetch('/api/preview/'+encodeURIComponent(curId),{method:'DELETE'}).catch(function(){}); curId=null; }
       }
       document.getElementById('pv-close').onclick=close;
@@ -761,7 +932,8 @@
       document.addEventListener('click',function(e){
         var b=e.target.closest ? e.target.closest('.of-prev') : null;
         if(!b) return;
-        open(b.getAttribute('data-id'), b.getAttribute('data-label'));
+        open(b.getAttribute('data-id'), b.getAttribute('data-label'),
+             b.getAttribute('data-format'), parseInt(b.getAttribute('data-channels'),10)||2);
       });
     })();
 
@@ -770,7 +942,9 @@
     // WHEP: mediamtx serves it at /webrtc/<path>/whep (caddy -> :8889). Non-
     // trickle — gather ICE, POST the offer, apply the answer. onFail() lets the
     // caller drop to HLS (e.g. a cluster without the UDP ICE LoadBalancer).
-    function whep(path, video, onFail){
+    // onStream receives the MediaStream, which the audio preview taps for its
+    // meters — reading it back off the element is racy.
+    function whep(path, video, onFail, onStream){
       var pc, done=false;
       function fail(){ if(done) return; done=true; clearTimeout(timer); try{pc&&pc.close();}catch(e){} onFail&&onFail(); }
       var timer=setTimeout(fail, 8000);
@@ -778,7 +952,7 @@
       catch(e){ return fail(); }
       pc.addTransceiver('video',{direction:'recvonly'});
       pc.addTransceiver('audio',{direction:'recvonly'});
-      pc.ontrack=function(e){ if(!video.srcObject){ video.srcObject=e.streams[0]; var p=video.play&&video.play(); if(p&&p.catch)p.catch(function(){}); } };
+      pc.ontrack=function(e){ if(!video.srcObject){ video.srcObject=e.streams[0]; var p=video.play&&video.play(); if(p&&p.catch)p.catch(function(){}); onStream&&onStream(e.streams[0]); } };
       pc.onconnectionstatechange=function(){
         if(pc.connectionState==='connected'){ done=true; clearTimeout(timer); }
         else if(pc.connectionState==='failed'){ fail(); }

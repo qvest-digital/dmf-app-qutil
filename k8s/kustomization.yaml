@@ -11,6 +11,7 @@ resources:
   - composite-service.yaml
   - metrics-aggregator.yaml
   - txdarwin-output-viewer.yaml
+  - audio-preview.yaml
   - mxl-receivers.yaml
   - test-sources.yaml
 
