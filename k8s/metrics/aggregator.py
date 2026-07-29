@@ -2,8 +2,8 @@
 # demo-metrics: dependency-free aggregator for the multiviewer client.
 #
 # Merges, per flow, everything we can cheaply reach:
-#   - compositor  : http://composite:9090/ (mosaic stats; the per-flow panel
-#                    numbers are derived instead — see the GRAIN_RATE comment)
+#   - compositor  : http://composite:9090/ (measured per-flow grains/s, Mbit/s,
+#                    grains pushed/dropped — see the GRAIN_RATE comment)
 #   - writer pod  : k8s API (node, phase, restarts, image, pattern, age)
 #   - receiver    : MxlReceiver CR (phase, provider, bound mirror)
 #   - mirror      : MxlFlowMirror CR (phase, sourceNode, provider)
@@ -37,10 +37,15 @@ GW_NS = os.environ.get("GW_NS", "mxl-system")
 FLOW_PREFIX = os.environ.get("FLOW_PREFIX", "d4d00000-0000-0000-0000-00000000000")
 N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 
-# No single consumer measures received fps/Mbit anymore: each per-flow tile
-# goes producer -> RDMA mirror -> mediamtx, so there is nothing central to
-# ask. Derive the panel from real CR/pod status plus the nominal grain rate:
-# a Ready mirror transfers every 720p v210 grain at the grain rate.
+# No consumer measures what the four per-flow TILES receive: each one goes
+# producer -> RDMA mirror -> mediamtx, and mediamtx does not report per-path
+# grain counters. The compositor does measure though — it opens its own reader
+# on all four flows for the mosaic — so the panel reports its counters and says
+# so, rather than deriving numbers that look live but never move.
+#
+# These constants are the fallback for when the compositor is unreachable or
+# does not carry a flow: a Ready mirror transfers every 720p v210 grain at the
+# grain rate, so the shape is right even though the value cannot change.
 GRAIN_RATE = 30000.0 / 1001.0   # 29.97 fps
 GRAIN_BYTES = 2488320           # 720p v210 (1296 px wide -> 3456 B/row * 720)
 COMPOSITOR = os.environ.get("COMPOSITOR_STATS", "http://composite:9090/")
@@ -85,7 +90,12 @@ def idx_of(uuid):
 
 def build():
     stats = compositor_stats()
-    comp_by_i = {f.get("i"): f for f in stats.get("flows", [])}
+    # The compositor opens a reader on every flow to build the 2x2 mosaic, so
+    # its per-flow counters are a real measurement of RDMA delivery. Keyed by
+    # flowId, not by the worker index it also reports, so a reordered
+    # MXL_FLOW_IDS cannot shift one flow's numbers onto another's tile.
+    comp_by_id = {f.get("flowId"): f for f in stats.get("flows", [])}
+    comp_err = stats.get("_error")
 
     pods = safe_k8s(f"/api/v1/namespaces/{NS}/pods").get("items", [])
     receivers = safe_k8s(
@@ -228,13 +238,38 @@ def build():
         # — placement is dynamic, so which flow is local varies). Requiring a
         # mirror unconditionally made the local flow show as down.
         live = writer_ok and origin_ok and (mirror_ok or not mlist)
-        gbytes = (media or {}).get("grainBytes") or GRAIN_BYTES
-        rate = (media or {}).get("fps") or GRAIN_RATE
-        comp = {
-            "fps": round(rate, 1) if live else 0,
-            "mbps": round(gbytes * rate * 8 / 1e6) if live else 0,
-            "live": live,
-        }
+
+        # Delivery numbers: measured from the compositor's own readers when it
+        # is reachable and reading this flow, nominal otherwise. "measured"
+        # tells the panel which it got — a derived number that cannot move is
+        # honest only if it says so.
+        cs = comp_by_id.get(uuid)
+        if cs:
+            comp = {
+                "fps": round(cs.get("fps") or 0, 1),
+                "mbps": round(cs.get("mbps") or 0),
+                "pushed": cs.get("pushed"),
+                "missed": cs.get("missed"),
+                # The compositor's own reader state (it reports fps > 1), which
+                # is the data plane. "live" below stays the control-plane view.
+                "reading": bool(cs.get("live")),
+                "measured": True,
+                "source": COMPOSITOR,
+            }
+        else:
+            gbytes = (media or {}).get("grainBytes") or GRAIN_BYTES
+            rate = (media or {}).get("fps") or GRAIN_RATE
+            comp = {
+                "fps": round(rate, 1) if live else 0,
+                "mbps": round(gbytes * rate * 8 / 1e6) if live else 0,
+                "pushed": None,
+                "missed": None,
+                "reading": None,
+                "measured": False,
+                "source": ("compositor unreachable" if comp_err
+                           else "flow not in the compositor's set"),
+            }
+        comp["live"] = live
 
         result.append({
             "n": n,

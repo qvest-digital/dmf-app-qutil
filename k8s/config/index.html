@@ -143,6 +143,8 @@
   .kv .v.mono, .kv .v.mono .vv { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; }
   .kv .v.ok { color: var(--qv-lime); }
   .kv .v.bad { color: var(--qv-orange); }
+  /* A caveat, not a fault — dimmed rather than orange. */
+  .kv .v.warn { opacity: .6; font-weight: 500; }
   .cp { flex: none; border: none; background: transparent; color: inherit; cursor: pointer;
         opacity: .35; font-size: 12px; line-height: 1; padding: 2px 3px; border-radius: 5px; }
   .cp:hover { opacity: 1; background: rgba(255,255,255,.12); }
@@ -427,7 +429,14 @@
         fps:el.querySelector('[data-r=fps]'), mbps:el.querySelector('[data-r=mbps]'),
         details:el.querySelector('[data-r=details]'), kill:el.querySelector('[data-r=kill]'),
         detail:el.querySelector('[data-r=detail]') };
-      c.details.onclick = function(){ openDetail[n]=!openDetail[n]; c.detail.classList.toggle('open', openDetail[n]); c.details.textContent = 'Details '+(openDetail[n]?'▴':'▾'); };
+      // Render from the last payload on open: apply() only fills an already-
+      // open panel, so without this the first click showed an empty box until
+      // the next 1.5s poll landed.
+      c.details.onclick = function(){
+        openDetail[n]=!openDetail[n]; c.detail.classList.toggle('open', openDetail[n]);
+        c.details.textContent = 'Details '+(openDetail[n]?'▴':'▾');
+        if (openDetail[n] && c.last) c.detail.innerHTML = renderDetail(c.last);
+      };
       c.kill.onclick = function(){
         c.kill.disabled=true; c.kill.textContent='Killing…';
         fetch('/api/kill/'+n, {method:'POST'}).then(function(r){return r.json();})
@@ -467,11 +476,16 @@
           kvRow('image', '<span class="mono">'+esc(shortImg(w.image))+'</span>')+
         '</div>'+
         '<h3>Compositor (RDMA receive)</h3><div class="kv">'+
-          kvRow('grains/s', fmt(comp.fps,1), comp.live?'ok':'bad')+
+          kvRow('grains/s', fmt(comp.fps,1), comp.reading===false?'bad':(comp.fps?'ok':''))+
           kvRow('throughput', fmt(comp.mbps,0)+' Mbit/s')+
           kvRow('grains pushed', comp.pushed==null?'--':comp.pushed)+
           kvRow('grains dropped', comp.missed==null?'--':comp.missed, comp.missed?'bad':'')+
-          kvRow('live', comp.live?'yes':'no', comp.live?'ok':'bad')+
+          kvRow('reading', comp.reading==null?'--':(comp.reading?'yes':'no'),
+                comp.reading==null?'':(comp.reading?'ok':'bad'))+
+          // Nominal numbers can't move, so name the source instead of letting a
+          // frozen grains/s read as a measurement.
+          kvRow('source', comp.measured?'measured':('nominal · '+esc(comp.source)),
+                comp.measured?'ok':'warn')+
         '</div>'+
         '<h3>Receiver / mirror (gateway)</h3><div class="kv">'+
           kvRow('provider', esc(rc.provider)||'--')+
@@ -511,6 +525,7 @@
       updateOrigins(flows);
       flows.forEach(function(f){
         var c=ensureCard(f.n), comp=f.compositor||{};
+        c.last = f;
         c.name.textContent = f.label;
         c.pat.textContent = (f.writer&&f.writer.pattern)?f.writer.pattern:'';
         c.fps.textContent = fmt(comp.fps,1);
