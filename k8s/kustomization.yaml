@@ -12,6 +12,7 @@ resources:
   - metrics-aggregator.yaml
   - txdarwin-output-viewer.yaml
   - audio-preview.yaml
+  - audio-testsrc.yaml
   - mxl-receivers.yaml
   - test-sources.yaml
 
