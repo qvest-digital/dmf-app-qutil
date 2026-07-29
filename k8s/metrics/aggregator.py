@@ -586,6 +586,111 @@ def origin_health(fl, leases):
             "originNode": origins[0], "originAge": None}
 
 
+def _age_secs(ts):
+    """RFC3339 -> whole seconds since, or None. Tolerates the fractional form
+    k8s writes on Lease renewTime as well as the plain one on conditions."""
+    t = _renew_time(ts)
+    return None if t is None else int((datetime.now(timezone.utc) - t).total_seconds())
+
+
+def _conditions(obj):
+    """Every status condition on a CR, flattened and ordered by type so the
+    detail panel's rows don't reshuffle between polls."""
+    out = [{"type": c.get("type"), "status": c.get("status"),
+            "reason": c.get("reason"), "message": c.get("message"),
+            "age": _age_secs(c.get("lastTransitionTime"))}
+           for c in ((obj.get("status") or {}).get("conditions") or [])]
+    out.sort(key=lambda c: c["type"] or "")
+    return out
+
+
+def flow_media(d):
+    """Media facts off the flow definition — whatever it carries.
+
+    The v210 grain-size / RDMA-rate derivation is gated on the media type
+    rather than applied to everything the inventory lists: the 48-pixel
+    (128-byte) row stride is a v210 property, and quoting it for, say, an
+    audio/float32 or a raw RGB flow would be a made-up number.
+    """
+    comps = d.get("components") or []
+    out = {
+        "mediaType": d.get("media_type"),
+        "colorspace": d.get("colorspace"),
+        "interlaceMode": d.get("interlace_mode"),
+        # Video carries bit depth per component, audio at the top level.
+        "bitDepth": comps[0].get("bit_depth") if comps else d.get("bit_depth"),
+        "channels": d.get("channel_count"),
+        "components": [f"{c.get('name')} {c.get('width')}×{c.get('height')}"
+                       f" @{c.get('bit_depth')}b" for c in comps],
+    }
+    gr = d.get("grain_rate") or {}
+    if gr.get("numerator"):
+        num, den = gr["numerator"], (gr.get("denominator") or 1)
+        out["grainRate"] = f"{num}/{den}"
+        out["fps"] = round(num / den, 2)
+    sr = d.get("sample_rate") or {}
+    if sr.get("numerator"):
+        out["sampleRate"] = \
+            f"{sr['numerator'] / max(1, sr.get('denominator', 1)) / 1000:g} kHz"
+    w, h = d.get("frame_width"), d.get("frame_height")
+    if w and h:
+        out["width"], out["height"] = w, h
+        if (d.get("media_type") or "") == "video/v210":
+            gbytes = (((w + 47) // 48) * 128) * h
+            out["grainBytes"] = gbytes
+            out["mbps"] = round(gbytes * (out.get("fps") or GRAIN_RATE) * 8 / 1e6)
+    return out
+
+
+def flow_detail(fl, d, uuid, receivers, mirrors):
+    """Everything the control plane knows about one flow, for the expandable
+    row: the full definition, every condition (not just OriginFresh), and the
+    receivers and mirrors wired to it — including each mirror's Source/Target
+    progress, which is where a stalled transfer actually shows up.
+    """
+    md = fl.get("metadata", {}) or {}
+    recv = [{"name": r["metadata"]["name"],
+             "namespace": r["metadata"].get("namespace"),
+             "provider": (r.get("spec") or {}).get("provider"),
+             "phase": (r.get("status") or {}).get("phase"),
+             "pod": ((r.get("spec") or {}).get("podRef") or {}).get("name"),
+             "boundMirror": ((r.get("status") or {}).get("boundMirror")
+                             or {}).get("name")}
+            for r in receivers if (r.get("spec") or {}).get("flowID") == uuid]
+
+    mirs = []
+    for m in mirrors:
+        ms, mst = (m.get("spec") or {}), (m.get("status") or {})
+        if ms.get("flowID") != uuid:
+            continue
+        mirs.append({
+            "name": m["metadata"]["name"],
+            "namespace": m["metadata"].get("namespace"),
+            "sourceNode": ms.get("sourceNode"),
+            "targetNode": ms.get("targetNode"),
+            "provider": ms.get("provider"),
+            "phase": mst.get("phase"),
+            "attempts": mst.get("attemptCount"),
+            # Empty string means "no error", which reads as a blank row.
+            "lastError": mst.get("lastError") or None,
+            "grainAge": _age_secs(mst.get("lastGrainAt")),
+            "requestor": (ms.get("requestor") or {}).get("name"),
+            "conditions": _conditions(m),
+        })
+
+    return {
+        "created": md.get("creationTimestamp"),
+        "createdAge": _age_secs(md.get("creationTimestamp")),
+        "description": d.get("description"),
+        "media": flow_media(d),
+        "parents": d.get("parents") or [],
+        "tags": d.get("tags") or {},
+        "conditions": _conditions(fl),
+        "receivers": recv,
+        "mirrors": mirs,
+    }
+
+
 # ── Operator flow inventory ─────────────────────────────────────────────────
 # Every MXL flow the mxl-k8s operator knows about, straight from the (cluster-
 # scoped) MxlFlow CRs — not the hardcoded d4d writer set build() reports. The
@@ -596,6 +701,13 @@ def operator_flows():
     items = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
     leases = origin_leases()
+    # All namespaces (no namespace segment): MxlFlow is cluster-scoped, so the
+    # receivers and mirrors wired to one can live anywhere — not only in this
+    # aggregator's own namespace, which is all build() needs to look at.
+    receivers = safe_k8s(
+        "/apis/mxl.qvest-digital.com/v1alpha1/mxlreceivers").get("items", [])
+    mirrors = safe_k8s(
+        "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", [])
     out = []
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
@@ -617,7 +729,8 @@ def operator_flows():
 
         origin = origin_health(fl, leases)
         locations = [
-            {"node": l.get("nodeName"), "phase": l.get("phase")}
+            {"node": l.get("nodeName"), "phase": l.get("phase"),
+             "observedAge": _age_secs(l.get("lastObserved"))}
             for l in (fl.get("status", {}).get("locations") or [])
         ]
 
@@ -638,6 +751,7 @@ def operator_flows():
             "colorspace": d.get("colorspace"),
             "grouphint": grouphint,
             "locations": locations,
+            "detail": flow_detail(fl, d, uuid, receivers, mirrors),
         }
         row.update(origin)
         out.append(row)

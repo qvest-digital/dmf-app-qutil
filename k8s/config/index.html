@@ -399,7 +399,10 @@
     setInterval(function(){ var d=new Date(); clk.textContent = pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }, 250);
 
     function fmt(n,d){ return (n==null||isNaN(n)) ? '--' : Number(n).toFixed(d==null?0:d); }
-    function ago(iso){ if(!iso) return '--'; var s=Math.max(0,(Date.now()-Date.parse(iso))/1000); if(s<90) return s.toFixed(0)+'s'; if(s<5400) return (s/60).toFixed(0)+'m'; return (s/3600).toFixed(1)+'h'; }
+    // agoS takes seconds (the operator-flows payload pre-computes ages server-
+    // side, where the CR timestamps are); ago takes an ISO stamp.
+    function agoS(s){ if(s==null) return '--'; s=Math.max(0,s); if(s<90) return s.toFixed(0)+'s'; if(s<5400) return (s/60).toFixed(0)+'m'; if(s<172800) return (s/3600).toFixed(1)+'h'; return (s/86400).toFixed(1)+'d'; }
+    function ago(iso){ if(!iso) return '--'; return agoS((Date.now()-Date.parse(iso))/1000); }
     function esc(s){ return (s==null?'':String(s)).replace(/[<&]/g, function(c){return c=='<'?'&lt;':'&amp;';}); }
     function shortImg(s){ if(!s) return '--'; return s.replace(/^.*\//,'').slice(0,40); }
 
@@ -558,13 +561,108 @@
     // it into orange used to mark healthy flows as down.
     var OSTATE={ 'true':['live','origin fresh'], 'false':['bad','origin stale'],
                  'null':['','no origin claimed'] };
+
+    // Open panels and the last payload, both keyed outside renderOpFlows: the
+    // list is rebuilt wholesale every 3s, so a panel's state cannot live in the
+    // DOM, and a toggle has to re-render from something without waiting for the
+    // next poll.
+    var ofOpen={}, ofLast=[];
+
+    // Everything the control plane knows about one flow. Same kvRow idiom as the
+    // MXL-n panels, so the copy buttons work here too, but sourced purely from
+    // the MxlFlow CR plus the receivers and mirrors wired to it.
+    function renderOpDetail(f){
+      var t=f.detail||{}, m=t.media||{}, isAudio=(f.format==='audio');
+
+      var media = isAudio
+        ? kvRow('media type', esc(m.mediaType)||'--')+
+          kvRow('sample rate', esc(m.sampleRate)||'--')+
+          kvRow('channels', m.channels==null?'--':m.channels)+
+          kvRow('bit depth', m.bitDepth?(m.bitDepth+'-bit'):'--')
+        : kvRow('media type', esc(m.mediaType)||'--')+
+          kvRow('resolution', (m.width&&m.height)?(m.width+'×'+m.height):'--')+
+          kvRow('interlace', esc(m.interlaceMode)||'--')+
+          kvRow('colorspace', esc(m.colorspace)||'--')+
+          kvRow('bit depth', m.bitDepth?(m.bitDepth+'-bit'):'--')+
+          kvRow('grain rate', esc(m.grainRate)||'--')+
+          kvRow('fps', m.fps==null?'--':fmt(m.fps,2))+
+          // Only v210 carries the padded-stride derivation; anything else says so
+          // rather than quoting a number the format doesn't imply.
+          kvRow('grain size', m.grainBytes?((m.grainBytes/1048576).toFixed(2)+' MiB'):'n/a for this format')+
+          kvRow('RDMA rate', m.mbps?(m.mbps+' Mbit/s'):'--')+
+          ((m.components||[]).length?kvRow('components','<span class="mono">'+esc(m.components.join(', '))+'</span>'):'');
+
+      var locs=(f.locations||[]).map(function(l){
+        return kvRow(esc(l.node),
+          esc(l.phase)+(l.observedAge==null?'':(' · seen '+agoS(l.observedAge))),
+          l.phase==='Stale'?'bad':(l.phase==='Origin'?'ok':''));
+      }).join('') || kvRow('locations','not materialized anywhere','bad');
+
+      var conds=(t.conditions||[]).map(function(c){
+        return kvRow(esc(c.type), esc(c.status)+' · '+esc(c.reason||'')+
+          (c.age==null?'':(' · '+agoS(c.age))), c.status==='True'?'ok':'bad')+
+          (c.message?kvRow('','<span style="opacity:.65">'+esc(c.message)+'</span>'):'');
+      }).join('') || kvRow('conditions','none written','warn');
+
+      var recv=(t.receivers||[]).map(function(r){
+        return kvRow(esc(r.name), esc(r.phase||'--')+' · '+esc(r.provider||'--'),
+                     r.phase==='Bound'?'ok':'bad')+
+          kvRow('  pod', '<span class="mono">'+esc(r.pod)+'</span>')+
+          (r.boundMirror?kvRow('  bound mirror','<span class="mono">'+esc(r.boundMirror)+'</span>'):'');
+      }).join('') || kvRow('receivers','none — nobody is consuming this flow','warn');
+
+      var mirs=(t.mirrors||[]).map(function(x){
+        return kvRow(esc(x.sourceNode)+' → '+esc(x.targetNode),
+                     esc(x.phase||'--')+' · '+esc(x.provider||'--'),
+                     x.phase==='Ready'?'ok':'bad')+
+          kvRow('  last grain', x.grainAge==null?'--':agoS(x.grainAge))+
+          kvRow('  attempts', x.attempts==null?'--':x.attempts, x.attempts?'bad':'')+
+          (x.requestor?kvRow('  requested by','<span class="mono">'+esc(x.requestor)+'</span>'):'')+
+          (x.lastError?kvRow('  last error', esc(x.lastError),'bad'):'')+
+          (x.conditions||[]).map(function(c){
+            return kvRow('  '+esc(c.type), esc(c.status)+' · '+esc(c.reason||''),
+                         c.status==='True'?'ok':'bad');
+          }).join('');
+      }).join('') || kvRow('mirrors','none — read locally, no cross-node transfer','warn');
+
+      var tags=Object.keys(t.tags||{}).map(function(k){
+        var v=t.tags[k];
+        return kvRow(esc(k.replace(/^urn:x-nmos:tag:/,'').replace(/\/v[\d.]+$/,'')),
+                     esc([].concat(v).join(', ')));
+      }).join('') || kvRow('tags','none');
+
+      return ''+
+        '<h3>Flow</h3><div class="kv">'+
+          kvRow('label', esc(f.label)||'--')+
+          kvRow('description', esc(t.description)||'--')+
+          kvRow('id', '<span class="mono">'+esc(f.id)+'</span>')+
+          kvRow('format', esc(f.format)||'--')+
+          kvRow('registered', t.createdAge==null?'--':(agoS(t.createdAge)+' ago'))+
+          (t.parents&&t.parents.length?kvRow('parents','<span class="mono">'+esc(t.parents.join(', '))+'</span>'):'')+
+        '</div>'+
+        '<h3>Media</h3><div class="kv">'+media+'</div>'+
+        '<h3>Origin</h3><div class="kv">'+
+          kvRow('origin fresh', f.originFresh==null?'unknown':(f.originFresh?'yes':'no'),
+                f.originFresh==null?'warn':(f.originFresh?'ok':'bad'))+
+          kvRow('reason', esc(f.originReason)||'--')+
+          kvRow('origin node', esc(f.originNode)||'--')+
+          kvRow('lease renewed', f.originAge==null?'--':(agoS(f.originAge)+' ago'))+
+        '</div>'+
+        '<h3>Locations</h3><div class="kv">'+locs+'</div>'+
+        '<h3>Conditions</h3><div class="kv">'+conds+'</div>'+
+        '<h3>Receivers</h3><div class="kv">'+recv+'</div>'+
+        '<h3>Mirrors (RDMA transfer)</h3><div class="kv">'+mirs+'</div>'+
+        '<h3>Tags</h3><div class="kv">'+tags+'</div>';
+    }
+
     function renderOpFlows(list){
       var wrap=document.getElementById('opflows'), cnt=document.getElementById('of-count');
-      list=list||[];
+      list=ofLast=list||[];
       cnt.textContent = list.length ? '('+list.length+')' : '';
       if(!list.length){ wrap.innerHTML='<div class="flow" style="opacity:.6">No flows registered with the operator.</div>'; return; }
       wrap.innerHTML=list.map(function(f){
         var ost=OSTATE[String(f.originFresh)]||OSTATE['null'], fmt=(f.format||'').toLowerCase();
+        var isOpen=!!ofOpen[f.id];
         var otip=[ost[1], f.originReason, f.originNode,
                   f.originAge==null?null:(f.originAge+'s ago')].filter(Boolean).join(' · ');
         var media=(f.format==='audio'
@@ -581,14 +679,28 @@
               '<span class="m"><div class="k">media</div><div class="v">'+(esc(media)||'--')+'</div></span>'+
               '<span class="m"><div class="k">rate</div><div class="v lime">'+(esc(f.rate)||'--')+'</div></span>'+
             '</span>'+
-            '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'+
+            '<span style="display:flex;gap:6px">'+
+              '<button class="btn of-det" data-id="'+esc(f.id)+'">Details '+(isOpen?'▴':'▾')+'</button>'+
+              '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'+
+            '</span>'+
           '</div>'+
           '<div class="of-meta">'+esc(f.id)+' &middot; <span class="loc">'+locs+'</span>'+
             ' &middot; '+esc(ost[1])+
             (f.grouphint?(' &middot; '+esc(f.grouphint)):'')+'</div>'+
+          '<div class="detail'+(isOpen?' open':'')+'">'+(isOpen?renderOpDetail(f):'')+'</div>'+
         '</div>';
       }).join('');
     }
+
+    // Delegated, like the Preview button: these rows are rebuilt on every poll,
+    // so a handler bound to one of them would not survive the next refresh.
+    document.addEventListener('click', function(e){
+      var b=e.target.closest ? e.target.closest('.of-det') : null;
+      if(!b) return;
+      var id=b.getAttribute('data-id');
+      ofOpen[id]=!ofOpen[id];
+      renderOpFlows(ofLast);
+    });
     function pollOps(){
       fetch('/api/operator-flows',{cache:'no-store'}).then(function(r){return r.json();})
         .then(function(d){ renderOpFlows(d.flows); }).catch(function(){});
