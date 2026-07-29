@@ -66,6 +66,7 @@ rules:
   # node agent renews for every origin instead. Cluster-scoped for the same
   # reason as the pod read above: a Role would be rewritten into demo-app by
   # Flux's targetNamespace and never reach mxl-system. Read-only; the agent owns
+  # Create/Update/Delete on its own Leases.
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list]
