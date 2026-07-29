@@ -13,7 +13,6 @@ resources:
   - txdarwin-output-viewer.yaml
   - audio-preview.yaml
   - audio-testsrc.yaml
-  - mxl-receivers.yaml
   - test-sources.yaml
 
 # Hash-suffixed configmaps: any change to a file under config/ produces

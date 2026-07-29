@@ -70,16 +70,6 @@ rules:
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list]
-  # Per-flow origin Leases (mxl-system, mxl-flow-<flowID>-<node>) — the
-  # freshness signal behind the "Operator flows" dot. The OriginFresh condition
-  # only exists on flows an MxlReceiver names, so the panel reads the Leases the
-  # node agent renews for every origin instead. Cluster-scoped for the same
-  # reason as the pod read above: a Role would be rewritten into demo-app by
-  # Flux's targetNamespace and never reach mxl-system. Read-only; the agent owns
-  # Create/Update/Delete on its own Leases.
-  - apiGroups: [coordination.k8s.io]
-    resources: [leases]
-    verbs: [get, list]
   # DMF-298/303 booking screen: the per-booking instances live in the txdarwin
   # namespace, not in demo-app's, so these reads need the ClusterRole too.
   # Read-only — the showcase observes the booking lifecycle, it never drives it.
