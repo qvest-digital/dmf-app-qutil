@@ -8,6 +8,7 @@
 #   - receiver    : MxlReceiver CR (phase, provider, bound mirror)
 #   - mirror      : MxlFlowMirror CR (phase, sourceNode, provider)
 #   - flow        : MxlFlow CR (OriginFresh, per-node origin locations)
+#   - origin      : per-flow origin Lease in mxl-system (freshness, see below)
 #   - gateways    : mxl-system gateway pods (node, ready, restarts)
 #
 # Endpoints:
@@ -17,6 +18,7 @@
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with
 # the mounted SA token + CA. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, ssl, urllib.request, urllib.error
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def _own_namespace():
@@ -271,7 +273,6 @@ def _age(ts):
     if not ts:
         return None
     try:
-        from datetime import datetime, timezone
         t = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         return int((datetime.now(timezone.utc) - t).total_seconds())
     except Exception:
@@ -434,6 +435,113 @@ def storyline(events):
     return out[-12:]
 
 
+# ── Origin freshness ────────────────────────────────────────────────────────
+# status.conditions[OriginFresh] is NOT a per-flow health field: the operator
+# stamps it only while reconciling an MxlReceiver that names the flow (and only
+# when it has an opinion — "no origin yet" is deliberately left unwritten). So
+# every flow nobody receives cross-node — the ST 2110 gateway flows, tcp-demo,
+# the booking flows — carries no condition at all, and reading its absence as
+# "not fresh" painted a red dot on perfectly healthy flows.
+#
+# The signal the operator itself checks is per-flow and always present: the
+# node agent renews a Lease mxl-flow-<flowID>-<node> in mxl-system every ~10s
+# (30s duration) for every Origin flow on its disk, and releases it when the
+# flow vanishes. Read those directly.
+LEASE_NS = os.environ.get("MXL_LEASE_NS", "mxl-system")
+LEASE_PREFIX = "mxl-flow-"
+LEASE_SECONDS = 30      # agent default, and the operator's own fallback
+
+
+def _renew_time(ts):
+    """Lease renewTime (RFC3339 micro) -> aware datetime, or None."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def origin_leases():
+    """The per-flow origin Leases, as [{key, node, fresh, age}].
+
+    key is "<flowID>-<nodeName>" — matched by prefix rather than split on the
+    last dash, because both halves contain dashes (UUID flow ids always, node
+    names usually). Returns None when the Leases are unreadable (a cluster
+    still on the RBAC without the coordination.k8s.io read) so the caller can
+    fall back to the condition instead of declaring every flow stale.
+    """
+    res = safe_k8s(f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases")
+    if "_error" in res:
+        return None
+    now = datetime.now(timezone.utc)
+    out = []
+    for ls in res.get("items", []):
+        name = ls.get("metadata", {}).get("name") or ""
+        if not name.startswith(LEASE_PREFIX):
+            continue
+        spec = ls.get("spec", {}) or {}
+        renew = _renew_time(spec.get("renewTime"))
+        if not renew:
+            continue
+        dur = spec.get("leaseDurationSeconds") or LEASE_SECONDS
+        out.append({
+            "key": name[len(LEASE_PREFIX):],
+            # The agent holds its own Lease, so holderIdentity is the node.
+            "node": spec.get("holderIdentity"),
+            "fresh": now < renew + timedelta(seconds=dur),
+            "age": int((now - renew).total_seconds()),
+        })
+    return out
+
+
+def origin_health(fl, leases):
+    """Three-state origin health for one MxlFlow.
+
+    True  — an origin Lease is inside its renewal window.
+    False — a node claims Origin but its Lease lapsed or never landed.
+    None  — nothing claims Origin (mirror-only, or not published yet), so
+            there is nothing to be fresh about. Unknown, not broken.
+    """
+    st = fl.get("status", {}) or {}
+    uuid = fl.get("metadata", {}).get("name") or ""
+    origins = [l.get("nodeName") for l in (st.get("locations") or [])
+               if l.get("phase") == "Origin"]
+
+    if leases is None:
+        cond = {}
+        for c in st.get("conditions") or []:
+            if c.get("type") == "OriginFresh":
+                cond = c
+        return {
+            "originFresh": (cond.get("status") == "True") if cond else None,
+            "originReason": cond.get("reason") or "NoLeaseRead",
+            "originNode": origins[0] if origins else None,
+            "originAge": None,
+        }
+
+    mine = [l for l in leases if l["key"].startswith(uuid + "-")]
+    fresh = [l for l in mine if l["fresh"]]
+    if fresh:
+        best = min(fresh, key=lambda l: l["age"])
+        return {"originFresh": True, "originReason": "LeaseRenewed",
+                "originNode": best["node"], "originAge": best["age"]}
+    if mine:
+        # The most recently renewed of the lapsed ones — that is the node whose
+        # origin came closest to still being good, and the useful age to show.
+        latest = min(mine, key=lambda l: l["age"])
+        return {"originFresh": False, "originReason": "LeaseExpired",
+                "originNode": latest["node"], "originAge": latest["age"]}
+    if origins:
+        # An Origin location with no Lease behind it: the agent that published
+        # it is gone or never renewed. The same fault the operator reports as
+        # LeaseExpired, just without a Lease object left to date it.
+        return {"originFresh": False, "originReason": "NoOriginLease",
+                "originNode": origins[0], "originAge": None}
+    return {"originFresh": None, "originReason": "NoOrigin",
+            "originNode": None, "originAge": None}
+
+
 # ── Operator flow inventory ─────────────────────────────────────────────────
 # Every MXL flow the mxl-k8s operator knows about, straight from the (cluster-
 # scoped) MxlFlow CRs — not the hardcoded d4d writer set build() reports. The
@@ -443,6 +551,7 @@ def storyline(events):
 def operator_flows():
     items = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
+    leases = origin_leases()
     out = []
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
@@ -462,10 +571,7 @@ def operator_flows():
         if sr.get("numerator"):
             rate = f"{sr['numerator'] / max(1, sr.get('denominator', 1)) / 1000:g} kHz"
 
-        origin_fresh = None
-        for c in (fl.get("status", {}).get("conditions") or []):
-            if c.get("type") == "OriginFresh":
-                origin_fresh = c.get("status") == "True"
+        origin = origin_health(fl, leases)
         locations = [
             {"node": l.get("nodeName"), "phase": l.get("phase")}
             for l in (fl.get("status", {}).get("locations") or [])
@@ -476,7 +582,7 @@ def operator_flows():
         if isinstance(gh, list) and gh:
             grouphint = gh[0]
 
-        out.append({
+        row = {
             "id": uuid,
             "label": d.get("label") or uuid,
             "description": d.get("description"),
@@ -487,9 +593,10 @@ def operator_flows():
             "channels": d.get("channel_count"),
             "colorspace": d.get("colorspace"),
             "grouphint": grouphint,
-            "originFresh": origin_fresh,
             "locations": locations,
-        })
+        }
+        row.update(origin)
+        out.append(row)
     # Stable order: group by media format, then by uuid.
     out.sort(key=lambda f: ((f["format"] or "~"), f["id"] or ""))
     return {"flows": out}

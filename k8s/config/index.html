@@ -534,21 +534,31 @@
     // ── Operator flow inventory: every MXL flow the mxl-k8s operator knows ──
     // about (its MxlFlow CRs), independent of whether this demo happens to
     // produce/play it. demo-metrics serves /api/operator-flows straight from
-    // the CRs; the dot is the flow's OriginFresh condition.
+    // the CRs.
+    //
+    // The dot is three-state, because origin health genuinely is: green when an
+    // origin Lease is being renewed, orange when a node claims Origin but its
+    // Lease lapsed, grey when nothing claims Origin (a mirror-only flow, or one
+    // just published) — that last case is unknown, not broken, and collapsing
+    // it into orange used to mark healthy flows as down.
+    var OSTATE={ 'true':['live','origin fresh'], 'false':['bad','origin stale'],
+                 'null':['','no origin claimed'] };
     function renderOpFlows(list){
       var wrap=document.getElementById('opflows'), cnt=document.getElementById('of-count');
       list=list||[];
       cnt.textContent = list.length ? '('+list.length+')' : '';
       if(!list.length){ wrap.innerHTML='<div class="flow" style="opacity:.6">No flows registered with the operator.</div>'; return; }
       wrap.innerHTML=list.map(function(f){
-        var fresh=f.originFresh===true, fmt=(f.format||'').toLowerCase();
+        var ost=OSTATE[String(f.originFresh)]||OSTATE['null'], fmt=(f.format||'').toLowerCase();
+        var otip=[ost[1], f.originReason, f.originNode,
+                  f.originAge==null?null:(f.originAge+'s ago')].filter(Boolean).join(' · ');
         var media=(f.format==='audio'
           ? [f.mediaType, f.channels?(f.channels+' ch'):null]
           : [f.mediaType, f.resolution]).filter(Boolean).join(' · ');
         var locs=(f.locations||[]).map(function(l){return esc(l.node)+':'+esc(l.phase);}).join(', ')||'no locations';
         return '<div class="flow">'+
           '<div class="row">'+
-            '<span class="dot '+(fresh?'live':'bad')+'"></span>'+
+            '<span class="dot '+ost[0]+'" title="'+esc(otip)+'"></span>'+
             '<span class="name">'+esc(f.label)+
               (fmt?('<span class="badge '+(fmt==='audio'?'audio':'video')+'">'+esc(fmt)+'</span>'):'')+
             '</span>'+
@@ -559,6 +569,7 @@
             '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'+
           '</div>'+
           '<div class="of-meta">'+esc(f.id)+' &middot; <span class="loc">'+locs+'</span>'+
+            ' &middot; '+esc(ost[1])+
             (f.grouphint?(' &middot; '+esc(f.grouphint)):'')+'</div>'+
         '</div>';
       }).join('');
