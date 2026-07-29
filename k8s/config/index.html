@@ -687,7 +687,12 @@
             '</span>'+
             '<span style="display:flex;gap:6px">'+
               '<button class="btn of-det" data-id="'+esc(f.id)+'">Details '+(isOpen?'▴':'▾')+'</button>'+
-              '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'+
+              // Preview only exists for video: mediamtx's mxlSource rejects any
+              // other format outright, so offering the button elsewhere just
+              // produced an overlay that never loaded.
+              (fmt==='video'
+                ? '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'
+                : '<button class="btn" disabled title="Preview is video-only — mediamtx cannot read a '+esc(fmt||'non-video')+' flow">Preview</button>')+
             '</span>'+
           '</div>'+
           '<div class="of-meta">'+esc(f.id)+' &middot; <span class="loc">'+locs+'</span>'+

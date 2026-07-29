@@ -817,16 +817,22 @@ def preview_add(uuid):
     fl = _known_flow(uuid)
     if not fl:
         return 404, {"error": "flow not known to the operator"}
+    d = fl.get("spec", {}).get("definition", {}) or {}
+    fmt = (d.get("format") or "").rsplit(":", 1)[-1]
+    if fmt != "video":
+        # mediamtx's mxlSource refuses anything else ("flow <id> is not video
+        # (format=audio)") — and then retries the open every 5s forever, so
+        # adding the path anyway left a zombie behind spamming the log while the
+        # overlay sat on "buffering…". Refuse before creating it.
+        return 415, {"error": f"preview is video-only; this flow is "
+                              f"{fmt or 'of unknown format'}"}
     name = "preview-" + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
-        d = fl.get("spec", {}).get("definition", {}) or {}
-        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False}
-        if (d.get("format") or "").endswith("video"):
-            conf.update({"mxlH264Preset": "veryfast",
-                         "mxlH264Profile": "high",
-                         "mxlH264Bitrate": 5000000})
+        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False,
+                "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
+                "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
