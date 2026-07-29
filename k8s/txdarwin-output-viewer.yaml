@@ -13,9 +13,9 @@
 # lowLatency HLS; the mediamtx mxl:// source's internal encoder does not and
 # crashes the LL muxer ("H264 parameters not provided").
 #
-# c3000000 reaches this node via the MxlReceiver in mxl-receivers.yaml
-# (role=consumer); the mxl-k8s gateway mirrors it here (or it is already
-# local when co-located with txDarwin).
+# c3000000 reaches this node via the receiver the mxl-k8s agent creates
+# when this pod opens the flow; the gateway mirrors it here (or it is
+# already local when co-located with txDarwin).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,28 +34,6 @@ spec:
         app: txdarwin-output-viewer
         mxl.qvest-digital.com/role: consumer
     spec:
-      # Placement: the required podAffinity pins this pod to the composite
-      # node, so all consumers share one node. The podAntiAffinity steers it
-      # away from producer nodes, but only as a preference. It must not be a
-      # hard rule: on a two-node EKS cluster the composite shares its node
-      # with the writers, so requiring both "with composite" and "not with
-      # producers" leaves no valid node. The pod would stay Pending until the
-      # demo-app health gate and the terraform fluxcd-bootstrap step time out.
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: composite
-              topologyKey: kubernetes.io/hostname
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    mxl.qvest-digital.com/role: producer
-                topologyKey: kubernetes.io/hostname
       tolerations:
         - key: "vpc.amazonaws.com/efa"
           operator: "Exists"
@@ -64,6 +42,7 @@ spec:
         - name: demo-app-ghcr-pull
       initContainers:
         - name: install-intent-shim
+          # renovate: datasource=docker depName=ghcr.io/qvest-digital/mxl-k8s/shim
           image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.3
           imagePullPolicy: IfNotPresent
           volumeMounts:
@@ -97,14 +76,18 @@ spec:
             capabilities:
               add: ["IPC_LOCK", "SYS_RESOURCE"]
           volumeMounts:
-            - name: domain-volume
-              mountPath: /run/mxl/domain
+            # Mount /run/mxl as a whole rather than the domain subdir and
+            # agent.sock separately: a single-file hostPath mount pins
+            # the socket's inode at container start, and the mxl-k8s
+            # agent unlinks and recreates agent.sock on every restart,
+            # stranding any consumer pod already running at that point
+            # on the dead inode until the pod itself restarts.
+            - name: mxl-run
+              mountPath: /run/mxl
               readOnly: false
             - name: intent-shim
               mountPath: /opt/mxl-intent
               readOnly: true
-            - name: agent-sock
-              mountPath: /run/mxl/agent.sock
           resources:
             # One flow + a single x264 encode — far lighter than the 9-flow
             # composite.
@@ -115,13 +98,12 @@ spec:
               cpu: "4"
               memory: 4Gi
       volumes:
-        - name: domain-volume
+        # Mounting the whole /run/mxl (not just domain/) means the
+        # intent-shim always resolves agent.sock through the current
+        # directory entry rather than a pinned inode.
+        - name: mxl-run
           hostPath:
-            path: /run/mxl/domain
+            path: /run/mxl
             type: DirectoryOrCreate
         - name: intent-shim
           emptyDir: {}
-        - name: agent-sock
-          hostPath:
-            path: /run/mxl/agent.sock
-            type: Socket

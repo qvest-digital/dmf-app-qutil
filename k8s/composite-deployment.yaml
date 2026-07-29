@@ -13,8 +13,9 @@
 #     via libmxl-fabrics (EFA provider).
 #   - mxl-k8s agent DaemonSet on this node materializes the mirror at
 #     /run/mxl/domain, so this pod reads from local tmpfs.
-#   - MxlReceiver CRs (mxl-receivers.yaml) express per-flow intent;
-#     the operator reconciles them into MxlFlowMirror resources.
+#   - The intent-shim reports each flow this pod opens; the mxl-k8s
+#     agent creates the matching MxlReceiver and the operator
+#     reconciles it into MxlFlowMirror resources.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,22 +32,8 @@ spec:
     metadata:
       labels:
         app: composite
-        # Role label drives the MxlReceiver podSelector + the writer
-        # pod's podAntiAffinity so the gateway has to bridge two nodes.
         mxl.qvest-digital.com/role: consumer
     spec:
-      # Co-locate with mediamtx (itself unpinned + portable). Both are
-      # role: consumer, so the operator already mirrors every flow to
-      # mediamtx's node; sharing the node lets the compositor read those same
-      # node-local mirrors and RTSP-publish the mosaic locally. Avoids a
-      # hardcoded hostname (which doesn't exist on the 2-node EKS cluster).
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: mediamtx
-              topologyKey: kubernetes.io/hostname
       tolerations:
         - key: "vpc.amazonaws.com/efa"
           operator: "Exists"
@@ -60,6 +47,7 @@ spec:
         # locally" signal instead of failing with FLOW_NOT_FOUND when the
         # operator hasn't materialized the MxlFlowMirror yet.
         - name: install-intent-shim
+          # renovate: datasource=docker depName=ghcr.io/qvest-digital/mxl-k8s/shim
           image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.3
           imagePullPolicy: IfNotPresent
           volumeMounts:
@@ -74,8 +62,8 @@ spec:
               value: /run/mxl/domain
             - name: MXL_COMPOSITE_OUT
               value: rtsp://mediamtx:8554/composite
-            # MXL_FLOW_IDS aligns 1:1 with the MxlReceiver CRs and the
-            # writer-mxl-{1..4} Deployments. Four flows -> the compositor
+            # MXL_FLOW_IDS aligns 1:1 with the writer-mxl-{1..4}
+            # Deployments. Four flows -> the compositor
             # lays out a 2x2 mosaic automatically (grid = ceil(sqrt(n))).
             - name: MXL_FLOW_IDS
               value: >-
@@ -107,8 +95,14 @@ spec:
             capabilities:
               add: ["IPC_LOCK", "SYS_RESOURCE"]
           volumeMounts:
-            - name: domain-volume
-              mountPath: /run/mxl/domain
+            # Mount /run/mxl as a whole rather than the domain subdir and
+            # agent.sock separately: a single-file hostPath mount pins
+            # the socket's inode at container start, and the mxl-k8s
+            # agent unlinks and recreates agent.sock on every restart,
+            # stranding any consumer pod already running at that point
+            # on the dead inode until the pod itself restarts.
+            - name: mxl-run
+              mountPath: /run/mxl
               # libmxl-side acquires a session slot in the flow's shared
               # header (futex/atomics) on attach; keep rw so the
               # reader-table mutation works.
@@ -116,10 +110,6 @@ spec:
             - name: intent-shim
               mountPath: /opt/mxl-intent
               readOnly: true
-            # Unix socket the libmxl-intent.so shim uses to talk to the
-            # agent DaemonSet on this node.
-            - name: agent-sock
-              mountPath: /run/mxl/agent.sock
           resources:
             # Worst-case mmap footprint per flow ≈ 40 MB; four flows
             # plus gst pipeline buffers plus x264 working set fit in
@@ -134,14 +124,13 @@ spec:
         # mxl-k8s agent + gateway DaemonSets share this same path. The
         # agent watches it via fanotify on the writer node and publishes
         # MxlFlow CRs; on the consumer node the gateway materializes the
-        # mirror at this path.
-        - name: domain-volume
+        # mirror at this path. Mounting the whole /run/mxl (not just
+        # domain/) means the intent-shim always resolves agent.sock
+        # through the current directory entry rather than a pinned
+        # inode.
+        - name: mxl-run
           hostPath:
-            path: /run/mxl/domain
+            path: /run/mxl
             type: DirectoryOrCreate
         - name: intent-shim
           emptyDir: {}
-        - name: agent-sock
-          hostPath:
-            path: /run/mxl/agent.sock
-            type: Socket
