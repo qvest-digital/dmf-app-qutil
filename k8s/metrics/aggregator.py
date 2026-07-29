@@ -226,7 +226,13 @@ def build():
                     "grainRate": (f"{num}/{den}" if num else None),
                     "fps": round(rate, 2),
                     "grainBytes": gbytes,
-                    "mbps": round(gbytes * rate * 8 / 1e6),
+                    # Nominal, NOT observed: grain size x grain rate is the
+                    # bitrate the format implies if every grain is delivered on
+                    # time. Nothing on the fabric is measured here — the mirror
+                    # CRs carry no byte counters and the gateway exports only
+                    # controller-runtime metrics. Named so it cannot be read as
+                    # throughput; the measured figure is comp.mbps.
+                    "nominalMbps": round(gbytes * rate * 8 / 1e6),
                 }
 
         writer_ok = bool(writer and writer.get("ready"))
@@ -638,7 +644,13 @@ def flow_media(d):
         if (d.get("media_type") or "") == "video/v210":
             gbytes = (((w + 47) // 48) * 128) * h
             out["grainBytes"] = gbytes
-            out["mbps"] = round(gbytes * (out.get("fps") or GRAIN_RATE) * 8 / 1e6)
+            # Nominal, not observed — see the note in build()'s media block.
+            # There is no live per-flow throughput anywhere in the control
+            # plane to report instead: mirrors expose lastGrainAt but no byte
+            # counters, so "last grain" is the only live delivery signal a
+            # non-compositor flow has.
+            out["nominalMbps"] = round(
+                gbytes * (out.get("fps") or GRAIN_RATE) * 8 / 1e6)
     return out
 
 

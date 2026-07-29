@@ -466,7 +466,10 @@
           kvRow('grain rate', esc(m.grainRate)||'--')+
           kvRow('fps', fmt(m.fps,2))+
           kvRow('grain size', m.grainBytes? ((m.grainBytes/1048576).toFixed(2)+' MiB') : '--')+
-          kvRow('RDMA rate', m.mbps? (m.mbps+' Mbit/s') : '--')+
+          // Format arithmetic, not a measurement — dimmed so it reads as a
+          // property of the flow. The measured throughput is in the Compositor
+          // section below.
+          kvRow('nominal bitrate', m.nominalMbps? (m.nominalMbps+' Mbit/s') : '--', 'warn')+
         '</div>'+
         '<h3>Writer pod</h3><div class="kv">'+
           kvRow('node', esc(w.node)||'--', w.node? 'ok':'')+
@@ -589,7 +592,10 @@
           // Only v210 carries the padded-stride derivation; anything else says so
           // rather than quoting a number the format doesn't imply.
           kvRow('grain size', m.grainBytes?((m.grainBytes/1048576).toFixed(2)+' MiB'):'n/a for this format')+
-          kvRow('RDMA rate', m.mbps?(m.mbps+' Mbit/s'):'--')+
+          // What the format implies, not what the fabric is doing: nothing in
+          // the control plane measures per-flow throughput. The live delivery
+          // signal for these flows is "last grain" under Mirrors.
+          kvRow('nominal bitrate', m.nominalMbps?(m.nominalMbps+' Mbit/s'):'--', 'warn')+
           ((m.components||[]).length?kvRow('components','<span class="mono">'+esc(m.components.join(', '))+'</span>'):'');
 
       var locs=(f.locations||[]).map(function(l){
