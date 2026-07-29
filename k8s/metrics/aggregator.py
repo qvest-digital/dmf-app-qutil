@@ -478,10 +478,14 @@ def storyline(events):
 # the booking flows — carries no condition at all, and reading its absence as
 # "not fresh" painted a red dot on perfectly healthy flows.
 #
-# The signal the operator itself checks is per-flow and always present: the
-# node agent renews a Lease mxl-flow-<flowID>-<node> in mxl-system every ~10s
-# (30s duration) for every Origin flow on its disk, and releases it when the
-# flow vanishes. Read those directly.
+# Derive it the way the operator's own resolveSourceNode does instead, from two
+# things that exist for every flow: status.locations[].phase == Origin says who
+# claims to hold the authoritative copy, and the Lease
+# mxl-flow-<flowID>-<node> in mxl-system says whether that node's agent is
+# still alive (renewed every ~10s, 30s duration, released when the flow
+# vanishes). The Lease filters the claim — it never replaces it, because the
+# agent renews one for every flow directory on its disk, mirror copies
+# included.
 LEASE_NS = os.environ.get("MXL_LEASE_NS", "mxl-system")
 LEASE_PREFIX = "mxl-flow-"
 LEASE_SECONDS = 30      # agent default, and the operator's own fallback
@@ -498,19 +502,20 @@ def _renew_time(ts):
 
 
 def origin_leases():
-    """The per-flow origin Leases, as [{key, node, fresh, age}].
+    """Per-flow origin Leases, keyed by "<flowID>-<nodeName>".
 
-    key is "<flowID>-<nodeName>" — matched by prefix rather than split on the
-    last dash, because both halves contain dashes (UUID flow ids always, node
-    names usually). Returns None when the Leases are unreadable (a cluster
-    still on the RBAC without the coordination.k8s.io read) so the caller can
-    fall back to the condition instead of declaring every flow stale.
+    That is exactly the name LeaseName() builds, so a (flow, node) lookup is a
+    dict hit with no parsing — both halves contain dashes (UUID flow ids
+    always, node names usually), so there is no safe way to split one back
+    apart. Returns None when the Leases are unreadable (a cluster still on the
+    RBAC without the coordination.k8s.io read) so the caller can fall back to
+    the condition instead of declaring every flow stale.
     """
     res = safe_k8s(f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases")
     if "_error" in res:
         return None
     now = datetime.now(timezone.utc)
-    out = []
+    out = {}
     for ls in res.get("items", []):
         name = ls.get("metadata", {}).get("name") or ""
         if not name.startswith(LEASE_PREFIX):
@@ -520,28 +525,35 @@ def origin_leases():
         if not renew:
             continue
         dur = spec.get("leaseDurationSeconds") or LEASE_SECONDS
-        out.append({
-            "key": name[len(LEASE_PREFIX):],
-            # The agent holds its own Lease, so holderIdentity is the node.
-            "node": spec.get("holderIdentity"),
+        out[name[len(LEASE_PREFIX):]] = {
             "fresh": now < renew + timedelta(seconds=dur),
             "age": int((now - renew).total_seconds()),
-        })
+        }
     return out
 
 
 def origin_health(fl, leases):
     """Three-state origin health for one MxlFlow.
 
-    True  — an origin Lease is inside its renewal window.
+    True  — a node claims Origin and holds a Lease inside its renewal window.
     False — a node claims Origin but its Lease lapsed or never landed.
     None  — nothing claims Origin (mirror-only, or not published yet), so
             there is nothing to be fresh about. Unknown, not broken.
+
+    Gated on the Origin location first, exactly like the operator's
+    resolveSourceNode, and the Lease is only consulted for the nodes that make
+    that claim. A Lease on its own proves nothing about the origin: the agent's
+    renew loop refreshes one for every flow directory on its disk, mirror
+    copies included, so a mirror target holds a perfectly fresh Lease for a
+    flow whose actual origin is long dead.
     """
     st = fl.get("status", {}) or {}
     uuid = fl.get("metadata", {}).get("name") or ""
     origins = [l.get("nodeName") for l in (st.get("locations") or [])
                if l.get("phase") == "Origin"]
+    if not origins:
+        return {"originFresh": None, "originReason": "NoOrigin",
+                "originNode": None, "originAge": None}
 
     if leases is None:
         cond = {}
@@ -551,30 +563,27 @@ def origin_health(fl, leases):
         return {
             "originFresh": (cond.get("status") == "True") if cond else None,
             "originReason": cond.get("reason") or "NoLeaseRead",
-            "originNode": origins[0] if origins else None,
+            "originNode": origins[0],
             "originAge": None,
         }
 
-    mine = [l for l in leases if l["key"].startswith(uuid + "-")]
-    fresh = [l for l in mine if l["fresh"]]
+    held = [(n, leases.get(uuid + "-" + n)) for n in origins]
+    dated = [(n, l) for n, l in held if l]
+    fresh = [(n, l) for n, l in dated if l["fresh"]]
     if fresh:
-        best = min(fresh, key=lambda l: l["age"])
+        n, l = min(fresh, key=lambda x: x[1]["age"])
         return {"originFresh": True, "originReason": "LeaseRenewed",
-                "originNode": best["node"], "originAge": best["age"]}
-    if mine:
-        # The most recently renewed of the lapsed ones — that is the node whose
-        # origin came closest to still being good, and the useful age to show.
-        latest = min(mine, key=lambda l: l["age"])
+                "originNode": n, "originAge": l["age"]}
+    if dated:
+        # The most recently renewed of the lapsed ones — the origin that came
+        # closest to still being good, and the useful age to show.
+        n, l = min(dated, key=lambda x: x[1]["age"])
         return {"originFresh": False, "originReason": "LeaseExpired",
-                "originNode": latest["node"], "originAge": latest["age"]}
-    if origins:
-        # An Origin location with no Lease behind it: the agent that published
-        # it is gone or never renewed. The same fault the operator reports as
-        # LeaseExpired, just without a Lease object left to date it.
-        return {"originFresh": False, "originReason": "NoOriginLease",
-                "originNode": origins[0], "originAge": None}
-    return {"originFresh": None, "originReason": "NoOrigin",
-            "originNode": None, "originAge": None}
+                "originNode": n, "originAge": l["age"]}
+    # Claims Origin with no Lease at all: the agent that published it is gone
+    # or never renewed. The same fault, just with nothing left to date it.
+    return {"originFresh": False, "originReason": "NoOriginLease",
+            "originNode": origins[0], "originAge": None}
 
 
 # ── Operator flow inventory ─────────────────────────────────────────────────
