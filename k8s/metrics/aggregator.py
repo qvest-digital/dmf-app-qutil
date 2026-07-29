@@ -2,8 +2,8 @@
 # demo-metrics: dependency-free aggregator for the multiviewer client.
 #
 # Merges, per flow, everything we can cheaply reach:
-#   - compositor  : http://composite:9090/ (mosaic stats; the per-flow panel
-#                    numbers are derived instead — see the GRAIN_RATE comment)
+#   - compositor  : http://composite:9090/ (measured per-flow grains/s, Mbit/s,
+#                    grains pushed/dropped — see the GRAIN_RATE comment)
 #   - writer pod  : k8s API (node, phase, restarts, image, pattern, age)
 #   - receiver    : MxlReceiver CR (phase, provider, bound mirror)
 #   - mirror      : MxlFlowMirror CR (phase, sourceNode, provider)
@@ -37,10 +37,15 @@ GW_NS = os.environ.get("GW_NS", "mxl-system")
 FLOW_PREFIX = os.environ.get("FLOW_PREFIX", "d4d00000-0000-0000-0000-00000000000")
 N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 
-# No single consumer measures received fps/Mbit anymore: each per-flow tile
-# goes producer -> RDMA mirror -> mediamtx, so there is nothing central to
-# ask. Derive the panel from real CR/pod status plus the nominal grain rate:
-# a Ready mirror transfers every 720p v210 grain at the grain rate.
+# No consumer measures what the four per-flow TILES receive: each one goes
+# producer -> RDMA mirror -> mediamtx, and mediamtx does not report per-path
+# grain counters. The compositor does measure though — it opens its own reader
+# on all four flows for the mosaic — so the panel reports its counters and says
+# so, rather than deriving numbers that look live but never move.
+#
+# These constants are the fallback for when the compositor is unreachable or
+# does not carry a flow: a Ready mirror transfers every 720p v210 grain at the
+# grain rate, so the shape is right even though the value cannot change.
 GRAIN_RATE = 30000.0 / 1001.0   # 29.97 fps
 GRAIN_BYTES = 2488320           # 720p v210 (1296 px wide -> 3456 B/row * 720)
 COMPOSITOR = os.environ.get("COMPOSITOR_STATS", "http://composite:9090/")
@@ -85,7 +90,12 @@ def idx_of(uuid):
 
 def build():
     stats = compositor_stats()
-    comp_by_i = {f.get("i"): f for f in stats.get("flows", [])}
+    # The compositor opens a reader on every flow to build the 2x2 mosaic, so
+    # its per-flow counters are a real measurement of RDMA delivery. Keyed by
+    # flowId, not by the worker index it also reports, so a reordered
+    # MXL_FLOW_IDS cannot shift one flow's numbers onto another's tile.
+    comp_by_id = {f.get("flowId"): f for f in stats.get("flows", [])}
+    comp_err = stats.get("_error")
 
     pods = safe_k8s(f"/api/v1/namespaces/{NS}/pods").get("items", [])
     receivers = safe_k8s(
@@ -216,7 +226,13 @@ def build():
                     "grainRate": (f"{num}/{den}" if num else None),
                     "fps": round(rate, 2),
                     "grainBytes": gbytes,
-                    "mbps": round(gbytes * rate * 8 / 1e6),
+                    # Nominal, NOT observed: grain size x grain rate is the
+                    # bitrate the format implies if every grain is delivered on
+                    # time. Nothing on the fabric is measured here — the mirror
+                    # CRs carry no byte counters and the gateway exports only
+                    # controller-runtime metrics. Named so it cannot be read as
+                    # throughput; the measured figure is comp.mbps.
+                    "nominalMbps": round(gbytes * rate * 8 / 1e6),
                 }
 
         writer_ok = bool(writer and writer.get("ready"))
@@ -228,13 +244,38 @@ def build():
         # — placement is dynamic, so which flow is local varies). Requiring a
         # mirror unconditionally made the local flow show as down.
         live = writer_ok and origin_ok and (mirror_ok or not mlist)
-        gbytes = (media or {}).get("grainBytes") or GRAIN_BYTES
-        rate = (media or {}).get("fps") or GRAIN_RATE
-        comp = {
-            "fps": round(rate, 1) if live else 0,
-            "mbps": round(gbytes * rate * 8 / 1e6) if live else 0,
-            "live": live,
-        }
+
+        # Delivery numbers: measured from the compositor's own readers when it
+        # is reachable and reading this flow, nominal otherwise. "measured"
+        # tells the panel which it got — a derived number that cannot move is
+        # honest only if it says so.
+        cs = comp_by_id.get(uuid)
+        if cs:
+            comp = {
+                "fps": round(cs.get("fps") or 0, 1),
+                "mbps": round(cs.get("mbps") or 0),
+                "pushed": cs.get("pushed"),
+                "missed": cs.get("missed"),
+                # The compositor's own reader state (it reports fps > 1), which
+                # is the data plane. "live" below stays the control-plane view.
+                "reading": bool(cs.get("live")),
+                "measured": True,
+                "source": COMPOSITOR,
+            }
+        else:
+            gbytes = (media or {}).get("grainBytes") or GRAIN_BYTES
+            rate = (media or {}).get("fps") or GRAIN_RATE
+            comp = {
+                "fps": round(rate, 1) if live else 0,
+                "mbps": round(gbytes * rate * 8 / 1e6) if live else 0,
+                "pushed": None,
+                "missed": None,
+                "reading": None,
+                "measured": False,
+                "source": ("compositor unreachable" if comp_err
+                           else "flow not in the compositor's set"),
+            }
+        comp["live"] = live
 
         result.append({
             "n": n,
@@ -443,10 +484,14 @@ def storyline(events):
 # the booking flows — carries no condition at all, and reading its absence as
 # "not fresh" painted a red dot on perfectly healthy flows.
 #
-# The signal the operator itself checks is per-flow and always present: the
-# node agent renews a Lease mxl-flow-<flowID>-<node> in mxl-system every ~10s
-# (30s duration) for every Origin flow on its disk, and releases it when the
-# flow vanishes. Read those directly.
+# Derive it the way the operator's own resolveSourceNode does instead, from two
+# things that exist for every flow: status.locations[].phase == Origin says who
+# claims to hold the authoritative copy, and the Lease
+# mxl-flow-<flowID>-<node> in mxl-system says whether that node's agent is
+# still alive (renewed every ~10s, 30s duration, released when the flow
+# vanishes). The Lease filters the claim — it never replaces it, because the
+# agent renews one for every flow directory on its disk, mirror copies
+# included.
 LEASE_NS = os.environ.get("MXL_LEASE_NS", "mxl-system")
 LEASE_PREFIX = "mxl-flow-"
 LEASE_SECONDS = 30      # agent default, and the operator's own fallback
@@ -463,19 +508,20 @@ def _renew_time(ts):
 
 
 def origin_leases():
-    """The per-flow origin Leases, as [{key, node, fresh, age}].
+    """Per-flow origin Leases, keyed by "<flowID>-<nodeName>".
 
-    key is "<flowID>-<nodeName>" — matched by prefix rather than split on the
-    last dash, because both halves contain dashes (UUID flow ids always, node
-    names usually). Returns None when the Leases are unreadable (a cluster
-    still on the RBAC without the coordination.k8s.io read) so the caller can
-    fall back to the condition instead of declaring every flow stale.
+    That is exactly the name LeaseName() builds, so a (flow, node) lookup is a
+    dict hit with no parsing — both halves contain dashes (UUID flow ids
+    always, node names usually), so there is no safe way to split one back
+    apart. Returns None when the Leases are unreadable (a cluster still on the
+    RBAC without the coordination.k8s.io read) so the caller can fall back to
+    the condition instead of declaring every flow stale.
     """
     res = safe_k8s(f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases")
     if "_error" in res:
         return None
     now = datetime.now(timezone.utc)
-    out = []
+    out = {}
     for ls in res.get("items", []):
         name = ls.get("metadata", {}).get("name") or ""
         if not name.startswith(LEASE_PREFIX):
@@ -485,28 +531,35 @@ def origin_leases():
         if not renew:
             continue
         dur = spec.get("leaseDurationSeconds") or LEASE_SECONDS
-        out.append({
-            "key": name[len(LEASE_PREFIX):],
-            # The agent holds its own Lease, so holderIdentity is the node.
-            "node": spec.get("holderIdentity"),
+        out[name[len(LEASE_PREFIX):]] = {
             "fresh": now < renew + timedelta(seconds=dur),
             "age": int((now - renew).total_seconds()),
-        })
+        }
     return out
 
 
 def origin_health(fl, leases):
     """Three-state origin health for one MxlFlow.
 
-    True  — an origin Lease is inside its renewal window.
+    True  — a node claims Origin and holds a Lease inside its renewal window.
     False — a node claims Origin but its Lease lapsed or never landed.
     None  — nothing claims Origin (mirror-only, or not published yet), so
             there is nothing to be fresh about. Unknown, not broken.
+
+    Gated on the Origin location first, exactly like the operator's
+    resolveSourceNode, and the Lease is only consulted for the nodes that make
+    that claim. A Lease on its own proves nothing about the origin: the agent's
+    renew loop refreshes one for every flow directory on its disk, mirror
+    copies included, so a mirror target holds a perfectly fresh Lease for a
+    flow whose actual origin is long dead.
     """
     st = fl.get("status", {}) or {}
     uuid = fl.get("metadata", {}).get("name") or ""
     origins = [l.get("nodeName") for l in (st.get("locations") or [])
                if l.get("phase") == "Origin"]
+    if not origins:
+        return {"originFresh": None, "originReason": "NoOrigin",
+                "originNode": None, "originAge": None}
 
     if leases is None:
         cond = {}
@@ -516,30 +569,138 @@ def origin_health(fl, leases):
         return {
             "originFresh": (cond.get("status") == "True") if cond else None,
             "originReason": cond.get("reason") or "NoLeaseRead",
-            "originNode": origins[0] if origins else None,
+            "originNode": origins[0],
             "originAge": None,
         }
 
-    mine = [l for l in leases if l["key"].startswith(uuid + "-")]
-    fresh = [l for l in mine if l["fresh"]]
+    held = [(n, leases.get(uuid + "-" + n)) for n in origins]
+    dated = [(n, l) for n, l in held if l]
+    fresh = [(n, l) for n, l in dated if l["fresh"]]
     if fresh:
-        best = min(fresh, key=lambda l: l["age"])
+        n, l = min(fresh, key=lambda x: x[1]["age"])
         return {"originFresh": True, "originReason": "LeaseRenewed",
-                "originNode": best["node"], "originAge": best["age"]}
-    if mine:
-        # The most recently renewed of the lapsed ones — that is the node whose
-        # origin came closest to still being good, and the useful age to show.
-        latest = min(mine, key=lambda l: l["age"])
+                "originNode": n, "originAge": l["age"]}
+    if dated:
+        # The most recently renewed of the lapsed ones — the origin that came
+        # closest to still being good, and the useful age to show.
+        n, l = min(dated, key=lambda x: x[1]["age"])
         return {"originFresh": False, "originReason": "LeaseExpired",
-                "originNode": latest["node"], "originAge": latest["age"]}
-    if origins:
-        # An Origin location with no Lease behind it: the agent that published
-        # it is gone or never renewed. The same fault the operator reports as
-        # LeaseExpired, just without a Lease object left to date it.
-        return {"originFresh": False, "originReason": "NoOriginLease",
-                "originNode": origins[0], "originAge": None}
-    return {"originFresh": None, "originReason": "NoOrigin",
-            "originNode": None, "originAge": None}
+                "originNode": n, "originAge": l["age"]}
+    # Claims Origin with no Lease at all: the agent that published it is gone
+    # or never renewed. The same fault, just with nothing left to date it.
+    return {"originFresh": False, "originReason": "NoOriginLease",
+            "originNode": origins[0], "originAge": None}
+
+
+def _age_secs(ts):
+    """RFC3339 -> whole seconds since, or None. Tolerates the fractional form
+    k8s writes on Lease renewTime as well as the plain one on conditions."""
+    t = _renew_time(ts)
+    return None if t is None else int((datetime.now(timezone.utc) - t).total_seconds())
+
+
+def _conditions(obj):
+    """Every status condition on a CR, flattened and ordered by type so the
+    detail panel's rows don't reshuffle between polls."""
+    out = [{"type": c.get("type"), "status": c.get("status"),
+            "reason": c.get("reason"), "message": c.get("message"),
+            "age": _age_secs(c.get("lastTransitionTime"))}
+           for c in ((obj.get("status") or {}).get("conditions") or [])]
+    out.sort(key=lambda c: c["type"] or "")
+    return out
+
+
+def flow_media(d):
+    """Media facts off the flow definition — whatever it carries.
+
+    The v210 grain-size / RDMA-rate derivation is gated on the media type
+    rather than applied to everything the inventory lists: the 48-pixel
+    (128-byte) row stride is a v210 property, and quoting it for, say, an
+    audio/float32 or a raw RGB flow would be a made-up number.
+    """
+    comps = d.get("components") or []
+    out = {
+        "mediaType": d.get("media_type"),
+        "colorspace": d.get("colorspace"),
+        "interlaceMode": d.get("interlace_mode"),
+        # Video carries bit depth per component, audio at the top level.
+        "bitDepth": comps[0].get("bit_depth") if comps else d.get("bit_depth"),
+        "channels": d.get("channel_count"),
+        "components": [f"{c.get('name')} {c.get('width')}×{c.get('height')}"
+                       f" @{c.get('bit_depth')}b" for c in comps],
+    }
+    gr = d.get("grain_rate") or {}
+    if gr.get("numerator"):
+        num, den = gr["numerator"], (gr.get("denominator") or 1)
+        out["grainRate"] = f"{num}/{den}"
+        out["fps"] = round(num / den, 2)
+    sr = d.get("sample_rate") or {}
+    if sr.get("numerator"):
+        out["sampleRate"] = \
+            f"{sr['numerator'] / max(1, sr.get('denominator', 1)) / 1000:g} kHz"
+    w, h = d.get("frame_width"), d.get("frame_height")
+    if w and h:
+        out["width"], out["height"] = w, h
+        if (d.get("media_type") or "") == "video/v210":
+            gbytes = (((w + 47) // 48) * 128) * h
+            out["grainBytes"] = gbytes
+            # Nominal, not observed — see the note in build()'s media block.
+            # There is no live per-flow throughput anywhere in the control
+            # plane to report instead: mirrors expose lastGrainAt but no byte
+            # counters, so "last grain" is the only live delivery signal a
+            # non-compositor flow has.
+            out["nominalMbps"] = round(
+                gbytes * (out.get("fps") or GRAIN_RATE) * 8 / 1e6)
+    return out
+
+
+def flow_detail(fl, d, uuid, receivers, mirrors):
+    """Everything the control plane knows about one flow, for the expandable
+    row: the full definition, every condition (not just OriginFresh), and the
+    receivers and mirrors wired to it — including each mirror's Source/Target
+    progress, which is where a stalled transfer actually shows up.
+    """
+    md = fl.get("metadata", {}) or {}
+    recv = [{"name": r["metadata"]["name"],
+             "namespace": r["metadata"].get("namespace"),
+             "provider": (r.get("spec") or {}).get("provider"),
+             "phase": (r.get("status") or {}).get("phase"),
+             "pod": ((r.get("spec") or {}).get("podRef") or {}).get("name"),
+             "boundMirror": ((r.get("status") or {}).get("boundMirror")
+                             or {}).get("name")}
+            for r in receivers if (r.get("spec") or {}).get("flowID") == uuid]
+
+    mirs = []
+    for m in mirrors:
+        ms, mst = (m.get("spec") or {}), (m.get("status") or {})
+        if ms.get("flowID") != uuid:
+            continue
+        mirs.append({
+            "name": m["metadata"]["name"],
+            "namespace": m["metadata"].get("namespace"),
+            "sourceNode": ms.get("sourceNode"),
+            "targetNode": ms.get("targetNode"),
+            "provider": ms.get("provider"),
+            "phase": mst.get("phase"),
+            "attempts": mst.get("attemptCount"),
+            # Empty string means "no error", which reads as a blank row.
+            "lastError": mst.get("lastError") or None,
+            "grainAge": _age_secs(mst.get("lastGrainAt")),
+            "requestor": (ms.get("requestor") or {}).get("name"),
+            "conditions": _conditions(m),
+        })
+
+    return {
+        "created": md.get("creationTimestamp"),
+        "createdAge": _age_secs(md.get("creationTimestamp")),
+        "description": d.get("description"),
+        "media": flow_media(d),
+        "parents": d.get("parents") or [],
+        "tags": d.get("tags") or {},
+        "conditions": _conditions(fl),
+        "receivers": recv,
+        "mirrors": mirs,
+    }
 
 
 # ── Operator flow inventory ─────────────────────────────────────────────────
@@ -552,6 +713,13 @@ def operator_flows():
     items = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
     leases = origin_leases()
+    # All namespaces (no namespace segment): MxlFlow is cluster-scoped, so the
+    # receivers and mirrors wired to one can live anywhere — not only in this
+    # aggregator's own namespace, which is all build() needs to look at.
+    receivers = safe_k8s(
+        "/apis/mxl.qvest-digital.com/v1alpha1/mxlreceivers").get("items", [])
+    mirrors = safe_k8s(
+        "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", [])
     out = []
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
@@ -573,7 +741,8 @@ def operator_flows():
 
         origin = origin_health(fl, leases)
         locations = [
-            {"node": l.get("nodeName"), "phase": l.get("phase")}
+            {"node": l.get("nodeName"), "phase": l.get("phase"),
+             "observedAge": _age_secs(l.get("lastObserved"))}
             for l in (fl.get("status", {}).get("locations") or [])
         ]
 
@@ -594,6 +763,7 @@ def operator_flows():
             "colorspace": d.get("colorspace"),
             "grouphint": grouphint,
             "locations": locations,
+            "detail": flow_detail(fl, d, uuid, receivers, mirrors),
         }
         row.update(origin)
         out.append(row)
@@ -609,16 +779,24 @@ def operator_flows():
 # operator actually knows about can be added — we validate the uuid against the
 # MxlFlow set first, and the flow must be node-local to mediamtx (its Service
 # node) for the mxl source to open.
+#
+# Audio flows go the other way round. mediamtx's mxlSource refuses them
+# ("flow <id> is not video (format=audio)"), so nothing can PULL an audio flow —
+# instead the audio-preview pod (k8s/audio-preview.yaml) reads it via libmxl and
+# PUSHES Opus over RTSP. mediamtx only has a publisher slot for a path that
+# exists, and mediamtx.yml declares just a couple, so the path is created in
+# publisher mode (empty config, no source) before the pod is asked to start.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://mediamtx:9997")
+AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API", "http://audio-preview:8090")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def _mtx(path, method="GET", body=None):
+def _http_json(base, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(MEDIAMTX_API + path, data=data, method=method)
+    req = urllib.request.Request(base + path, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -627,10 +805,26 @@ def _mtx(path, method="GET", body=None):
             return r.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
         try:
-            msg = e.read().decode()
+            raw = e.read().decode()
         except Exception:
-            msg = ""
-        return e.code, {"error": msg[:200]}
+            raw = ""
+        try:
+            return e.code, json.loads(raw)
+        except Exception:
+            return e.code, {"error": raw[:200]}
+    except Exception as e:
+        # Unreachable service (no audio-preview deployed, DNS, timeout): a
+        # status, not a traceback, so the caller can report it as a failed
+        # preview rather than a 500 on the whole endpoint.
+        return 503, {"error": str(e)}
+
+
+def _mtx(path, method="GET", body=None):
+    return _http_json(MEDIAMTX_API, path, method, body)
+
+
+def _audio_preview(path, method="GET"):
+    return _http_json(AUDIO_PREVIEW_API, path, method)
 
 
 def _known_flow(uuid):
@@ -647,27 +841,83 @@ def preview_add(uuid):
     fl = _known_flow(uuid)
     if not fl:
         return 404, {"error": "flow not known to the operator"}
+    d = fl.get("spec", {}).get("definition", {}) or {}
+    fmt = (d.get("format") or "").rsplit(":", 1)[-1]
+    if fmt == "audio":
+        return preview_add_audio(uuid)
+    if fmt != "video":
+        # Only video can be pulled by mediamtx and only audio has a publisher to
+        # push it, so anything else (data/smpte291) has no route to a browser.
+        # Refuse before creating a path: mediamtx's mxlSource would retry the
+        # open every 5s forever, leaving a zombie path behind spamming the log
+        # while the overlay sat on "buffering…".
+        return 415, {"error": f"preview supports video and audio flows; this "
+                              f"one is {fmt or 'of unknown format'}"}
     name = "preview-" + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
-        d = fl.get("spec", {}).get("definition", {}) or {}
-        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False}
-        if (d.get("format") or "").endswith("video"):
-            conf.update({"mxlH264Preset": "veryfast",
-                         "mxlH264Profile": "high",
-                         "mxlH264Bitrate": 5000000})
+        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False,
+                "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
+                "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
-    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8"}
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+                 "whep": f"/webrtc/{name}/whep", "format": "video"}
+
+
+def preview_add_audio(uuid):
+    """Create the publisher-mode path, then ask audio-preview to push into it."""
+    name = "preview-audio-" + uuid
+    code, _ = _mtx(f"/v3/config/paths/get/{name}")
+    if code != 200:
+        # Empty config == publisher mode: no source, mediamtx waits to be
+        # published to. The video branch above is the opposite — a source it
+        # pulls from.
+        code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", {})
+        if code != 200:
+            return code, {"error": res.get("error") or "mediamtx add failed"}
+    code, res = _audio_preview(f"/start?flow={uuid}", "POST")
+    if code != 200:
+        # Don't leave an orphan path waiting for a publisher that never comes.
+        _mtx(f"/v3/config/paths/delete/{name}", "DELETE")
+        return code, {"error": res.get("error") or "audio preview start failed"}
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+                 "whep": f"/webrtc/{name}/whep", "format": "audio"}
+
+
+def preview_status(uuid):
+    """Whether an audio preview is actually producing, for the overlay to poll.
+
+    /start only spawns the reader — opening the flow can take seconds while the
+    intent shim waits for the gateway to mirror it, and it can fail outright on
+    a flow that is not readable on that node. Without somewhere to surface that,
+    a failed session is a silently spinning overlay, which is the same fault as
+    the zombie video path this endpoint pair already had.
+    """
+    if not _UUID_RE.match(uuid or ""):
+        return 400, {"error": "bad flow id"}
+    code, res = _audio_preview("/status")
+    if code != 200:
+        return code, {"error": res.get("error") or "audio preview unreachable"}
+    for s in res.get("sessions", []):
+        if s.get("flow") == uuid:
+            return 200, s
+    return 404, {"error": "no session for this flow"}
 
 
 def preview_del(uuid):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
+    # Stop the publisher before dropping its path, so the pipeline sends EOS into
+    # a path that still exists. Both variants are attempted rather than looking
+    # the flow's format up again: the flow may have been deleted while the
+    # overlay was open, and whichever call does not apply is a harmless 404.
+    _audio_preview(f"/stop?flow={uuid}", "DELETE")
+    _mtx(f"/v3/config/paths/delete/preview-audio-{uuid}", "DELETE")
     _mtx(f"/v3/config/paths/delete/preview-{uuid}", "DELETE")
-    return 200, {"stopped": "preview-" + uuid}
+    return 200, {"stopped": uuid}
 
 
 class H(BaseHTTPRequestHandler):
@@ -695,6 +945,15 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, operator_flows())
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/preview/"):
+            # GET on the same collection POST/DELETE use: is this audio preview
+            # actually producing yet, or did its reader fail to open?
+            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
+            try:
+                code, res = preview_status(uuid)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
         elif self.path.startswith("/api/flows"):
             try:
                 self._send(200, build())

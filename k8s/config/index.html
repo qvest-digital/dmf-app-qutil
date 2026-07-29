@@ -121,6 +121,10 @@
   .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; font-weight: 800; }
   .pv-head .btn { background: rgba(255,255,255,.12); color: #fff; }
   .pv-video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; display: block; }
+  /* Audio preview: meters replace the picture, the element keeps its controls. */
+  .pv-video.audio-only { aspect-ratio: auto; height: 54px; margin-top: 10px; }
+  .pv-audio { display: none; width: 100%; aspect-ratio: 4/1; background: #000; border-radius: 12px; }
+  .pv-audio.show { display: block; }
   .pv-state { font-size: 12px; opacity: .7; margin-top: 8px; min-height: 16px; }
   .btn {
     border-radius: var(--qv-radius-pill); border: 2px solid rgba(255,255,255,.5);
@@ -143,6 +147,8 @@
   .kv .v.mono, .kv .v.mono .vv { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; }
   .kv .v.ok { color: var(--qv-lime); }
   .kv .v.bad { color: var(--qv-orange); }
+  /* A caveat, not a fault — dimmed rather than orange. */
+  .kv .v.warn { opacity: .6; font-weight: 500; }
   .cp { flex: none; border: none; background: transparent; color: inherit; cursor: pointer;
         opacity: .35; font-size: 12px; line-height: 1; padding: 2px 3px; border-radius: 5px; }
   .cp:hover { opacity: 1; background: rgba(255,255,255,.12); }
@@ -386,6 +392,10 @@
   <div id="pv" class="pv">
     <div class="pv-card">
       <div class="pv-head"><span id="pv-title">Preview</span><button id="pv-close" class="btn">✕</button></div>
+      <!-- Audio flows have nothing to show, so the meters take the video's
+           place and the element collapses to just its transport controls
+           (volume/mute still matter). -->
+      <canvas id="pva" class="pv-audio" width="1760" height="440"></canvas>
       <video id="pvv" class="pv-video" autoplay playsinline controls></video>
       <div id="pv-state" class="pv-state"></div>
     </div>
@@ -397,7 +407,10 @@
     setInterval(function(){ var d=new Date(); clk.textContent = pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }, 250);
 
     function fmt(n,d){ return (n==null||isNaN(n)) ? '--' : Number(n).toFixed(d==null?0:d); }
-    function ago(iso){ if(!iso) return '--'; var s=Math.max(0,(Date.now()-Date.parse(iso))/1000); if(s<90) return s.toFixed(0)+'s'; if(s<5400) return (s/60).toFixed(0)+'m'; return (s/3600).toFixed(1)+'h'; }
+    // agoS takes seconds (the operator-flows payload pre-computes ages server-
+    // side, where the CR timestamps are); ago takes an ISO stamp.
+    function agoS(s){ if(s==null) return '--'; s=Math.max(0,s); if(s<90) return s.toFixed(0)+'s'; if(s<5400) return (s/60).toFixed(0)+'m'; if(s<172800) return (s/3600).toFixed(1)+'h'; return (s/86400).toFixed(1)+'d'; }
+    function ago(iso){ if(!iso) return '--'; return agoS((Date.now()-Date.parse(iso))/1000); }
     function esc(s){ return (s==null?'':String(s)).replace(/[<&]/g, function(c){return c=='<'?'&lt;':'&amp;';}); }
     function shortImg(s){ if(!s) return '--'; return s.replace(/^.*\//,'').slice(0,40); }
 
@@ -427,7 +440,14 @@
         fps:el.querySelector('[data-r=fps]'), mbps:el.querySelector('[data-r=mbps]'),
         details:el.querySelector('[data-r=details]'), kill:el.querySelector('[data-r=kill]'),
         detail:el.querySelector('[data-r=detail]') };
-      c.details.onclick = function(){ openDetail[n]=!openDetail[n]; c.detail.classList.toggle('open', openDetail[n]); c.details.textContent = 'Details '+(openDetail[n]?'▴':'▾'); };
+      // Render from the last payload on open: apply() only fills an already-
+      // open panel, so without this the first click showed an empty box until
+      // the next 1.5s poll landed.
+      c.details.onclick = function(){
+        openDetail[n]=!openDetail[n]; c.detail.classList.toggle('open', openDetail[n]);
+        c.details.textContent = 'Details '+(openDetail[n]?'▴':'▾');
+        if (openDetail[n] && c.last) c.detail.innerHTML = renderDetail(c.last);
+      };
       c.kill.onclick = function(){
         c.kill.disabled=true; c.kill.textContent='Killing…';
         fetch('/api/kill/'+n, {method:'POST'}).then(function(r){return r.json();})
@@ -454,7 +474,10 @@
           kvRow('grain rate', esc(m.grainRate)||'--')+
           kvRow('fps', fmt(m.fps,2))+
           kvRow('grain size', m.grainBytes? ((m.grainBytes/1048576).toFixed(2)+' MiB') : '--')+
-          kvRow('RDMA rate', m.mbps? (m.mbps+' Mbit/s') : '--')+
+          // Format arithmetic, not a measurement — dimmed so it reads as a
+          // property of the flow. The measured throughput is in the Compositor
+          // section below.
+          kvRow('nominal bitrate', m.nominalMbps? (m.nominalMbps+' Mbit/s') : '--', 'warn')+
         '</div>'+
         '<h3>Writer pod</h3><div class="kv">'+
           kvRow('node', esc(w.node)||'--', w.node? 'ok':'')+
@@ -467,11 +490,16 @@
           kvRow('image', '<span class="mono">'+esc(shortImg(w.image))+'</span>')+
         '</div>'+
         '<h3>Compositor (RDMA receive)</h3><div class="kv">'+
-          kvRow('grains/s', fmt(comp.fps,1), comp.live?'ok':'bad')+
+          kvRow('grains/s', fmt(comp.fps,1), comp.reading===false?'bad':(comp.fps?'ok':''))+
           kvRow('throughput', fmt(comp.mbps,0)+' Mbit/s')+
           kvRow('grains pushed', comp.pushed==null?'--':comp.pushed)+
           kvRow('grains dropped', comp.missed==null?'--':comp.missed, comp.missed?'bad':'')+
-          kvRow('live', comp.live?'yes':'no', comp.live?'ok':'bad')+
+          kvRow('reading', comp.reading==null?'--':(comp.reading?'yes':'no'),
+                comp.reading==null?'':(comp.reading?'ok':'bad'))+
+          // Nominal numbers can't move, so name the source instead of letting a
+          // frozen grains/s read as a measurement.
+          kvRow('source', comp.measured?'measured':('nominal · '+esc(comp.source)),
+                comp.measured?'ok':'warn')+
         '</div>'+
         '<h3>Receiver / mirror (gateway)</h3><div class="kv">'+
           kvRow('provider', esc(rc.provider)||'--')+
@@ -511,6 +539,7 @@
       updateOrigins(flows);
       flows.forEach(function(f){
         var c=ensureCard(f.n), comp=f.compositor||{};
+        c.last = f;
         c.name.textContent = f.label;
         c.pat.textContent = (f.writer&&f.writer.pattern)?f.writer.pattern:'';
         c.fps.textContent = fmt(comp.fps,1);
@@ -543,13 +572,111 @@
     // it into orange used to mark healthy flows as down.
     var OSTATE={ 'true':['live','origin fresh'], 'false':['bad','origin stale'],
                  'null':['','no origin claimed'] };
+
+    // Open panels and the last payload, both keyed outside renderOpFlows: the
+    // list is rebuilt wholesale every 3s, so a panel's state cannot live in the
+    // DOM, and a toggle has to re-render from something without waiting for the
+    // next poll.
+    var ofOpen={}, ofLast=[];
+
+    // Everything the control plane knows about one flow. Same kvRow idiom as the
+    // MXL-n panels, so the copy buttons work here too, but sourced purely from
+    // the MxlFlow CR plus the receivers and mirrors wired to it.
+    function renderOpDetail(f){
+      var t=f.detail||{}, m=t.media||{}, isAudio=(f.format==='audio');
+
+      var media = isAudio
+        ? kvRow('media type', esc(m.mediaType)||'--')+
+          kvRow('sample rate', esc(m.sampleRate)||'--')+
+          kvRow('channels', m.channels==null?'--':m.channels)+
+          kvRow('bit depth', m.bitDepth?(m.bitDepth+'-bit'):'--')
+        : kvRow('media type', esc(m.mediaType)||'--')+
+          kvRow('resolution', (m.width&&m.height)?(m.width+'×'+m.height):'--')+
+          kvRow('interlace', esc(m.interlaceMode)||'--')+
+          kvRow('colorspace', esc(m.colorspace)||'--')+
+          kvRow('bit depth', m.bitDepth?(m.bitDepth+'-bit'):'--')+
+          kvRow('grain rate', esc(m.grainRate)||'--')+
+          kvRow('fps', m.fps==null?'--':fmt(m.fps,2))+
+          // Only v210 carries the padded-stride derivation; anything else says so
+          // rather than quoting a number the format doesn't imply.
+          kvRow('grain size', m.grainBytes?((m.grainBytes/1048576).toFixed(2)+' MiB'):'n/a for this format')+
+          // What the format implies, not what the fabric is doing: nothing in
+          // the control plane measures per-flow throughput. The live delivery
+          // signal for these flows is "last grain" under Mirrors.
+          kvRow('nominal bitrate', m.nominalMbps?(m.nominalMbps+' Mbit/s'):'--', 'warn')+
+          ((m.components||[]).length?kvRow('components','<span class="mono">'+esc(m.components.join(', '))+'</span>'):'');
+
+      var locs=(f.locations||[]).map(function(l){
+        return kvRow(esc(l.node),
+          esc(l.phase)+(l.observedAge==null?'':(' · seen '+agoS(l.observedAge))),
+          l.phase==='Stale'?'bad':(l.phase==='Origin'?'ok':''));
+      }).join('') || kvRow('locations','not materialized anywhere','bad');
+
+      var conds=(t.conditions||[]).map(function(c){
+        return kvRow(esc(c.type), esc(c.status)+' · '+esc(c.reason||'')+
+          (c.age==null?'':(' · '+agoS(c.age))), c.status==='True'?'ok':'bad')+
+          (c.message?kvRow('','<span style="opacity:.65">'+esc(c.message)+'</span>'):'');
+      }).join('') || kvRow('conditions','none written','warn');
+
+      var recv=(t.receivers||[]).map(function(r){
+        return kvRow(esc(r.name), esc(r.phase||'--')+' · '+esc(r.provider||'--'),
+                     r.phase==='Bound'?'ok':'bad')+
+          kvRow('  pod', '<span class="mono">'+esc(r.pod)+'</span>')+
+          (r.boundMirror?kvRow('  bound mirror','<span class="mono">'+esc(r.boundMirror)+'</span>'):'');
+      }).join('') || kvRow('receivers','none — nobody is consuming this flow','warn');
+
+      var mirs=(t.mirrors||[]).map(function(x){
+        return kvRow(esc(x.sourceNode)+' → '+esc(x.targetNode),
+                     esc(x.phase||'--')+' · '+esc(x.provider||'--'),
+                     x.phase==='Ready'?'ok':'bad')+
+          kvRow('  last grain', x.grainAge==null?'--':agoS(x.grainAge))+
+          kvRow('  attempts', x.attempts==null?'--':x.attempts, x.attempts?'bad':'')+
+          (x.requestor?kvRow('  requested by','<span class="mono">'+esc(x.requestor)+'</span>'):'')+
+          (x.lastError?kvRow('  last error', esc(x.lastError),'bad'):'')+
+          (x.conditions||[]).map(function(c){
+            return kvRow('  '+esc(c.type), esc(c.status)+' · '+esc(c.reason||''),
+                         c.status==='True'?'ok':'bad');
+          }).join('');
+      }).join('') || kvRow('mirrors','none — read locally, no cross-node transfer','warn');
+
+      var tags=Object.keys(t.tags||{}).map(function(k){
+        var v=t.tags[k];
+        return kvRow(esc(k.replace(/^urn:x-nmos:tag:/,'').replace(/\/v[\d.]+$/,'')),
+                     esc([].concat(v).join(', ')));
+      }).join('') || kvRow('tags','none');
+
+      return ''+
+        '<h3>Flow</h3><div class="kv">'+
+          kvRow('label', esc(f.label)||'--')+
+          kvRow('description', esc(t.description)||'--')+
+          kvRow('id', '<span class="mono">'+esc(f.id)+'</span>')+
+          kvRow('format', esc(f.format)||'--')+
+          kvRow('registered', t.createdAge==null?'--':(agoS(t.createdAge)+' ago'))+
+          (t.parents&&t.parents.length?kvRow('parents','<span class="mono">'+esc(t.parents.join(', '))+'</span>'):'')+
+        '</div>'+
+        '<h3>Media</h3><div class="kv">'+media+'</div>'+
+        '<h3>Origin</h3><div class="kv">'+
+          kvRow('origin fresh', f.originFresh==null?'unknown':(f.originFresh?'yes':'no'),
+                f.originFresh==null?'warn':(f.originFresh?'ok':'bad'))+
+          kvRow('reason', esc(f.originReason)||'--')+
+          kvRow('origin node', esc(f.originNode)||'--')+
+          kvRow('lease renewed', f.originAge==null?'--':(agoS(f.originAge)+' ago'))+
+        '</div>'+
+        '<h3>Locations</h3><div class="kv">'+locs+'</div>'+
+        '<h3>Conditions</h3><div class="kv">'+conds+'</div>'+
+        '<h3>Receivers</h3><div class="kv">'+recv+'</div>'+
+        '<h3>Mirrors (RDMA transfer)</h3><div class="kv">'+mirs+'</div>'+
+        '<h3>Tags</h3><div class="kv">'+tags+'</div>';
+    }
+
     function renderOpFlows(list){
       var wrap=document.getElementById('opflows'), cnt=document.getElementById('of-count');
-      list=list||[];
+      list=ofLast=list||[];
       cnt.textContent = list.length ? '('+list.length+')' : '';
       if(!list.length){ wrap.innerHTML='<div class="flow" style="opacity:.6">No flows registered with the operator.</div>'; return; }
       wrap.innerHTML=list.map(function(f){
         var ost=OSTATE[String(f.originFresh)]||OSTATE['null'], fmt=(f.format||'').toLowerCase();
+        var isOpen=!!ofOpen[f.id];
         var otip=[ost[1], f.originReason, f.originNode,
                   f.originAge==null?null:(f.originAge+'s ago')].filter(Boolean).join(' · ');
         var media=(f.format==='audio'
@@ -566,54 +693,236 @@
               '<span class="m"><div class="k">media</div><div class="v">'+(esc(media)||'--')+'</div></span>'+
               '<span class="m"><div class="k">rate</div><div class="v lime">'+(esc(f.rate)||'--')+'</div></span>'+
             '</span>'+
-            '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'+
+            '<span style="display:flex;gap:6px">'+
+              '<button class="btn of-det" data-id="'+esc(f.id)+'">Details '+(isOpen?'▴':'▾')+'</button>'+
+              // Video is pulled by mediamtx, audio is pushed by the
+              // audio-preview pod. Anything else (data/smpte291) has no route to
+              // a browser, so the button says so instead of opening an overlay
+              // that never loads.
+              ((fmt==='video'||fmt==='audio')
+                ? '<button class="btn of-prev" data-id="'+esc(f.id)+'" data-format="'+esc(fmt)+'"'+
+                  ' data-channels="'+((f.detail&&f.detail.media&&f.detail.media.channels)||2)+'"'+
+                  ' data-label="'+esc(f.label).replace(/"/g,'&quot;')+'">Preview</button>'
+                : '<button class="btn" disabled title="No preview route for a '+esc(fmt||'flow of unknown format')+' flow">Preview</button>')+
+            '</span>'+
           '</div>'+
           '<div class="of-meta">'+esc(f.id)+' &middot; <span class="loc">'+locs+'</span>'+
             ' &middot; '+esc(ost[1])+
             (f.grouphint?(' &middot; '+esc(f.grouphint)):'')+'</div>'+
+          '<div class="detail'+(isOpen?' open':'')+'">'+(isOpen?renderOpDetail(f):'')+'</div>'+
         '</div>';
       }).join('');
     }
+
+    // Delegated, like the Preview button: these rows are rebuilt on every poll,
+    // so a handler bound to one of them would not survive the next refresh.
+    document.addEventListener('click', function(e){
+      var b=e.target.closest ? e.target.closest('.of-det') : null;
+      if(!b) return;
+      var id=b.getAttribute('data-id');
+      ofOpen[id]=!ofOpen[id];
+      renderOpFlows(ofLast);
+    });
     function pollOps(){
       fetch('/api/operator-flows',{cache:'no-store'}).then(function(r){return r.json();})
         .then(function(d){ renderOpFlows(d.flows); }).catch(function(){});
     }
     setInterval(pollOps, 3000); pollOps();
 
-    // ── Flow preview: ask demo-metrics to add a mediamtx path for the flow,
-    // play its HLS in the overlay, and tear the path down on close. ──
+    // ── Flow preview ──────────────────────────────────────────────────────
+    // Video: demo-metrics adds a mediamtx path that PULLS the flow (mxl://).
+    // Audio: mediamtx's mxlSource refuses audio, so the audio-preview pod reads
+    // the flow and PUSHES Opus into a publisher-mode path instead. Either way
+    // the overlay plays a normal mediamtx path and DELETE tears it down.
+    //
+    // The audio meters are drawn from the stream the browser has already
+    // decoded, so nothing extra is computed or shipped from the cluster.
     (function(){
       var modal=document.getElementById('pv'), pvv=document.getElementById('pvv'),
+          pvCanvas=document.getElementById('pva'),
           pvTitle=document.getElementById('pv-title'), pvState=document.getElementById('pv-state'),
-          curId=null, curHls=null;
-      function stopPlayer(){
-        if(curHls){ try{curHls.destroy();}catch(e){} curHls=null; }
-        try{ pvv.pause(); pvv.removeAttribute('src'); pvv.load(); }catch(e){}
+          curId=null, curHls=null, curPc=null, curPoll=0;
+
+      // ── Meters ──
+      // actx and elSrc are created once and reused: createMediaElementSource
+      // throws on a second call for the same element, so a re-opened preview
+      // must not build a new one.
+      var actx=null, elSrc=null, viz=null, vizRaf=0;
+
+      function vizStop(){
+        if(vizRaf){ cancelAnimationFrame(vizRaf); vizRaf=0; }
+        if(viz){
+          try{ viz.src.disconnect(); }catch(e){}
+          // The element source is permanent — only detach it from the graph.
+          if(viz.src!==elSrc){ try{ viz.src=null; }catch(e){} }
+          viz=null;
+        }
+        var g=pvCanvas.getContext('2d');
+        if(g) g.clearRect(0,0,pvCanvas.width,pvCanvas.height);
       }
-      function play(src){
+
+      function vizStart(stream, channels){
+        vizStop();
+        try { actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }
+        catch(e){ return; }
+        if(actx.state==='suspended') actx.resume();
+        var src;
+        try {
+          // MediaStream (WHEP): tap the stream and leave the element to make the
+          // sound — routing to destination as well would play it twice. HLS/MSE:
+          // the graph MUST reach destination or the element goes silent.
+          if(stream){ src=actx.createMediaStreamSource(stream); }
+          else { src = elSrc = elSrc || actx.createMediaElementSource(pvv); }
+        } catch(e){ return; }
+        var n=Math.min(Math.max(channels||2,1),8);
+        var split=actx.createChannelSplitter(n);
+        src.connect(split);
+        var chans=[];
+        for(var i=0;i<n;i++){
+          var an=actx.createAnalyser(); an.fftSize=2048; an.smoothingTimeConstant=0.4;
+          split.connect(an,i);
+          chans.push({an:an, t:new Float32Array(an.fftSize), peak:0, hold:0});
+        }
+        var spec=actx.createAnalyser(); spec.fftSize=1024; spec.smoothingTimeConstant=0.7;
+        src.connect(spec);
+        if(!stream) src.connect(actx.destination);
+        viz={src:src, chans:chans, spec:spec, f:new Uint8Array(spec.frequencyBinCount)};
+        draw();
+      }
+
+      // -60..0 dBFS -> 0..1
+      function norm(db){ return Math.max(0, Math.min(1, (db+60)/60)); }
+
+      function draw(){
+        vizRaf=requestAnimationFrame(draw);
+        if(!viz) return;
+        var g=pvCanvas.getContext('2d'), W=pvCanvas.width, H=pvCanvas.height;
+        g.clearRect(0,0,W,H);
+        var pad=18, barsW=Math.round(W*0.34), specX=barsW+pad*2;
+
+        // Level bars: RMS with a decaying peak-hold per channel.
+        var n=viz.chans.length, slot=(barsW-pad)/n;
+        for(var c=0;c<n;c++){
+          var ch=viz.chans[c];
+          ch.an.getFloatTimeDomainData(ch.t);
+          var sum=0;
+          for(var i=0;i<ch.t.length;i++) sum+=ch.t[i]*ch.t[i];
+          var rms=Math.sqrt(sum/ch.t.length);
+          var db=rms>0?20*Math.log10(rms):-120;
+          var v=norm(db);
+          if(v>=ch.peak){ ch.peak=v; ch.hold=performance.now(); }
+          else if(performance.now()-ch.hold>900){ ch.peak=Math.max(v, ch.peak-0.012); }
+
+          var x=pad+c*slot, w=slot*0.62, top=pad, bh=H-pad*2-16;
+          g.fillStyle='rgba(255,255,255,.07)';
+          g.fillRect(x, top, w, bh);
+          var lit=Math.round(bh*v);
+          // Lime up to -6dB, orange above it — the usual "too hot" cue.
+          g.fillStyle = db>-6 ? '#F05012' : '#C8F169';
+          g.fillRect(x, top+bh-lit, w, lit);
+          var py=top+bh-Math.round(bh*ch.peak);
+          g.fillStyle='#fff';
+          g.fillRect(x, Math.max(top,py-2), w, 2);
+          g.fillStyle='rgba(255,255,255,.55)';
+          g.font='11px system-ui,sans-serif'; g.textAlign='left';
+          g.fillText('ch'+(c+1)+'  '+(db<=-120?'-inf':db.toFixed(1))+' dB', x, H-pad+4);
+        }
+
+        // Spectrum: log-ish frequency buckets so the low end isn't a sliver.
+        viz.spec.getByteFrequencyData(viz.f);
+        var bins=viz.f.length, cols=64, sw=(W-specX-pad)/cols;
+        for(var k=0;k<cols;k++){
+          var lo=Math.floor(Math.pow(k/cols,2)*bins), hi=Math.floor(Math.pow((k+1)/cols,2)*bins);
+          if(hi<=lo) hi=lo+1;
+          var m=0;
+          for(var b=lo;b<hi&&b<bins;b++) m=Math.max(m,viz.f[b]);
+          var bh2=Math.round((H-pad*2-16)*(m/255));
+          g.fillStyle='rgba(200,241,105,'+(0.35+0.65*(m/255)).toFixed(3)+')';
+          g.fillRect(specX+k*sw, H-pad-16-bh2, Math.max(1,sw-1), bh2);
+        }
+        g.fillStyle='rgba(255,255,255,.45)';
+        g.font='11px system-ui,sans-serif'; g.textAlign='left';
+        g.fillText('spectrum', specX, H-pad+4);
+      }
+
+      function stopPlayer(){
+        if(curPoll){ clearTimeout(curPoll); curPoll=0; }
+        vizStop();
+        if(curHls){ try{curHls.destroy();}catch(e){} curHls=null; }
+        if(curPc){ try{curPc.close();}catch(e){} curPc=null; }
+        try{ pvv.pause(); pvv.srcObject=null; pvv.removeAttribute('src'); pvv.load(); }catch(e){}
+      }
+
+      function playHls(src, isAudio, channels){
         if(window.Hls && Hls.isSupported()){
           curHls=new Hls({liveSyncDurationCount:3,enableWorker:true,lowLatencyMode:false});
           curHls.loadSource(src); curHls.attachMedia(pvv);
-          curHls.on(Hls.Events.MANIFEST_PARSED,function(){ pvv.play(); pvState.textContent=''; });
+          curHls.on(Hls.Events.MANIFEST_PARSED,function(){
+            pvv.play(); pvState.textContent='';
+            if(isAudio) vizStart(null, channels);
+          });
           curHls.on(Hls.Events.ERROR,function(ev,d){ if(d.fatal){ pvState.textContent='buffering…'; setTimeout(function(){ if(curHls) curHls.loadSource(src); },4000); } });
         } else if(pvv.canPlayType('application/vnd.apple.mpegurl')){
           pvv.src=src; pvv.play();
+          if(isAudio) vizStart(null, channels);
         }
       }
-      function open(id,label){
+
+      // WHEP first for audio (sub-second, and the meters get the raw stream),
+      // HLS on failure — same order the per-flow tiles use.
+      function playAudio(j, channels){
+        var path=j.path;
+        curPc=whep(path, pvv,
+          function(){ playHls(j.hls, true, channels); },
+          function(stream){ pvState.textContent=''; vizStart(stream, channels); });
+      }
+
+      // /start only spawns the reader: opening the flow can take seconds while
+      // the intent shim waits for the gateway to mirror it, and it can fail. Poll
+      // until it is actually producing, so a dead session says so instead of
+      // spinning forever.
+      function awaitAudio(id, j, channels, tries){
+        if(curId!==id) return;
+        fetch('/api/preview/'+encodeURIComponent(id),{cache:'no-store'})
+          .then(function(r){ return r.json().then(function(s){ return {ok:r.ok,s:s}; }); })
+          .then(function(x){
+            if(curId!==id) return;
+            if(x.ok && x.s.error){ pvState.textContent='preview failed: '+x.s.error; return; }
+            if(x.ok && x.s.running && x.s.samples>0){
+              pvState.textContent='connecting audio…';
+              playAudio(j, x.s.channels||channels);
+              return;
+            }
+            if(tries<=0){ pvState.textContent='preview timed out — flow produced no audio'; return; }
+            pvState.textContent='waiting for the flow to be readable here…';
+            curPoll=setTimeout(function(){ awaitAudio(id,j,channels,tries-1); }, 1000);
+          })
+          .catch(function(){
+            if(tries<=0){ pvState.textContent='preview status unavailable'; return; }
+            curPoll=setTimeout(function(){ awaitAudio(id,j,channels,tries-1); }, 1000);
+          });
+      }
+
+      function open(id,label,fmt,channels){
         curId=id; modal.classList.add('show'); pvTitle.textContent=label||id;
         pvState.textContent='starting preview…'; stopPlayer();
+        var isAudio=(fmt==='audio');
+        pvv.classList.toggle('audio-only', isAudio);
+        pvCanvas.classList.toggle('show', isAudio);
         fetch('/api/preview/'+encodeURIComponent(id),{method:'POST'})
           .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
           .then(function(x){
+            if(curId!==id) return;
             if(!x.ok){ pvState.textContent='preview failed: '+(x.j.error||''); return; }
+            if(x.j.format==='audio'){ awaitAudio(id, x.j, channels, 30); return; }
             // Give mediamtx a moment to open the reader and cut the first segment.
-            setTimeout(function(){ if(curId===id) play(x.j.hls); }, 900);
+            curPoll=setTimeout(function(){ if(curId===id) playHls(x.j.hls,false,0); }, 900);
           })
           .catch(function(){ pvState.textContent='preview request failed'; });
       }
       function close(){
         modal.classList.remove('show'); stopPlayer();
+        pvCanvas.classList.remove('show'); pvv.classList.remove('audio-only');
         if(curId){ fetch('/api/preview/'+encodeURIComponent(curId),{method:'DELETE'}).catch(function(){}); curId=null; }
       }
       document.getElementById('pv-close').onclick=close;
@@ -623,7 +932,8 @@
       document.addEventListener('click',function(e){
         var b=e.target.closest ? e.target.closest('.of-prev') : null;
         if(!b) return;
-        open(b.getAttribute('data-id'), b.getAttribute('data-label'));
+        open(b.getAttribute('data-id'), b.getAttribute('data-label'),
+             b.getAttribute('data-format'), parseInt(b.getAttribute('data-channels'),10)||2);
       });
     })();
 
@@ -658,10 +968,11 @@
     // WHEP: mediamtx serves it at /webrtc/<path>/whep (caddy -> :8889). Non-
     // trickle — gather ICE, POST the offer, apply the answer. onFail() lets the
     // caller drop to HLS (e.g. a cluster without the UDP ICE LoadBalancer).
-    function whep(path, video, onFail){
-      var pc, done=false, entry=null;
-      function cleanup(){ try{ pc && pc.close(); }catch(e){} if(entry){ MV.drop(entry); entry=null; } }
-      function fail(){ if(done) return; done=true; clearTimeout(timer); cleanup(); onFail && onFail(); }
+    // onStream receives the MediaStream, which the audio preview taps for its
+    // meters — reading it back off the element is racy.
+    function whep(path, video, onFail, onStream){
+      var pc, done=false;
+      function fail(){ if(done) return; done=true; clearTimeout(timer); try{pc&&pc.close();}catch(e){} onFail&&onFail(); }
       var timer=setTimeout(fail, 8000);
       try { pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]}); }
       catch(e){ return fail(); }
@@ -670,14 +981,7 @@
       entry=MV.track({kind:'pc', stop:function(){ done=true; clearTimeout(timer); cleanup(); }});
       pc.addTransceiver('video',{direction:'recvonly'});
       pc.addTransceiver('audio',{direction:'recvonly'});
-      // ontrack fires once per transceiver (video+audio) with the same
-      // stream — attach only on change. Must compare, not truthiness-test:
-      // scene teardown closes the PC but leaves the dead MediaStream on the
-      // element, so a truthiness guard makes every re-entered scene skip
-      // attaching its new stream (PC connected and receiving, tile frozen
-      // on the dead stream, and no HLS fallback since the new connection
-      // never reports 'failed').
-      pc.ontrack=function(e){ if(video.srcObject!==e.streams[0]){ video.srcObject=e.streams[0]; var p=video.play&&video.play(); if(p&&p.catch)p.catch(function(){}); } };
+      pc.ontrack=function(e){ if(!video.srcObject){ video.srcObject=e.streams[0]; var p=video.play&&video.play(); if(p&&p.catch)p.catch(function(){}); onStream&&onStream(e.streams[0]); } };
       pc.onconnectionstatechange=function(){
         if(pc.connectionState==='connected'){ done=true; clearTimeout(timer); }
         else if(pc.connectionState==='failed'){ fail(); }
