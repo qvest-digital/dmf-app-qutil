@@ -76,16 +76,21 @@ export interface FlowCrInfo {
   locations?: FlowLocation[];
 }
 
+/**
+ * The nested objects are `| null` rather than merely optional: the aggregator
+ * emits an explicit null for anything it could not resolve — no writer pod, no
+ * MxlFlow CR, no compositor stats — rather than omitting the key.
+ */
 export interface Flow {
   n: number;
   label: string;
   uuid: string;
-  compositor?: CompositorInfo;
-  media?: MediaInfo;
-  writer?: WriterInfo;
-  receiver?: ReceiverInfo;
-  mirrors?: MirrorInfo[];
-  flow?: FlowCrInfo;
+  compositor?: CompositorInfo | null;
+  media?: MediaInfo | null;
+  writer?: WriterInfo | null;
+  receiver?: ReceiverInfo | null;
+  mirrors?: MirrorInfo[] | null;
+  flow?: FlowCrInfo | null;
 }
 
 export interface Gateway {
@@ -182,8 +187,8 @@ export interface OperatorFlow {
   channels?: number | null;
   colorspace?: string | null;
   grouphint?: string | null;
-  locations?: OperatorLocation[];
-  detail?: OperatorFlowDetail;
+  locations?: OperatorLocation[] | null;
+  detail?: OperatorFlowDetail | null;
   /**
    * Genuinely three-state: true = an origin Lease is being renewed, false = a
    * node claims Origin but its Lease lapsed, null = nothing claims Origin
