@@ -208,6 +208,24 @@ namespace
     //
     // AAC is avenc_aac rather than voaacenc: voaacenc is limited to two channels
     // and these flows carry up to eight.
+    // rtspclientsink picks an AAC payloader by rank, and GStreamer ships two at
+    // the same rank: rtpmp4apay (MP4A-LATM) and rtpmp4gpay (mpeg4-generic).
+    // LATM wins by default, and mediamtx then accepts the track but its MPEG-TS
+    // HLS muxer dies on it — "unsupported frameLengthType 2" — so the AAC path
+    // publishes and still serves nothing, which is the failure this whole branch
+    // exists to avoid. The payloader cannot be chosen from a parse-launch string
+    // (rtspclientsink exposes it only as a pad property of GstElement type, and
+    // a pre-payloaded RTP stream will not link), so demote LATM in the registry
+    // instead. Process-local: this binary builds no other pipeline.
+    void prefer_mpeg4_generic_aac()
+    {
+        if (auto* feature = ::gst_registry_lookup_feature(::gst_registry_get(), "rtpmp4apay"))
+        {
+            ::gst_plugin_feature_set_rank(feature, GST_RANK_NONE);
+            ::gst_object_unref(feature);
+        }
+    }
+
     std::string pipeline_desc(std::string const& opusLocation, std::string const& aacLocation,
         std::uint32_t rate, std::uint32_t channels)
     {
@@ -362,8 +380,30 @@ namespace
         int implausible = 0;
         bool logged = false;
 
+        // Nothing watched the bus before, and that is why a broken encoder branch
+        // was invisible: the Opus sink kept publishing, /status kept saying
+        // running, and the AAC path silently never appeared. A pipeline error is
+        // latched into the session so /api/preview reports it and the overlay can
+        // say what went wrong instead of spinning.
+        GstBus* bus = ::gst_element_get_bus(pipeline);
+
         while (!ses->stop.load(std::memory_order_relaxed) && !g_exit.load(std::memory_order_relaxed))
         {
+            if (GstMessage* msg = ::gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR))
+            {
+                GError* gerr = nullptr;
+                gchar* dbg = nullptr;
+                ::gst_message_parse_error(msg, &gerr, &dbg);
+                std::string const from = GST_OBJECT_NAME(GST_MESSAGE_SRC(msg));
+                std::string const what = gerr ? gerr->message : "unknown pipeline error";
+                // First one wins: later errors are usually the teardown cascade.
+                if (ses->getError().empty()) ses->setError(from + ": " + what);
+                g_printerr("[%s] pipeline error from %s: %s (%s)\n", ses->flowId.c_str(),
+                    from.c_str(), what.c_str(), dbg ? dbg : "no detail");
+                if (gerr) ::g_error_free(gerr);
+                ::g_free(dbg);
+                ::gst_message_unref(msg);
+            }
             if (::mxlFlowReaderGetRuntimeInfo(reader, &rt) != MXL_STATUS_OK)
             {
                 ::mxlSleepUntil(::mxlGetTime() + pollNs);
@@ -487,6 +527,7 @@ namespace
             ::gst_app_src_end_of_stream(appsrc);
             ::gst_object_unref(appsrc);
         }
+        ::gst_object_unref(bus);
         ::gst_element_set_state(pipeline, GST_STATE_NULL);
         ::gst_object_unref(pipeline);
         ::mxlReleaseFlowReader(instance, reader);
@@ -692,6 +733,7 @@ namespace
 int main(int argc, char** argv)
 {
     ::gst_init(&argc, &argv);
+    prefer_mpeg4_generic_aac();
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
