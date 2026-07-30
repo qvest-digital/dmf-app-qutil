@@ -1,0 +1,9 @@
+# Build inputs only. node_modules in particular must come from `npm ci` inside
+# the image, not from whatever a developer's host happens to have installed.
+node_modules
+dist
+.angular
+.vscode
+Dockerfile
+.dockerignore
+README.md

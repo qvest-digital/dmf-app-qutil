@@ -1,0 +1,96 @@
+<h3>Media</h3>
+<div class="kv">
+  <mv-kv-row label="grain format">{{ media().mediaType || '--' }}</mv-kv-row>
+  <mv-kv-row label="overlay blend" [state]="overlayState()">{{
+    writer().overlayFormat || '--'
+  }}</mv-kv-row>
+  <mv-kv-row label="resolution">{{ resolution() }}</mv-kv-row>
+  <mv-kv-row label="bit depth">{{ media().bitDepth ? media().bitDepth + '-bit' : '--' }}</mv-kv-row>
+  <mv-kv-row label="colorspace">{{ media().colorspace || '--' }}</mv-kv-row>
+  <mv-kv-row label="grain rate">{{ media().grainRate || '--' }}</mv-kv-row>
+  <mv-kv-row label="fps">{{ media().fps | fmt: 2 }}</mv-kv-row>
+  <mv-kv-row label="grain size">{{ grainSize() }}</mv-kv-row>
+  <!-- Format arithmetic, not a measurement — dimmed so it reads as a property of
+       the flow. The measured throughput is in the Compositor section below. -->
+  <mv-kv-row label="nominal bitrate" state="warn">
+    {{ media().nominalMbps ? media().nominalMbps + ' Mbit/s' : '--' }}
+  </mv-kv-row>
+</div>
+
+<h3>Writer pod</h3>
+<div class="kv">
+  <mv-kv-row label="node" [state]="writer().node ? 'ok' : ''">{{
+    writer().node || '--'
+  }}</mv-kv-row>
+  <mv-kv-row label="phase" [state]="writer().phase === 'Running' ? 'ok' : 'bad'">
+    {{ writer().phase || '--' }}
+  </mv-kv-row>
+  <mv-kv-row label="ready" [state]="writer().ready ? 'ok' : 'bad'">{{
+    writer().ready ? 'yes' : 'no'
+  }}</mv-kv-row>
+  <mv-kv-row label="restarts" [state]="writer().restarts ? 'bad' : ''">
+    {{ writer().restarts == null ? '--' : writer().restarts }}
+  </mv-kv-row>
+  <mv-kv-row label="pattern">{{ writer().pattern || '--' }}</mv-kv-row>
+  <mv-kv-row label="uptime">{{ writer().started | ago }}</mv-kv-row>
+  <mv-kv-row label="pod" [mono]="true">{{ writer().pod }}</mv-kv-row>
+  <mv-kv-row label="image" [mono]="true">{{ writer().image | shortImg }}</mv-kv-row>
+</div>
+
+<h3>Compositor (RDMA receive)</h3>
+<div class="kv">
+  <mv-kv-row
+    label="grains/s"
+    [state]="compositor().reading === false ? 'bad' : compositor().fps ? 'ok' : ''"
+  >
+    {{ compositor().fps | fmt: 1 }}
+  </mv-kv-row>
+  <mv-kv-row label="throughput">{{ compositor().mbps | fmt }} Mbit/s</mv-kv-row>
+  <mv-kv-row label="grains pushed">{{
+    compositor().pushed == null ? '--' : compositor().pushed
+  }}</mv-kv-row>
+  <mv-kv-row label="grains dropped" [state]="compositor().missed ? 'bad' : ''">
+    {{ compositor().missed == null ? '--' : compositor().missed }}
+  </mv-kv-row>
+  <mv-kv-row
+    label="reading"
+    [state]="compositor().reading == null ? '' : compositor().reading ? 'ok' : 'bad'"
+  >
+    {{ compositor().reading == null ? '--' : compositor().reading ? 'yes' : 'no' }}
+  </mv-kv-row>
+  <!-- Nominal numbers can't move, so name the source instead of letting a frozen
+       grains/s read as a measurement. -->
+  <mv-kv-row label="source" [state]="compositor().measured ? 'ok' : 'warn'">
+    {{ compositor().measured ? 'measured' : 'nominal · ' + compositor().source }}
+  </mv-kv-row>
+</div>
+
+<h3>Receiver / mirror (gateway)</h3>
+<div class="kv">
+  <mv-kv-row label="provider">{{ receiver().provider || '--' }}</mv-kv-row>
+  <mv-kv-row label="receiver" [state]="receiver().phase === 'Bound' ? 'ok' : 'bad'">
+    {{ receiver().phase || '--' }}
+  </mv-kv-row>
+  <mv-kv-row label="mirror" [mono]="true">
+    @if (mirrors().length) {
+      @for (m of mirrors(); track m; let last = $last) {
+        {{ m }}
+        @if (!last) {
+          <br />
+        }
+      }
+    } @else {
+      --
+    }
+  </mv-kv-row>
+</div>
+
+<h3>Flow origin</h3>
+<div class="kv">
+  <mv-kv-row label="origin fresh" [state]="originFresh() ? 'ok' : 'bad'">
+    {{ originFresh() ? 'yes' : 'no' }}
+  </mv-kv-row>
+  <mv-kv-row label="reason">{{ flowCr().originReason || '--' }}</mv-kv-row>
+  <mv-kv-row label="locations" [mono]="true">{{ locations() }}</mv-kv-row>
+  <mv-kv-row label="uuid" [mono]="true">{{ flow().uuid }}</mv-kv-row>
+</div>

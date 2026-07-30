@@ -91,8 +91,8 @@ _Source: `compositor/src/main.cpp`, `k8s/composite-deployment.yaml`_
 
 **WebRTC (WHEP):** mediamtx serves WHEP signalling on `:8889`. ICE media goes over a dedicated UDP port (`:8189`) exposed by a separate LoadBalancer (`mediamtx-webrtc-udp.yaml`). `webrtcAdditionalHosts` advertises the LoadBalancer's external address as the ICE candidate so browsers reach the RTP path directly; the Caddy port at `:8080` is only for signalling and static assets.
 
-**Caddy sidecar:** A `caddy:2-alpine` container in the same pod. It:
-- Serves `index.html` from `/srv` as the catch-all file server.
+**Caddy sidecar:** `ghcr.io/qvest-digital/mxl-dmf-demo-app/ui` — `caddy:2-alpine` with the multiviewer's build output baked into `/srv` (see §6). It:
+- Serves the app from `/srv` as the catch-all file server, with `try_files {path} /index.html` so the tab routes survive a reload.
 - Proxies `/hls/*` to mediamtx on `localhost:8888`.
 - Proxies `/webrtc/*` to mediamtx on `localhost:8889`, rewriting `Location` headers to keep the WHEP session resource under `/webrtc`.
 - Proxies `/api/*` to the demo-metrics aggregator at `http://demo-metrics:8088`.
@@ -100,7 +100,9 @@ _Source: `compositor/src/main.cpp`, `k8s/composite-deployment.yaml`_
 
 The mediamtx control API (`:9997`) is never proxied by Caddy; it is only reachable cluster-internally.
 
-_Source: `k8s/mediamtx-deployment.yaml`, `k8s/config/mediamtx.yml`, `k8s/config/Caddyfile`_
+Only the Caddyfile is a ConfigMap; the static files come from the image. A bundle is a tree of hashed files rather than one document, so `configMapGenerator` no longer carries the frontend — but keeping the Caddyfile there means the routes above stay editable through GitOps without an image rebuild.
+
+_Source: `k8s/mediamtx-deployment.yaml`, `k8s/config/mediamtx.yml`, `k8s/config/Caddyfile`, `ui/Dockerfile`_
 
 ---
 
@@ -130,19 +132,21 @@ _Source: `k8s/metrics/aggregator.py`_
 
 ## 6. Frontend
 
-The frontend is a single `index.html` file served by the Caddy sidecar. It is a Qvest-branded multiviewer with no build step and no bundler; the only external dependency is `hls.js` loaded from a CDN.
+The frontend is a Qvest-branded Angular application (`ui/`) built to static files and served by the Caddy sidecar. It uses standalone components, signals and zoneless change detection; `hls.js` is bundled rather than loaded from a CDN. The only remaining external request is the Funnel Sans webfont.
+
+**Layout:** `core/api/` holds typed calls to the aggregator and the polling helper, `core/player/` the WHEP and hls.js players plus the registry below, `shared/` the detail-row, video-shell and formatting primitives, and `features/` one folder per tab plus the flow-preview overlay. Styles are global (`src/styles.scss`) and components are `display: contents`, so the CSS keeps the parent/child relationships it was written against.
 
 **Player strategy per tile:** Each of the four MXL flows is played by its own `<video>` element. On tab activation, each tile attempts WHEP (WebRTC) first. The WHEP path is non-trickle: it gathers all ICE candidates, POSTs the offer to `/webrtc/mxl-<n>/whep`, and applies the answer. An 8-second timeout triggers HLS fallback (`/hls/mxl-<n>/index.m3u8` via hls.js). On clusters without a working ICE UDP path, all four tiles transparently fall back to HLS.
 
-**Visibility gate:** All player resources (WebRTC `PeerConnection` objects, hls.js instances, and polling timers) are tracked in a `MV` registry. On `visibilitychange`, if the tab becomes hidden, `MV.teardownAll()` closes every connection and clears every interval — preventing background WebRTC decode from starving other applications. When the tab becomes visible again, only the currently active scene's players are rebuilt from scratch.
+**Visibility gate:** All player resources (WebRTC `PeerConnection` objects, hls.js instances, and scene timers) are tracked in the `PlayerRegistry`. On `visibilitychange`, if the tab becomes hidden, `teardownAll()` closes every connection and clears every interval — preventing background WebRTC decode from starving other applications. When the tab becomes visible again, only the active route's players are rebuilt from scratch. `useScene` wires this up per page, and leaving a route destroys its component, which tears its players down.
 
 **`window.__mvDebug`:** A verification hook exposed on `window` for console use: `window.__mvDebug.counts()` returns `{pc: N, hls: M}` — the number of live `PeerConnection` and hls.js instances at the time of the call. When the tab is hidden, both counts should be zero.
 
 **RDMA metrics panel:** The right-hand panel polls `GET /api/flows` every 1.5 seconds and renders per-flow grain rate, throughput, mirror status, receiver phase, origin freshness, and source node. Expandable "Details" rows show the full CR and pod state. "Kill" buttons call `POST /api/kill/<n>` to trigger a pod delete.
 
-**Tab structure:** The page has four tabs — Multiviewer (default), txDarwin/SRT, Composite, and Booking. Each tab is a separate scene; switching tears down the previous scene's players before starting the new one.
+**Tab structure:** Four tabs, one route each — Multiviewer (`/`, default), txDarwin/SRT (`/tx`), Composite (`/cp`), and Booking (`/bk`), lazily loaded. Each is a separate scene; navigating tears down the previous route's players before the next one starts. Because the tabs are real URLs they can be linked and reloaded, which is what the Caddyfile's `try_files` is for.
 
-_Source: `k8s/config/index.html`_
+_Source: `ui/`, `ui/README.md`_
 
 ---
 

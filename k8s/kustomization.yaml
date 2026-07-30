@@ -17,8 +17,12 @@ resources:
 # a new ConfigMap name, kustomize rewrites the volume reference in the
 # mediamtx Deployment, and the resulting spec diff triggers a rolling
 # restart. This is the GitOps-friendly way to ensure mediamtx + caddy
-# pick up new paths / Caddyfile / index.html on a `kubectl apply`
-# without an out-of-band `rollout restart`. Survives cluster recreate.
+# pick up new paths / Caddyfile on a `kubectl apply` without an
+# out-of-band `rollout restart`. Survives cluster recreate.
+#
+# The frontend is not here: it is an Angular app (ui/) baked into the
+# caddy sidecar's image, because a bundle is a tree of hashed files
+# rather than a single document a ConfigMap could carry.
 configMapGenerator:
   - name: mediamtx-config
     options:
@@ -32,7 +36,6 @@ configMapGenerator:
         app: mediamtx
     files:
       - Caddyfile=config/Caddyfile
-      - index.html=config/index.html
   # Python source for the demo-metrics aggregator (mounted at /app).
   - name: demo-metrics-script
     files:

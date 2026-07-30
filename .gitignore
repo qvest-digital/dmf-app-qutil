@@ -1,1 +1,8 @@
-demo-app
+# The `demo-app` entry that used to be here was for the Go binary deleted in
+# 9d112b7. It outlived its purpose and became a trap: any directory by that name
+# would have been ignored silently.
+.DS_Store
+
+# Local agent tooling scratch state. It is written into whichever directory is
+# current, so it turns up scattered through the tree and is never a build input.
+.omc/

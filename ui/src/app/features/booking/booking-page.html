@@ -1,0 +1,24 @@
+<main class="bk-main">
+  <section class="bk-left">
+    @for (tile of tiles; track tile.name) {
+      <mv-booking-tile
+        [name]="tile.name"
+        [title]="tile.title"
+        [instance]="instanceFor(tile.name)"
+      />
+    }
+  </section>
+
+  <aside class="bk-right">
+    <div class="panel">
+      <h2>Schedule</h2>
+      <mv-phase-band [instances]="instances()" />
+      <mv-signal-chain [instances]="instances()" [frames]="frames()" />
+      <mv-state-block [instances]="instances()" />
+    </div>
+    <div class="panel bk-log-panel">
+      <h2>What's happening</h2>
+      <mv-event-log [story]="story()" />
+    </div>
+  </aside>
+</main>

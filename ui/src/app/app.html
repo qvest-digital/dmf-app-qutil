@@ -1,0 +1,34 @@
+<header>
+  <div class="brand">
+    <mv-qvest-logo />
+    <span class="sub">MXL Utility</span>
+  </div>
+  <div class="status">
+    <span class="pill"
+      ><b>{{ clock() }}</b></span
+    >
+  </div>
+</header>
+
+<nav class="tabs">
+  <a
+    class="tab"
+    routerLink="/"
+    routerLinkActive="active"
+    [routerLinkActiveOptions]="{ exact: true }"
+  >
+    Multiviewer
+  </a>
+  <a class="tab" routerLink="/tx" routerLinkActive="active">txDarwin / SRT</a>
+  <a class="tab" routerLink="/cp" routerLinkActive="active">Composite</a>
+  <a class="tab" routerLink="/bk" routerLinkActive="active">Booking</a>
+</nav>
+
+<router-outlet />
+
+<footer></footer>
+
+<!-- A mediamtx path is added when a preview opens and removed when it closes. It
+     sits outside the polled operator-flows list so the 3s refresh never tears
+     down a playing preview. -->
+<mv-flow-preview-modal />

@@ -118,13 +118,18 @@ spec:
               cpu: "10"
               memory: 8Gi
 
-        # Caddy sidecar replaces the (now deleted) demo-app Go binary:
-        # serves the multiviewer HTML at /, reverse-proxies HLS at
-        # /hls/* to mediamtx on localhost, and rewrites mediamtx's
+        # Caddy sidecar: serves the Angular multiviewer at /, reverse-proxies
+        # HLS at /hls/* to mediamtx on localhost, and rewrites mediamtx's
         # cookieCheck 302 Location headers so the browser stays on the
         # public origin.
+        #
+        # The image is caddy:2-alpine with the app's build output baked into
+        # /srv (ui/Dockerfile), which is why there is no longer a caddy-www
+        # ConfigMap volume — an Angular bundle is a tree of hashed files, not
+        # one index.html. The Caddyfile stays a ConfigMap so the routes above
+        # remain editable through GitOps without rebuilding the image.
         - name: caddy
-          image: caddy:2-alpine
+          image: ghcr.io/qvest-digital/mxl-dmf-demo-app/ui:latest
           args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
           ports:
             - containerPort: 8080
@@ -132,9 +137,6 @@ spec:
           volumeMounts:
             - name: caddy-conf
               mountPath: /etc/caddy
-              readOnly: true
-            - name: caddy-www
-              mountPath: /srv
               readOnly: true
           livenessProbe:
             httpGet:
@@ -178,9 +180,3 @@ spec:
             items:
               - key: Caddyfile
                 path: Caddyfile
-        - name: caddy-www
-          configMap:
-            name: multiviewer
-            items:
-              - key: index.html
-                path: index.html

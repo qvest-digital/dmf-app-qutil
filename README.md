@@ -15,7 +15,7 @@ Four writer pods (`writer-mxl-{1..4}`) each produce a single uncompressed v210 7
 
 Two consumers read that mirrored domain, both zero-copy. **mediamtx** reads each flow directly through its MXL static-source plugin (`mxl:///run/mxl/domain/<uuid>`), encodes each to H.264, and serves it as an independent stream — these four streams are the default **Multiviewer** grid. Independently, the **C++/GStreamer compositor** (`compositor/`) reads all four flows, arranges them in a `ceil(sqrt(n))` × `ceil(n / cols)` mosaic — a 2 × 2 grid for four flows — composites in I420 space, encodes once with x264, and pushes the result to mediamtx over RTSP at `rtsp://mediamtx:8554/composite`; that mosaic is the separate **Composite** tab.
 
-**mediamtx** serves every path as a WHEP endpoint (WebRTC) and an HLS playlist. The **Qvest multiviewer** (`k8s/config/index.html`) loads in the browser, tries WebRTC first for each tile and falls back to hls.js if the WHEP handshake fails. A side panel shows live RDMA metrics fetched from `GET /api/flows`, served by the **metrics aggregator** (`k8s/metrics/aggregator.py`), which merges compositor stats with Kubernetes pod data and MxlReceiver/MxlFlowMirror CRs.
+**mediamtx** serves every path as a WHEP endpoint (WebRTC) and an HLS playlist. The **Qvest multiviewer** (`ui/`, an Angular app) loads in the browser, tries WebRTC first for each tile and falls back to hls.js if the WHEP handshake fails. A side panel shows live RDMA metrics fetched from `GET /api/flows`, served by the **metrics aggregator** (`k8s/metrics/aggregator.py`), which merges compositor stats with Kubernetes pod data and MxlReceiver/MxlFlowMirror CRs.
 
 ## Architecture
 
@@ -37,12 +37,15 @@ flowchart LR
 | Path | Contents |
 |------|----------|
 | `compositor/` | C++/GStreamer compositor source and vendored mxl headers; built by a separate CI workflow (`build-compositor.yml`) and pushed to GHCR. |
-| `k8s/` | **The deliverable** — all Kubernetes manifests (`writer-deployment.yaml`, `composite-deployment.yaml`, `mediamtx-*.yaml`, etc.), `config/` (mediamtx config, Caddyfile, `index.html` served by the Caddy sidecar), and `metrics/` (the Python metrics aggregator). Rendered by kustomize and pushed as an OCI artifact on every CI run. |
-| `.github/` | CI: `build.yml` pushes the rendered `k8s/` tree as a Flux OCI artifact; `build-compositor.yml` builds and pushes the compositor image; release-please manages the RC version series. |
+| `ui/` | The Angular multiviewer served by the Caddy sidecar; built by `build-ui.yml` into a `caddy:2-alpine`-based image and pushed to GHCR. See `ui/README.md` for local development against a running cluster. |
+| `k8s/` | **The deliverable** — all Kubernetes manifests (`writer-deployment.yaml`, `composite-deployment.yaml`, `mediamtx-*.yaml`, etc.), `config/` (mediamtx config, Caddyfile), and `metrics/` (the Python metrics aggregator). Rendered by kustomize and pushed as an OCI artifact on every CI run. |
+| `.github/` | CI: `build.yml` pushes the rendered `k8s/` tree as a Flux OCI artifact; `build-compositor.yml` and `build-ui.yml` build and push the compositor and multiviewer images; release-please manages the RC version series. |
 
 ## Deploying
 
-There is no local `docker compose` or `kubectl apply -f .` path — the cluster pulls everything from CI artifacts. On every push to `main` (or a version tag), the `Push manifests` workflow renders `k8s/` with kustomize and pushes it as an OCI artifact (`ghcr.io/qvest-digital/mxl-dmf-demo-app-manifests`) that Flux reconciles onto the cluster. The compositor image is built and pushed separately.
+There is no local `docker compose` or `kubectl apply -f .` path — the cluster pulls everything from CI artifacts. On every push to `main` (or a version tag), the `Push manifests` workflow renders `k8s/` with kustomize and pushes it as an OCI artifact (`ghcr.io/qvest-digital/mxl-dmf-demo-app-manifests`) that Flux reconciles onto the cluster. The compositor and multiviewer images are built and pushed separately.
+
+The multiviewer is the one part with a useful local loop: port-forward `svc/mediamtx` and run the dev server against it (`ui/README.md`).
 
 ## Documentation
 

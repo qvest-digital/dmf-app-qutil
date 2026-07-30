@@ -1,0 +1,139 @@
+<h3>Flow</h3>
+<div class="kv">
+  <mv-kv-row label="label">{{ flow().label || '--' }}</mv-kv-row>
+  <mv-kv-row label="description">{{ detail().description || '--' }}</mv-kv-row>
+  <mv-kv-row label="id" [mono]="true">{{ flow().id }}</mv-kv-row>
+  <mv-kv-row label="format">{{ flow().format || '--' }}</mv-kv-row>
+  <mv-kv-row label="registered">
+    {{ detail().createdAge == null ? '--' : (detail().createdAge | agoS) + ' ago' }}
+  </mv-kv-row>
+  @if (detail().parents?.length) {
+    <mv-kv-row label="parents" [mono]="true">{{ detail().parents!.join(', ') }}</mv-kv-row>
+  }
+</div>
+
+<h3>Media</h3>
+<div class="kv">
+  @if (isAudio()) {
+    <mv-kv-row label="media type">{{ media().mediaType || '--' }}</mv-kv-row>
+    <mv-kv-row label="sample rate">{{ media().sampleRate || '--' }}</mv-kv-row>
+    <mv-kv-row label="channels">{{ media().channels == null ? '--' : media().channels }}</mv-kv-row>
+    <mv-kv-row label="bit depth">{{
+      media().bitDepth ? media().bitDepth + '-bit' : '--'
+    }}</mv-kv-row>
+  } @else {
+    <mv-kv-row label="media type">{{ media().mediaType || '--' }}</mv-kv-row>
+    <mv-kv-row label="resolution">{{ resolution() }}</mv-kv-row>
+    <mv-kv-row label="interlace">{{ media().interlaceMode || '--' }}</mv-kv-row>
+    <mv-kv-row label="colorspace">{{ media().colorspace || '--' }}</mv-kv-row>
+    <mv-kv-row label="bit depth">{{
+      media().bitDepth ? media().bitDepth + '-bit' : '--'
+    }}</mv-kv-row>
+    <mv-kv-row label="grain rate">{{ media().grainRate || '--' }}</mv-kv-row>
+    <mv-kv-row label="fps">{{ media().fps == null ? '--' : (media().fps | fmt: 2) }}</mv-kv-row>
+    <mv-kv-row label="grain size">{{ grainSize() }}</mv-kv-row>
+    <!-- What the format implies, not what the fabric is doing: nothing in the
+         control plane measures per-flow throughput. -->
+    <mv-kv-row label="nominal bitrate" state="warn">
+      {{ media().nominalMbps ? media().nominalMbps + ' Mbit/s' : '--' }}
+    </mv-kv-row>
+    @if (media().components?.length) {
+      <mv-kv-row label="components" [mono]="true">{{ media().components!.join(', ') }}</mv-kv-row>
+    }
+  }
+</div>
+
+<h3>Origin</h3>
+<div class="kv">
+  <mv-kv-row label="origin fresh" [state]="originState()">
+    {{ flow().originFresh == null ? 'unknown' : flow().originFresh ? 'yes' : 'no' }}
+  </mv-kv-row>
+  <mv-kv-row label="reason">{{ flow().originReason || '--' }}</mv-kv-row>
+  <mv-kv-row label="origin node">{{ flow().originNode || '--' }}</mv-kv-row>
+  <mv-kv-row label="lease renewed">
+    {{ flow().originAge == null ? '--' : (flow().originAge | agoS) + ' ago' }}
+  </mv-kv-row>
+</div>
+
+<h3>Locations</h3>
+<div class="kv">
+  @for (loc of flow().locations; track loc.node) {
+    <mv-kv-row [label]="loc.node ?? ''" [state]="locationState(loc.phase)">
+      {{ loc.phase }}{{ loc.observedAge == null ? '' : ' · seen ' + (loc.observedAge | agoS) }}
+    </mv-kv-row>
+  } @empty {
+    <mv-kv-row label="locations" state="bad">not materialized anywhere</mv-kv-row>
+  }
+</div>
+
+<h3>Conditions</h3>
+<div class="kv">
+  @for (cond of detail().conditions; track cond.type) {
+    <mv-kv-row [label]="cond.type ?? ''" [state]="cond.status === 'True' ? 'ok' : 'bad'">
+      {{ cond.status }} · {{ cond.reason || ''
+      }}{{ cond.age == null ? '' : ' · ' + (cond.age | agoS) }}
+    </mv-kv-row>
+    @if (cond.message) {
+      <mv-kv-row
+        ><span class="muted">{{ cond.message }}</span></mv-kv-row
+      >
+    }
+  } @empty {
+    <mv-kv-row label="conditions" state="warn">none written</mv-kv-row>
+  }
+</div>
+
+<h3>Receivers</h3>
+<div class="kv">
+  @for (rc of detail().receivers; track rc.name) {
+    <mv-kv-row [label]="rc.name" [state]="rc.phase === 'Bound' ? 'ok' : 'bad'">
+      {{ rc.phase || '--' }} · {{ rc.provider || '--' }}
+    </mv-kv-row>
+    <mv-kv-row label="pod" [mono]="true">{{ rc.pod }}</mv-kv-row>
+    @if (rc.boundMirror) {
+      <mv-kv-row label="bound mirror" [mono]="true">{{ rc.boundMirror }}</mv-kv-row>
+    }
+  } @empty {
+    <mv-kv-row label="receivers" state="warn">none — nobody is consuming this flow</mv-kv-row>
+  }
+</div>
+
+<h3>Mirrors (RDMA transfer)</h3>
+<div class="kv">
+  @for (mir of detail().mirrors; track mir.name) {
+    <mv-kv-row
+      [label]="mir.sourceNode + ' → ' + mir.targetNode"
+      [state]="mir.phase === 'Ready' ? 'ok' : 'bad'"
+    >
+      {{ mir.phase || '--' }} · {{ mir.provider || '--' }}
+    </mv-kv-row>
+    <mv-kv-row label="last grain">{{
+      mir.grainAge == null ? '--' : (mir.grainAge | agoS)
+    }}</mv-kv-row>
+    <mv-kv-row label="attempts" [state]="mir.attempts ? 'bad' : ''">
+      {{ mir.attempts == null ? '--' : mir.attempts }}
+    </mv-kv-row>
+    @if (mir.requestor) {
+      <mv-kv-row label="requested by" [mono]="true">{{ mir.requestor }}</mv-kv-row>
+    }
+    @if (mir.lastError) {
+      <mv-kv-row label="last error" state="bad">{{ mir.lastError }}</mv-kv-row>
+    }
+    @for (cond of mir.conditions; track cond.type) {
+      <mv-kv-row [label]="cond.type ?? ''" [state]="cond.status === 'True' ? 'ok' : 'bad'">
+        {{ cond.status }} · {{ cond.reason || '' }}
+      </mv-kv-row>
+    }
+  } @empty {
+    <mv-kv-row label="mirrors" state="warn">none — read locally, no cross-node transfer</mv-kv-row>
+  }
+</div>
+
+<h3>Tags</h3>
+<div class="kv">
+  @for (tag of tags(); track tag.label) {
+    <mv-kv-row [label]="tag.label">{{ tag.value }}</mv-kv-row>
+  } @empty {
+    <mv-kv-row label="tags">none</mv-kv-row>
+  }
+</div>
