@@ -1,0 +1,86 @@
+---
+# A real MXL audio flow, so the audio preview has something listenable to carry.
+#
+# The audio flow the tcp-demo provides is not audio: go-mxl's write-samples
+# fills it with an incrementing byte ramp for transport-integrity testing, which
+# read as float32 reaches ~1e38. mxl-audio-preview detects that and mutes it, so
+# without this pod there is no way to hear the audio path work.
+#
+# Writes a stereo tone — one frequency per channel a fifth apart, each with its
+# own slow tremolo, at -6 dBFS — so the preview's spectrum shows a distinct peak
+# per channel, the level bars move independently, and a mis-scaled read is
+# obvious rather than subtle.
+#
+# No MxlWriter/MxlReceiver CR is needed: writing into the domain is the
+# registration. The node agent's fanotify watch publishes the MxlFlow CR from
+# this flow definition and renews its origin Lease, so the flow appears in the
+# multiviewer's Operator-flows list by itself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-testsrc
+  labels:
+    app: audio-testsrc
+    mxl.qvest-digital.com/role: producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audio-testsrc
+  template:
+    metadata:
+      labels:
+        app: audio-testsrc
+        mxl.qvest-digital.com/role: producer
+    spec:
+      tolerations:
+        - key: "vpc.amazonaws.com/efa"
+          operator: "Exists"
+          effect: "NoSchedule"
+      imagePullSecrets:
+        - name: demo-app-ghcr-pull
+      containers:
+        - name: audio-testsrc
+          image: ghcr.io/qvest-digital/mxl-dmf-demo-app/compositor-mxlk8s:latest
+          imagePullPolicy: Always
+          command: ["/usr/bin/mxl-audio-testsrc"]
+          env:
+            - name: MXL_DOMAIN
+              value: /run/mxl/domain
+            # Pinned so the flow id is stable across restarts and the preview
+            # can be bookmarked. a0d1 = "audio demo 1".
+            - name: MXL_FLOW_ID
+              value: "a0d10000-0000-0000-0000-000000000001"
+            - name: MXL_SAMPLE_RATE
+              value: "48000"
+            - name: MXL_CHANNELS
+              value: "2"
+            - name: MXL_TONE_HZ
+              value: "440"
+            # -6 dBFS: clearly mid-meter, so a correct read is unmistakable and
+            # nothing ever clips.
+            - name: MXL_AMPLITUDE
+              value: "0.5"
+            - name: MXL_LABEL
+              value: "MXL Audio Test Tone"
+          securityContext:
+            capabilities:
+              # libmxl mlocks the flow pages, and the tmpfs-backed shared memory
+              # has to stay RDMA-pinnable for the gateway sharing this domain.
+              add: ["IPC_LOCK", "SYS_RESOURCE"]
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /run/mxl/domain
+          resources:
+            # Two sine oscillators at 48kHz.
+            requests:
+              cpu: "50m"
+              memory: 64Mi
+            limits:
+              cpu: "500m"
+              memory: 256Mi
+      volumes:
+        - name: domain-volume
+          hostPath:
+            path: /run/mxl/domain
+            type: DirectoryOrCreate

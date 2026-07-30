@@ -50,8 +50,25 @@ rules:
   # MxlFlow is CLUSTER-scoped, so it needs a ClusterRole (not the namespaced
   # Role). Without this the aggregator's MxlFlow query 403s -> originFresh reads
   # as unknown -> every flow shows a red/"down" dot even while the streams run.
+  #
+  # mxlreceivers/mxlflowmirrors ARE namespaced, and the Role above already covers
+  # the aggregator's own namespace for build(). They are here as well because the
+  # "Operator flows" detail panel lists them for every flow on the cluster, and a
+  # cluster-scoped flow's consumers can sit in any namespace — that all-namespaces
+  # list is only authorized cluster-wide, so without this it 403s and every flow
+  # reports "no receivers" no matter what is wired to it.
   - apiGroups: [mxl.qvest-digital.com]
-    resources: [mxlflows]
+    resources: [mxlflows, mxlreceivers, mxlflowmirrors]
+    verbs: [get, list]
+  # Per-flow origin Leases (mxl-system, mxl-flow-<flowID>-<node>) — the
+  # freshness signal behind the "Operator flows" dot. The OriginFresh condition
+  # only exists on flows an MxlReceiver names, so the panel reads the Leases the
+  # node agent renews for every origin instead. Cluster-scoped for the same
+  # reason as the pod read above: a Role would be rewritten into demo-app by
+  # Flux's targetNamespace and never reach mxl-system. Read-only; the agent owns
+  # Create/Update/Delete on its own Leases.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
     verbs: [get, list]
   # DMF-298/303 booking screen: the per-booking instances live in the txdarwin
   # namespace, not in demo-app's, so these reads need the ClusterRole too.
