@@ -813,10 +813,16 @@ def _http_json(base, path, method="GET", body=None):
         except Exception:
             return e.code, {"error": raw[:200]}
     except Exception as e:
-        # Unreachable service (no audio-preview deployed, DNS, timeout): a
-        # status, not a traceback, so the caller can report it as a failed
-        # preview rather than a 500 on the whole endpoint.
-        return 503, {"error": str(e)}
+        # Unreachable service (not deployed, DNS, timeout): a status, not a
+        # traceback, so the caller can report it as a failed preview rather than
+        # a 500 on the whole endpoint.
+        #
+        # Name the backend. On its own, urlopen's text is
+        # "<urlopen error [Errno -2] Name or service not known>", which says
+        # nothing about which dependency is missing — it reads like a browser or
+        # frontend fault, and once cost real time to trace back to a Service
+        # that had dropped out of the kustomization.
+        return 503, {"error": f"{base} unreachable: {e}"}
 
 
 def _mtx(path, method="GET", body=None):
