@@ -783,9 +783,15 @@ def operator_flows():
 # Audio flows go the other way round. mediamtx's mxlSource refuses them
 # ("flow <id> is not video (format=audio)"), so nothing can PULL an audio flow —
 # instead the audio-preview pod (k8s/audio-preview.yaml) reads it via libmxl and
-# PUSHES Opus over RTSP. mediamtx only has a publisher slot for a path that
+# PUSHES it over RTSP. mediamtx only has a publisher slot for a path that
 # exists, and mediamtx.yml declares just a couple, so the path is created in
 # publisher mode (empty config, no source) before the pod is asked to start.
+#
+# It pushes the same flow twice, into two paths: Opus for WHEP and AAC for HLS.
+# Neither transport carries the other's codec — WebRTC has no AAC, and the
+# MPEG-TS HLS variant refuses Opus outright ("supports MPEG-4 Audio only") with
+# a muxer that crashes on publish — and the overlay needs both, since it tries
+# WHEP first and falls back to HLS wherever ICE cannot complete.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://mediamtx:9997")
 AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API", "http://audio-preview:8090")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
@@ -867,23 +873,48 @@ def preview_add(uuid):
                  "whep": f"/webrtc/{name}/whep", "format": "video"}
 
 
-def preview_add_audio(uuid):
-    """Create the publisher-mode path, then ask audio-preview to push into it."""
+def _audio_preview_paths(uuid):
+    """The pair of mediamtx paths one audio preview publishes into.
+
+    Opus for WHEP and AAC for HLS, because neither transport can carry the
+    other's codec: WebRTC has no AAC, and hlsVariant: mpegts refuses Opus ("the
+    MPEG-TS variant of HLS supports MPEG-4 Audio only") — its muxer crashes the
+    moment such a path is published. The suffix must match kHlsPathSuffix in
+    compositor/src/audio_preview.cpp; both sides derive the names rather than
+    exchange them, because these paths have to exist before /start is called.
+    """
     name = "preview-audio-" + uuid
-    code, _ = _mtx(f"/v3/config/paths/get/{name}")
-    if code != 200:
+    return name, name + "-hls"
+
+
+def preview_add_audio(uuid):
+    """Create the publisher-mode paths, then ask audio-preview to push into them."""
+    name, hls_name = _audio_preview_paths(uuid)
+    added = []
+    for path in (name, hls_name):
+        code, _ = _mtx(f"/v3/config/paths/get/{path}")
+        if code == 200:
+            continue
         # Empty config == publisher mode: no source, mediamtx waits to be
         # published to. The video branch above is the opposite — a source it
         # pulls from.
-        code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", {})
+        code, res = _mtx(f"/v3/config/paths/add/{path}", "POST", {})
         if code != 200:
+            # Both paths or neither: the pipeline has a sink for each and fails
+            # as a whole if one has nowhere to publish.
+            for done in added:
+                _mtx(f"/v3/config/paths/delete/{done}", "DELETE")
             return code, {"error": res.get("error") or "mediamtx add failed"}
+        added.append(path)
     code, res = _audio_preview(f"/start?flow={uuid}", "POST")
     if code != 200:
-        # Don't leave an orphan path waiting for a publisher that never comes.
-        _mtx(f"/v3/config/paths/delete/{name}", "DELETE")
+        # Don't leave orphan paths waiting for a publisher that never comes.
+        for path in (name, hls_name):
+            _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
         return code, {"error": res.get("error") or "audio preview start failed"}
-    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+    # `path` is the Opus one: the overlay builds its WHEP URL from it, and only
+    # the HLS fallback uses the AAC path.
+    return 200, {"path": name, "hls": f"/hls/{hls_name}/index.m3u8",
                  "whep": f"/webrtc/{name}/whep", "format": "audio"}
 
 
@@ -915,7 +946,10 @@ def preview_del(uuid):
     # the flow's format up again: the flow may have been deleted while the
     # overlay was open, and whichever call does not apply is a harmless 404.
     _audio_preview(f"/stop?flow={uuid}", "DELETE")
-    _mtx(f"/v3/config/paths/delete/preview-audio-{uuid}", "DELETE")
+    # Audio leaves two paths behind (Opus for WHEP, AAC for HLS); missing one
+    # would leave a publisher-mode path lingering with no publisher.
+    for path in _audio_preview_paths(uuid):
+        _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
     _mtx(f"/v3/config/paths/delete/preview-{uuid}", "DELETE")
     return 200, {"stopped": uuid}
 

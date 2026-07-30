@@ -16,6 +16,10 @@
 //   DELETE /stop?flow=<uuid>   -> {"stopped":"<uuid>"}
 //   GET    /status             -> sessions, samples pushed, per-channel peak
 //
+// One reader, two published paths: preview-audio-<uuid> in Opus for WHEP and
+// preview-audio-<uuid>-hls in AAC for the HLS fallback. See pipeline_desc for
+// why both are needed. demo-metrics creates both mediamtx paths before /start.
+//
 // The peak levels in /status are a byte-for-byte read of what was pushed, so
 // "is this flow actually carrying audio" is answerable without a browser. The
 // UI's bars and spectrum are drawn client-side off the decoded stream instead —
@@ -23,7 +27,7 @@
 //
 // Env: MXL_DOMAIN (default /run/mxl/domain), MXL_PREVIEW_RTSP_BASE
 // (default rtsp://mediamtx:8554/preview-audio-), MXL_CONTROL_PORT (8090),
-// MXL_MAX_SESSIONS (4), MXL_OPUS_BITRATE (128000).
+// MXL_MAX_SESSIONS (4), MXL_OPUS_BITRATE (128000), MXL_AAC_BITRATE (128000).
 
 #include <algorithm>
 #include <atomic>
@@ -151,6 +155,12 @@ namespace
     std::string g_rtspBase;
     int g_maxSessions = 4;
     int g_opusBitrate = 128000;
+    int g_aacBitrate = 128000;
+
+    // The HLS-side path is the WHEP path plus this suffix. demo-metrics has to
+    // create both mediamtx paths before calling /start, so it derives the names
+    // with the same rule — keep the two in step (see preview_add_audio).
+    constexpr char const* kHlsPathSuffix = "-hls";
 
     // Planar -> interleaved. Each channel owns its own ring buffer; stride is
     // the byte distance between the same sample position in consecutive
@@ -183,7 +193,23 @@ namespace
         return peak;
     }
 
-    std::string pipeline_desc(std::string const& location, std::uint32_t rate, std::uint32_t channels)
+    // Two codecs from one reader, because the two ways a browser can play this
+    // back disagree about audio:
+    //
+    //   WHEP/WebRTC     carries Opus and cannot carry AAC at all.
+    //   HLS (mpegts)    carries AAC only — mediamtx refuses an Opus track with
+    //                   "the MPEG-TS variant of HLS supports MPEG-4 Audio only"
+    //                   and its muxer dies the moment the path is published.
+    //
+    // The overlay tries WHEP first and falls back to HLS, so a single-codec
+    // publish leaves one of those two paths broken. Publishing both costs one
+    // extra encoder per session and keeps the fallback working on clusters where
+    // ICE never completes.
+    //
+    // AAC is avenc_aac rather than voaacenc: voaacenc is limited to two channels
+    // and these flows carry up to eight.
+    std::string pipeline_desc(std::string const& opusLocation, std::string const& aacLocation,
+        std::uint32_t rate, std::uint32_t channels)
     {
         std::ostringstream os;
         // is-live + do-timestamp: the reader is paced by mxlSleepUntil against
@@ -194,9 +220,21 @@ namespace
            << rate << ",channels=" << channels
            << " ! queue leaky=downstream max-size-buffers=32 max-size-bytes=0 max-size-time=0"
               " ! audioconvert ! audioresample"
-        // Opus needs 48k; a 48k flow passes through audioresample untouched.
-           << " ! audio/x-raw,rate=48000 ! opusenc bitrate=" << g_opusBitrate
-           << " ! rtspclientsink protocols=tcp location=\"" << location << "\"";
+        // Opus needs 48k; a 48k flow passes through audioresample untouched. AAC
+        // is happy at 48k too, so both branches share the one resample.
+           << " ! audio/x-raw,rate=48000 ! tee name=enc"
+        // Each tee branch needs its own queue: without them a stall in one
+        // encoder blocks the other, and with a live source that deadlocks both.
+        // The per-branch audioconvert is not redundant with the one above — the
+        // two encoders want different layouts (avenc_aac takes planar float,
+        // opusenc interleaved), and it is a no-op when the format already fits.
+           << " enc. ! queue leaky=downstream max-size-buffers=32 max-size-bytes=0 max-size-time=0"
+              " ! audioconvert ! opusenc bitrate=" << g_opusBitrate
+           << " ! rtspclientsink protocols=tcp location=\"" << opusLocation << "\""
+           << " enc. ! queue leaky=downstream max-size-buffers=32 max-size-bytes=0 max-size-time=0"
+              " ! audioconvert ! avenc_aac bitrate=" << g_aacBitrate
+           << " ! aacparse"
+           << " ! rtspclientsink protocols=tcp location=\"" << aacLocation << "\"";
         return os.str();
     }
 
@@ -273,7 +311,8 @@ namespace
         g_print("[%s] audio flow: %u ch @ %uHz, batch=%u chunk=%u -> %s\n",
             ses->flowId.c_str(), channels, rateHz, batch, chunk, ses->path.c_str());
 
-        auto const desc = pipeline_desc(g_rtspBase + ses->flowId, rateHz, channels);
+        auto const opusLocation = g_rtspBase + ses->flowId;
+        auto const desc = pipeline_desc(opusLocation, opusLocation + kHlsPathSuffix, rateHz, channels);
         GError* err = nullptr;
         GstElement* pipeline = ::gst_parse_launch(desc.c_str(), &err);
         if (pipeline == nullptr || err != nullptr)
@@ -660,10 +699,11 @@ int main(int argc, char** argv)
     g_rtspBase = env_or("MXL_PREVIEW_RTSP_BASE", "rtsp://mediamtx:8554/preview-audio-");
     g_maxSessions = std::max(env_int("MXL_MAX_SESSIONS", 4), 1);
     g_opusBitrate = env_int("MXL_OPUS_BITRATE", 128000);
+    g_aacBitrate = env_int("MXL_AAC_BITRATE", 128000);
     int const port = env_int("MXL_CONTROL_PORT", 8090);
 
-    g_print("mxl-audio-preview: domain=%s rtspBase=%s maxSessions=%d opusBitrate=%d\n",
-        g_domain.c_str(), g_rtspBase.c_str(), g_maxSessions, g_opusBitrate);
+    g_print("mxl-audio-preview: domain=%s rtspBase=%s maxSessions=%d opusBitrate=%d aacBitrate=%d\n",
+        g_domain.c_str(), g_rtspBase.c_str(), g_maxSessions, g_opusBitrate, g_aacBitrate);
 
     serve(port);
 
