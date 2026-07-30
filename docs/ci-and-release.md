@@ -2,17 +2,19 @@
 
 ## 1. Overview
 
-There are two independent build outputs:
+There are three independent build outputs:
 
 1. **Manifests OCI artifact** — the rendered `k8s/` tree, pushed to `ghcr.io/qvest-digital/mxl-dmf-demo-app-manifests` on every qualifying push. This is what Flux reconciles onto the cluster. Produced by `.github/workflows/build.yml`.
 
 2. **Compositor image** — a C++/GStreamer container built from `compositor/Dockerfile.mxlk8s`, pushed to `ghcr.io/qvest-digital/mxl-dmf-demo-app/compositor-mxlk8s`. Produced by `.github/workflows/build-compositor.yml`. The compositor image is versioned separately from the manifests artifact and must stay in lock-step with the mxl-k8s gateway's `go-mxl` tag (see §4 and [architecture.md §8 — go-mxl lock-step](architecture.md#go-mxl-lock-step)).
 
-Versioning is handled by **release-please** using conventional commits, producing a `1.0.0-rc.N` pre-release series. Merging the release PR that release-please opens cuts a `vN` tag, updates `CHANGELOG.md`, and publishes a GitHub release; the `v*` tag triggers the manifests build (`build.yml`) and the published release triggers the compositor build (`build-compositor.yml`).
+3. **Multiviewer image** — the Angular app in `ui/` built to static files and served by `caddy:2-alpine`, pushed to `ghcr.io/qvest-digital/mxl-dmf-demo-app/ui`. Produced by `.github/workflows/build-ui.yml`. It is what the mediamtx pod's `caddy` sidecar runs; the Caddyfile itself still travels in the manifests artifact.
+
+Versioning is handled by **release-please** using conventional commits, producing a `1.0.0-rc.N` pre-release series. Merging the release PR that release-please opens cuts a `vN` tag, updates `CHANGELOG.md`, and publishes a GitHub release; the `v*` tag triggers the manifests build (`build.yml`) and the published release triggers both image builds.
 
 ---
 
-## 2. The two workflows
+## 2. The workflows
 
 ### `build.yml` — Push manifests
 
@@ -58,6 +60,16 @@ On each cluster a Flux `OCIRepository` watches this artifact repository and its 
 The image is built from `compositor/Dockerfile.mxlk8s` using `docker/build-push-action` with GitHub Actions layer caching (`scope=mxlk8s`).
 
 **Authentication note:** The existing `ghcr-pull-secret` rendered by ExternalSecrets (used for mediamtx) covers pulls of this image too — same registry, no extra secret to wire.
+
+### `build-ui.yml` — Build and push multiviewer UI image
+
+**Triggers:** the same shape as `build-compositor.yml`, with paths `ui/**` or `.github/workflows/build-ui.yml`.
+
+**What it produces:** A Docker image pushed to `ghcr.io/qvest-digital/mxl-dmf-demo-app/ui`, tagged `<short-sha>` always, `latest` on `main`, and the `v`-stripped semver on a release event — the same tagging rules as the compositor.
+
+Before building the image it installs the workspace with `npm ci` and runs `ng test`, so a failing suite blocks the push and reports as a test failure rather than as a `docker build` error. The image build itself is `ui/Dockerfile`: `node:22-alpine` produces `dist/mxl-multiviewer/browser`, which is copied into `caddy:2-alpine` at `/srv`. Layer caching uses `scope=ui`.
+
+The same `ghcr-pull-secret` covers pulls of this image too.
 
 ---
 

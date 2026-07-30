@@ -1,0 +1,42 @@
+<main>
+  <div class="stage-wrap">
+    <div class="players">
+      @for (tile of tileStates(); track tile.n) {
+        <mv-player-tile [n]="tile.n" [node]="tile.node" [live]="tile.live" />
+      }
+    </div>
+  </div>
+
+  <aside class="panel">
+    <h2>RDMA delivery</h2>
+    <div class="agg">
+      <div class="stat">
+        <div class="k">Throughput</div>
+        <div class="v lime">{{ totals()?.mbps | fmt }} <small>Mbit/s</small></div>
+      </div>
+      <div class="stat">
+        <div class="k">Grains / s</div>
+        <div class="v">{{ totals()?.fps | fmt }}</div>
+      </div>
+      <div class="stat">
+        <div class="k">Tiles live</div>
+        <div class="v">
+          {{ totals()?.live ?? '-' }}<small>/{{ totals()?.total ?? '-' }}</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="flows">
+      @for (flow of flows(); track flow.n) {
+        <mv-flow-card [flow]="flow" />
+      }
+    </div>
+
+    <div class="gwbar">
+      <h2>Gateways</h2>
+      <mv-gateway-grid [gateways]="gateways()" />
+    </div>
+
+    <mv-operator-flow-list [flows]="opFlows()" />
+  </aside>
+</main>
