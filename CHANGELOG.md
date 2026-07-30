@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-rc.6](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.5...v1.0.0-rc.6) (2026-07-30)
+
+
+### Bug Fixes
+
+* **audio-preview:** force the mpeg4-generic AAC payloader, and watch … ([#83](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/83)) ([d43e9ad](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/d43e9adf28b2216b3313dcbe587c13e92d4fe4a6))
+* **audio-preview:** publish AAC alongside Opus so the HLS fallback works ([#82](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/82)) ([849fb2b](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/849fb2b9eeb4e0468b8130e58eb171442001516d))
+* **k8s:** restore audio-preview and audio-testsrc to the resource list ([#79](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/79)) ([6511ae1](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/6511ae19f34f3452806db584cbf45ac711c7b900))
+* **metrics:** name the unreachable backend when a preview fails ([#80](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/80)) ([0b6ed71](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/0b6ed71a19ae41887039e06e883a9fc0c2ba6bb8))
+
 ## [1.0.0-rc.5](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-07-30)
 
 
