@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-rc.5](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-07-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ui:** legacy migration from something to angular ([#77](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/77))
+
+### Features
+
+* **ui:** legacy migration from something to angular ([#77](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/77)) ([c127304](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/c127304fb8f76486043e2568275d6eab207632c1))
+
+
+### Bug Fixes
+
+* **multiviewer:** origin dot read a condition most flows never carry ([#72](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/72)) ([2a7d6b2](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/2a7d6b20a84fb1cf8a731f6d1a292174b745edb0))
+
+
+### Continuous Integration
+
+* gate pull request titles on the release vocabulary ([#78](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/78)) ([7fdafc1](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/7fdafc17858c86e788cf6b48450684aadc0b4ae1))
+
 ## [1.0.0-rc.4](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-07-23)
 
 
