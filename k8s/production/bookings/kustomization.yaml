@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Everything the lifecycle plane places in the namespace the MediaProduction
-# owns. Created by the operator when it reconciles that production, so these
-# wait until it exists.
+# Everything booked into the namespace the MediaProduction owns. The operator
+# creates that namespace while reconciling the production, so this path needs
+# a Flux Kustomization of its own that depends on the one applying ../ and
+# waits for the production to report Ready.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: production-demo-app
