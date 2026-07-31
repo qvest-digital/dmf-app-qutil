@@ -37,6 +37,7 @@ WORKDIR /src
 COPY CMakeLists.txt /src/
 COPY vendor /src/vendor/
 COPY src /src/src/
+COPY test /src/test/
 
 # go-mxl-builder:1.0.0-rc.9 ships libmxl under /opt/libmxl/lib only — no
 # multiarch symlink in /usr/lib/x86_64-linux-gnu, so `-lmxl` does not
@@ -45,8 +46,12 @@ COPY src /src/src/
 RUN ln -s /opt/libmxl/lib/libmxl.so /usr/lib/x86_64-linux-gnu/libmxl.so \
  && ln -s /opt/libmxl/lib/libmxl-fabrics.so /usr/lib/x86_64-linux-gnu/libmxl-fabrics.so
 
+# ctest runs the ANC framing round-trip. It needs no MXL domain and no network,
+# so it belongs in the build: the alternative is discovering a framing regression
+# from a probe dump on a cluster.
 RUN cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build /src/build --parallel \
+ && ctest --test-dir /src/build --output-on-failure \
  && cmake --install /src/build --prefix /opt/mxl-compositor
 
 # ── Stage 2: slim runtime on the matching runtime image ────────────────────
@@ -72,6 +77,7 @@ COPY --from=build /opt/mxl-compositor/bin/mxl-multi-compositor /usr/bin/
 # default entry point.
 COPY --from=build /opt/mxl-compositor/bin/mxl-audio-preview /usr/bin/
 COPY --from=build /opt/mxl-compositor/bin/mxl-audio-testsrc /usr/bin/
+COPY --from=build /opt/mxl-compositor/bin/mxl-anc-testsrc /usr/bin/
 
 WORKDIR /home/mxl
 ENTRYPOINT ["/usr/bin/mxl-multi-compositor"]

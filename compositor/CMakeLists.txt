@@ -22,7 +22,14 @@ add_executable(mxl-audio-preview src/audio_preview.cpp)
 # libmxl — but it links the same way for simplicity.
 add_executable(mxl-audio-testsrc src/audio_testsrc.cpp)
 
-foreach(target mxl-multi-compositor mxl-audio-preview mxl-audio-testsrc)
+# A real DATA flow. Nothing in the demo wrote `video/smpte291`, so discrete data
+# grains, their mirroring, and how the multiviewer presents a flow it cannot
+# preview were all untested. Writes one RFC 8331 ancillary-timecode frame per
+# grain; the framing itself lives in src/anc_frame.h so it can be tested without
+# libmxl.
+add_executable(mxl-anc-testsrc src/anc_testsrc.cpp)
+
+foreach(target mxl-multi-compositor mxl-audio-preview mxl-audio-testsrc mxl-anc-testsrc)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
   # mxl headers vendored under vendor/ — runtime libmxl.so is provided by the
   # mxl-base image. No pkg-config entry available because mxl-base does not
@@ -31,5 +38,16 @@ foreach(target mxl-multi-compositor mxl-audio-preview mxl-audio-testsrc)
   target_link_libraries(${target} PRIVATE PkgConfig::GST mxl pthread)
 endforeach()
 
-install(TARGETS mxl-multi-compositor mxl-audio-preview mxl-audio-testsrc
+install(TARGETS mxl-multi-compositor mxl-audio-preview mxl-audio-testsrc mxl-anc-testsrc
         RUNTIME DESTINATION bin)
+
+# Round-trips the ANC framing through the parser libmxl's own mxl-data-probe
+# uses, so a layout change on either side fails the image build rather than
+# silently producing grains nothing can read. Links neither libmxl nor GStreamer
+# — the framing is pure bit twiddling — and is not installed. C++20 because the
+# transcribed parser uses std::span.
+enable_testing()
+add_executable(anc-frame-test test/anc_frame_test.cpp)
+target_compile_features(anc-frame-test PRIVATE cxx_std_20)
+target_compile_options(anc-frame-test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME anc-frame COMMAND anc-frame-test)

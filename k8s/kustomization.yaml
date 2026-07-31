@@ -15,6 +15,14 @@ resources:
   # `audio-preview:8090` that the demo-metrics aggregator posts /start to — drop
   # it and every audio preview fails with a DNS error, not a useful message.
   - audio-preview.yaml
+  # A real `video/smpte291` flow, so discrete data grains and their mirroring are
+  # exercised rather than assumed. Also the only flow in the demo for which the
+  # multiviewer correctly refuses Preview.
+  #
+  # Still a plain Deployment, unlike the writers #86 moved to catalog claims:
+  # there is no mxl-anc-testsrc class to book against. If one is added, this
+  # should become a MediaFunctionClaim under production/bookings/ like they did.
+  - anc-testsrc.yaml
   - test-sources.yaml
 
 # Hash-suffixed configmaps: any change to a file under config/ produces

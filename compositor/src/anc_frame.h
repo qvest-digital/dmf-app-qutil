@@ -1,0 +1,153 @@
+// RFC 8331 ancillary-data framing, as MXL stores it in a `video/smpte291` grain.
+//
+// Header-only and free of any libmxl dependency, so the framing can be tested on
+// its own — see compositor/test/anc_frame_test.cpp, which round-trips these
+// frames through the parser from libmxl's mxl-data-probe. The writer that puts
+// them into a flow is anc_testsrc.cpp; the layout is documented there.
+
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace anc
+{
+    /// SMPTE ST 12-2 Ancillary Time Code. mxl-data-probe's DID table names this
+    /// pair, so a correctly framed packet is self-describing there.
+    constexpr std::uint8_t kAtcDid = 0x60;
+    constexpr std::uint8_t kAtcSdid = 0x60;
+    /// ST 12-2 fixes the ATC data count at 16 words. Kept even though only the
+    /// first four carry anything, so the packet's shape is the real one.
+    constexpr std::uint8_t kAtcDataCount = 16;
+    /// Bytes of RFC 8331 header that MXL actually stores: Length onward.
+    constexpr std::size_t kRfc8331HeaderBytes = 6;
+
+    /// One 10-bit SMPTE 291 word: the value in b0..b7, even parity over those in
+    /// b8, and b9 as its inverse.
+    inline std::uint16_t anc_word(std::uint8_t value)
+    {
+        unsigned ones = 0;
+        for (int bit = 0; bit < 8; ++bit) ones += static_cast<unsigned>((value >> bit) & 1U);
+        std::uint16_t const b8 = (ones & 1U) ? 1U : 0U;
+        std::uint16_t const b9 = b8 ? 0U : 1U;
+        return static_cast<std::uint16_t>((b9 << 9) | (b8 << 8) | value);
+    }
+
+    /// Two BCD digits, so 13 becomes 0x13 and reads as "13" in a hex dump.
+    inline std::uint8_t bcd(unsigned value)
+    {
+        return static_cast<std::uint8_t>((((value / 10U) % 10U) << 4) | (value % 10U));
+    }
+
+    /// Appends bit fields into a big-endian bit stream, MSB first.
+    class WordPacker
+    {
+    public:
+        void push_bits(std::uint32_t value, unsigned bits)
+        {
+            _bits = (_bits << bits) | (value & ((1U << bits) - 1U));
+            _count += bits;
+            while (_count >= 16)
+            {
+                _count -= 16;
+                emit(static_cast<std::uint16_t>((_bits >> _count) & 0xffffU));
+            }
+        }
+
+        void push(std::uint16_t word10) { push_bits(word10, 10); }
+
+        /// Zero-pads to the next 16-bit boundary and returns the bytes.
+        std::vector<std::uint8_t> finish()
+        {
+            if (_count > 0)
+            {
+                emit(static_cast<std::uint16_t>((_bits << (16 - _count)) & 0xffffU));
+                _count = 0;
+            }
+            return std::move(_out);
+        }
+
+    private:
+        void emit(std::uint16_t w)
+        {
+            _out.push_back(static_cast<std::uint8_t>(w >> 8));
+            _out.push_back(static_cast<std::uint8_t>(w & 0xffU));
+        }
+
+        std::vector<std::uint8_t> _out;
+        std::uint32_t _bits{0};
+        std::uint32_t _count{0};
+    };
+
+    inline void push_be16(std::vector<std::uint8_t>& out, std::uint16_t v)
+    {
+        out.push_back(static_cast<std::uint8_t>(v >> 8));
+        out.push_back(static_cast<std::uint8_t>(v & 0xffU));
+    }
+
+    /// The 16 ATC user data words for one timecode: BCD per field, one field per
+    /// word. Deliberately not the ST 12M-2 bit layout — see anc_testsrc.cpp.
+    inline std::array<std::uint8_t, kAtcDataCount> build_atc_udw(unsigned hours,
+        unsigned minutes, unsigned seconds, unsigned frames)
+    {
+        std::array<std::uint8_t, kAtcDataCount> udw{};
+        udw[0] = bcd(hours);
+        udw[1] = bcd(minutes);
+        udw[2] = bcd(seconds);
+        udw[3] = bcd(frames);
+        return udw;
+    }
+
+    /// One RFC 8331 frame — as MXL stores it, from the Length field on — carrying
+    /// a single ANC packet.
+    inline std::vector<std::uint8_t> build_anc_frame(std::uint16_t lineNumber, std::uint8_t did,
+        std::uint8_t sdid, std::uint8_t const* udw, std::uint8_t dataCount)
+    {
+        // Packet data first, so Length is known before the header is written.
+        std::vector<std::uint8_t> packet;
+        // C=0 (the ANC is not in the chroma stream), the line, then the top 4 bits
+        // of a zero horizontal offset.
+        push_be16(packet, static_cast<std::uint16_t>((lineNumber & 0x07ffU) << 4));
+        // Rest of the horizontal offset, S=0, StreamNum=0.
+        push_be16(packet, 0);
+
+        // DID, SDID and Data_Count are 10-bit words like the payload, and the
+        // checksum covers the low 9 bits of every one of them.
+        WordPacker packer;
+        std::uint32_t checksum = 0;
+        auto emit = [&](std::uint8_t value)
+        {
+            auto const w = anc_word(value);
+            checksum += (w & 0x01ffU);
+            packer.push(w);
+        };
+        emit(did);
+        emit(sdid);
+        emit(dataCount);
+        // DID, SDID and Data_Count are 30 bits; pad to 32 so the user data words
+        // begin at the top of the next 16-bit word. libmxl's mxl-data-probe reads
+        // them that way — its UdwUnpacker starts on a fresh word after the four
+        // packet-header words — so packing UDW into the two leftover bits here
+        // would shift every value by 2 bits and the probe would show garbage.
+        packer.push_bits(0, 2);
+        for (std::uint8_t i = 0; i < dataCount; ++i) emit(udw[i]);
+
+        // Checksum: low 9 bits of the sum, b9 its inverse. Not b8-parity like the
+        // data words — ST 291 defines it this way.
+        auto const sum9 = static_cast<std::uint16_t>(checksum & 0x01ffU);
+        auto const csB9 = static_cast<std::uint16_t>(((sum9 >> 8) & 1U) ? 0U : 1U);
+        packer.push(static_cast<std::uint16_t>((csB9 << 9) | sum9));
+
+        auto const words = packer.finish();
+        packet.insert(packet.end(), words.begin(), words.end());
+
+        std::vector<std::uint8_t> frame;
+        push_be16(frame, static_cast<std::uint16_t>(packet.size()));  // Length
+        push_be16(frame, static_cast<std::uint16_t>(1U << 8));        // ANC_Count = 1
+        push_be16(frame, 0);                                          // reserved
+        frame.insert(frame.end(), packet.begin(), packet.end());
+        return frame;
+    }
+}  // namespace anc

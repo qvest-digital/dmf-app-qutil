@@ -1,0 +1,97 @@
+---
+# A real MXL data flow, so the ancillary-data path has something to carry.
+#
+# The demo had video producers (the four writer flows) and, since audio-testsrc, an
+# audio producer — but nothing wrote `video/smpte291`. That left the whole discrete
+# data-grain path unexercised: no data flow was ever created, mirrored between
+# nodes, listed by the operator, or shown in the multiviewer, so a regression in
+# any of it would have gone unnoticed.
+#
+# Writes one RFC 8331 ancillary timecode packet per grain (DID/SDID 0x60/0x60,
+# which libmxl's mxl-data-probe labels "SMPTE ST 12-2 Ancillary Time Code"),
+# clocked at 30000/1001 like the video flows. The timecode comes from the grain's
+# own timestamp, so `mxl-data-probe` output can be checked straight against the
+# pod's log or the wall clock.
+#
+# The payload is BCD per field rather than the ST 12M-2 bit layout — see the header
+# comment in compositor/src/anc_testsrc.cpp for why, and do not point a conformant
+# ATC decoder at it expecting to read the time.
+#
+# Expect Preview to be refused for this flow in the multiviewer: there is no route
+# from a data flow to a browser, and the UI says so rather than opening an overlay
+# that never loads. That refusal is part of what this source exists to exercise.
+#
+# No MxlWriter/MxlReceiver CR is needed: writing into the domain is the
+# registration. The node agent's fanotify watch publishes the MxlFlow CR from this
+# flow definition and renews its origin Lease, so the flow appears in the
+# multiviewer's Operator-flows list by itself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anc-testsrc
+  labels:
+    app: anc-testsrc
+    mxl.qvest-digital.com/role: producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anc-testsrc
+  template:
+    metadata:
+      labels:
+        app: anc-testsrc
+        mxl.qvest-digital.com/role: producer
+    spec:
+      tolerations:
+        - key: "vpc.amazonaws.com/efa"
+          operator: "Exists"
+          effect: "NoSchedule"
+      imagePullSecrets:
+        - name: demo-app-ghcr-pull
+      containers:
+        - name: anc-testsrc
+          image: ghcr.io/qvest-digital/mxl-dmf-demo-app/compositor-mxlk8s:latest
+          imagePullPolicy: Always
+          command: ["/usr/bin/mxl-anc-testsrc"]
+          env:
+            - name: MXL_DOMAIN
+              value: /run/mxl/domain
+            # Pinned so the flow id is stable across restarts and can be
+            # bookmarked. a0d2 = "ancillary demo 1", next to audio's a0d1.
+            - name: MXL_FLOW_ID
+              value: "a0d20000-0000-0000-0000-000000000001"
+            # Matches the video flows, so the timecode advances at the same rate
+            # the tiles do and 0..29 frame counting is the expected shape.
+            - name: MXL_GRAIN_RATE_NUM
+              value: "30000"
+            - name: MXL_GRAIN_RATE_DEN
+              value: "1001"
+            # Where ATC normally sits in HD VANC. Nothing here depends on it; a
+            # plausible value just makes the probe output look like real ANC.
+            - name: MXL_ANC_LINE
+              value: "9"
+            - name: MXL_LABEL
+              value: "MXL ANC Test Timecode"
+          securityContext:
+            capabilities:
+              # libmxl mlocks the flow pages, and the tmpfs-backed shared memory
+              # has to stay RDMA-pinnable for the gateway sharing this domain.
+              add: ["IPC_LOCK", "SYS_RESOURCE"]
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /run/mxl/domain
+          resources:
+            # One 36-byte frame per grain at 29.97 — far cheaper than the audio
+            # oscillators, let alone the video writers.
+            requests:
+              cpu: "20m"
+              memory: 32Mi
+            limits:
+              cpu: "200m"
+              memory: 128Mi
+      volumes:
+        - name: domain-volume
+          hostPath:
+            path: /run/mxl/domain
+            type: DirectoryOrCreate
