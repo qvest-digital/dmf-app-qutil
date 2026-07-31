@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.9](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.8...v1.0.0-rc.9) (2026-07-31)
+
+
+### Bug Fixes
+
+* **k8s:** drop the anti-affinity on the role label ([#89](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/89)) ([854c858](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/854c858734bf985fc1270e98e0af5de6933c8fd6))
+
 ## [1.0.0-rc.8](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.7...v1.0.0-rc.8) (2026-07-31)
 
 
