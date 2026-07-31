@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The booking envelope for the demo. Creating it makes the lifecycle plane
+# create the namespace the claims beside it are booked into, which is the
+# production name under a production- prefix.
+#
+# Cluster-scoped, so a Flux targetNamespace does not move it.
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaProduction
+metadata:
+  name: demo-app

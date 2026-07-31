@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Applied separately from ../kustomization.yaml, and it has to stay that way:
+# the demo app's Flux Kustomization carries targetNamespace: demo-app, which
+# would move the claims out of the namespace the production owns. Point a
+# second Flux Kustomization at this path with no targetNamespace.
+#
+# MediaProduction sits here rather than under bookings/ because it is
+# cluster-scoped: kustomize cannot know that for a CRD and would stamp the
+# namespace transformer onto it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - mediaproduction.yaml
+  - bookings

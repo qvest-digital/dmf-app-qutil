@@ -1,0 +1,143 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The demo's producers, booked from the catalog. One claim per flow: a writer
+# pod writes one flow, so four tiles are four claims.
+#
+# 1296x720 rather than the class default 1080p: animated videotestsrc patterns
+# stall the test source at v210 1080p, and MXL-2 runs ball. The geometry has to
+# match what the compositor tiles and what the multiviewer page expects.
+#
+# Everything cluster-shaped - the image, its pull secret, the volume holding
+# the MXL runtime root, node tolerations - comes from the catalog's
+# functions.mxl-writer.values and is deliberately absent here.
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: writer-mxl-1
+spec:
+  className: mxl-writer
+  booking:
+    jobRef: "mediaops/demo-app"
+  parameters:
+    flow:
+      group_hint: mxl-multiviewer-1
+      video_output:
+        id: d4d00000-0000-0000-0000-000000000001
+        flow_pattern: smpte
+        overlay_text: MXL-1
+        frame_width: 1296
+        frame_height: 720
+        grain_rate:
+          numerator: 30000
+          denominator: 1001
+    # Blend the overlay directly on 10-bit packed v210 instead of the I420
+    # fast path, so the tiles show what v210 overlay costs.
+    extraEnv:
+      - name: MXL_OVERLAY_FORMAT
+        value: v210
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: writer-mxl-2
+spec:
+  className: mxl-writer
+  booking:
+    jobRef: "mediaops/demo-app"
+  parameters:
+    flow:
+      group_hint: mxl-multiviewer-2
+      video_output:
+        id: d4d00000-0000-0000-0000-000000000002
+        flow_pattern: ball
+        overlay_text: MXL-2
+        frame_width: 1296
+        frame_height: 720
+        grain_rate:
+          numerator: 30000
+          denominator: 1001
+    extraEnv:
+      - name: MXL_OVERLAY_FORMAT
+        value: v210
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: writer-mxl-3
+spec:
+  className: mxl-writer
+  booking:
+    jobRef: "mediaops/demo-app"
+  parameters:
+    flow:
+      group_hint: mxl-multiviewer-3
+      video_output:
+        id: d4d00000-0000-0000-0000-000000000003
+        flow_pattern: gamut
+        overlay_text: MXL-3
+        frame_width: 1296
+        frame_height: 720
+        grain_rate:
+          numerator: 30000
+          denominator: 1001
+    extraEnv:
+      - name: MXL_OVERLAY_FORMAT
+        value: v210
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: writer-mxl-4
+spec:
+  className: mxl-writer
+  booking:
+    jobRef: "mediaops/demo-app"
+  parameters:
+    flow:
+      group_hint: mxl-multiviewer-4
+      video_output:
+        id: d4d00000-0000-0000-0000-000000000004
+        flow_pattern: checkers-8
+        overlay_text: MXL-4
+        frame_width: 1296
+        frame_height: 720
+        grain_rate:
+          numerator: 30000
+          denominator: 1001
+    extraEnv:
+      - name: MXL_OVERLAY_FORMAT
+        value: v210
+---
+# The audio tone the preview page plays. Video is switched off: this claim
+# books a writer that produces only the audio flow.
+#
+# 440 Hz against 660 Hz is a fifth, so the two channels stay tellable apart on
+# a meter and beat audibly against each other. Level is halved because the
+# preview mixes this with nothing else and full scale clips on the way out.
+#
+# The tone values need an image carrying patch 0007 of dmf-mf-mxl-writer.
+# Against an older one the writer rejects the flags rather than ignoring them,
+# so this claim lands only once the class pins that release.
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: audio-testsrc
+spec:
+  className: mxl-writer
+  booking:
+    jobRef: "mediaops/demo-app"
+  parameters:
+    flow:
+      group_hint: mxl-audio-testsrc
+      video_output:
+        enabled: false
+      audio_output:
+        enabled: true
+        id: a0d10000-0000-0000-0000-000000000001
+        sample_rate: 48000
+        channel_count: 2
+        wave: sine
+        frequencies: [440, 660]
+        volume: 0.5
