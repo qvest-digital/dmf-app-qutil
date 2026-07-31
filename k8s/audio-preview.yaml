@@ -50,10 +50,8 @@ spec:
         app: audio-preview
         mxl.qvest-digital.com/role: consumer
     spec:
-      # Same placement rationale as txdarwin-output-viewer: pin to the composite
-      # node so consumers share one node, and prefer (never require) staying off
-      # producer nodes — a hard anti-affinity leaves no valid node on a two-node
-      # cluster where composite and the writers already share one.
+      # Pinned to the composite node so the consumers of a flow share one node,
+      # and the mirrors the agent materializes for them.
       affinity:
         podAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -61,14 +59,6 @@ spec:
                 matchLabels:
                   app: composite
               topologyKey: kubernetes.io/hostname
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    mxl.qvest-digital.com/role: producer
-                topologyKey: kubernetes.io/hostname
       tolerations:
         - key: "vpc.amazonaws.com/efa"
           operator: "Exists"
