@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.8](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.7...v1.0.0-rc.8) (2026-07-31)
+
+
+### Bug Fixes
+
+* **k8s:** split the bookings out of the production tree ([#87](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/87)) ([af98f9c](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/af98f9cb453b8063423888d87189df7102c398e0))
+
 ## [1.0.0-rc.7](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.6...v1.0.0-rc.7) (2026-07-31)
 
 
