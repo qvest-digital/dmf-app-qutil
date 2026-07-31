@@ -15,6 +15,13 @@
 //   POST   /start?flow=<uuid>  -> {"path":"preview-audio-<uuid>", ...}
 //   DELETE /stop?flow=<uuid>   -> {"stopped":"<uuid>"}
 //   GET    /status             -> sessions, samples pushed, per-channel peak
+//   GET    /anc?flow=<uuid>    -> newest grain of a DATA flow: hex bytes plus the
+//                                 RFC 8331 elements parsed out of them
+//
+// The /anc endpoint is the odd one out and deliberately so: a data flow has no
+// route to a browser at all, so instead of publishing it anywhere this reads one
+// grain and hands the bytes over for the UI to display. No session, no pipeline,
+// nothing to tear down.
 //
 // One reader, two published paths: preview-audio-<uuid> in Opus for WHEP and
 // preview-audio-<uuid>-hls in AAC for the HLS fallback. See pipeline_desc for
@@ -59,6 +66,8 @@
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
 #include <mxl/time.h>
+
+#include "anc_frame.h"
 
 namespace
 {
@@ -622,6 +631,165 @@ namespace
         return std::string{R"({"stopped":")"} + flow + R"("})";
     }
 
+    /// One-shot read of the newest grain of a DATA flow, as JSON.
+    ///
+    /// Unlike the audio previews there is no session and no pipeline: a data flow
+    /// has no route to a browser, so the UI shows the bytes instead and this just
+    /// hands them over. Stateless — open, read one grain, close — because it is
+    /// polled at about 1 Hz and holding a reader open per viewer would keep a
+    /// mirror alive for a flow nobody is really consuming.
+    std::string anc_json(std::string const& flow, int& code)
+    {
+        std::ostringstream os;
+        auto fail = [&](int c, std::string const& msg)
+        {
+            code = c;
+            return R"({"error":")" + json_escape(msg) + R"("})";
+        };
+
+        if (flow.empty()) return fail(400, "missing flow");
+
+        auto* instance = ::mxlCreateInstance(g_domain.c_str(), "");
+        if (instance == nullptr) return fail(503, "mxlCreateInstance failed for " + g_domain);
+
+        ::mxlFlowReader reader = nullptr;
+        if (::mxlCreateFlowReader(instance, flow.c_str(), "", &reader) != MXL_STATUS_OK)
+        {
+            ::mxlDestroyInstance(instance);
+            return fail(404, "flow not readable on this node");
+        }
+
+        ::mxlFlowRuntimeInfo rt{};
+        if (::mxlFlowReaderGetRuntimeInfo(reader, &rt) != MXL_STATUS_OK)
+        {
+            ::mxlReleaseFlowReader(instance, reader);
+            ::mxlDestroyInstance(instance);
+            return fail(503, "mxlFlowReaderGetRuntimeInfo failed");
+        }
+
+        // Walk back from the head rather than trusting one index, the way the
+        // compositor reads video grains. Two reasons, both learned there: the head
+        // slot may not be committed yet, and a slot that was skipped still holds
+        // the grain from one ring-depth ago — GetGrain returns it happily, with
+        // info.index carrying the OLD index. Comparing info.index against what was
+        // asked for is the only way to tell a fresh grain from a stale slot.
+        //
+        // Unlike the compositor there is no validSlices == totalSlices check: for
+        // a data flow a slice is one byte, so an ANC frame of a few dozen bytes in
+        // a 4096-byte grain legitimately has validSlices far below totalSlices.
+        // That field is a length here, not a completeness flag — which is exactly
+        // how libmxl's own mxl-data-probe reads it.
+        // Where to start scanning. The writer paces itself against the flow's own
+        // clock (mxlIndexToTimestamp), so the current time converted back to an
+        // index is where the newest grain should be. rt.headIndex is used when the
+        // config carries no usable rate.
+        ::mxlFlowConfigInfo cfg{};
+        std::uint64_t start = rt.headIndex;
+        if (::mxlFlowReaderGetConfigInfo(reader, &cfg) == MXL_STATUS_OK
+            && cfg.common.grainRate.numerator != 0)
+        {
+            start = ::mxlTimestampToIndex(&cfg.common.grainRate, ::mxlGetTime());
+        }
+
+        // A grain or two behind: the newest one may still be open for writing.
+        constexpr int kLagGrains = 2;
+        constexpr int kScanDepth = 8;
+        constexpr std::uint64_t kGrainTimeoutNs = 100'000'000ULL;
+        ::mxlGrainInfo info{};
+        std::uint8_t* payload = nullptr;
+        bool got = false;
+        int lastRet = 0;
+        std::uint64_t lastSlotIndex = 0;
+        std::ostringstream trace;
+        for (int back = 0; back < kLagGrains + kScanDepth; ++back)
+        {
+            auto const idx = static_cast<std::int64_t>(start) - back;
+            if (idx < 0) break;
+            auto const ret = ::mxlFlowReaderGetGrain(
+                reader, static_cast<std::uint64_t>(idx), kGrainTimeoutNs, &info, &payload);
+            lastRet = static_cast<int>(ret);
+            trace << " -" << back << ':' << lastRet;
+            if (ret != MXL_STATUS_OK || payload == nullptr) continue;
+            lastSlotIndex = info.index;
+            trace << "(idx " << info.index << ')';
+            if (info.index != static_cast<std::uint64_t>(idx)) continue;  // stale slot
+            got = true;
+            break;
+        }
+        if (!got)
+        {
+            ::mxlReleaseFlowReader(instance, reader);
+            ::mxlDestroyInstance(instance);
+            // Say which head it scanned from and what the reader last returned:
+            // "no grain" on its own gives whoever hits this nothing to go on.
+            std::ostringstream why;
+            why << "no readable grain: scanned from " << start << " (head " << rt.headIndex
+                << "), last status " << lastRet << ", slot index " << lastSlotIndex
+                << ", ring " << cfg.discrete.grainCount << " grains, scan" << trace.str();
+            return fail(503, why.str());
+        }
+        std::uint64_t const index = info.index;
+
+        // validSlices is how many bytes the writer says are good; a data flow's
+        // slice is one byte. Fall back to the whole grain if it says nothing.
+        std::size_t size = info.grainSize;
+        if (info.validSlices > 0 && info.validSlices < info.totalSlices)
+        {
+            size = std::min<std::size_t>(size, info.validSlices);
+        }
+        size = std::min<std::size_t>(size, MXL_DATA_FORMAT_GRAIN_SIZE);
+
+        os << R"({"flow":")" << json_escape(flow) << R"(","index":)" << index
+           << R"(,"grainSize":)" << info.grainSize << R"(,"validSlices":)" << info.validSlices
+           << R"(,"totalSlices":)" << info.totalSlices << R"(,"bytes":")";
+        // Hex, because that is what "show me the data" means for ancillary data,
+        // and it keeps the payload printable in a JSON string.
+        for (std::size_t i = 0; i < size; ++i)
+        {
+            char buf[3];
+            std::snprintf(buf, sizeof(buf), "%02x", payload[i]);
+            os << buf;
+        }
+        os << '"';
+
+        if (auto const parsed = anc::parse_anc_frame(payload, size))
+        {
+            os << R"(,"ancCount":)" << static_cast<unsigned>(parsed->ancCount) << R"(,"elements":[)";
+            bool first = true;
+            for (auto const& e : parsed->elements)
+            {
+                if (!first) os << ',';
+                first = false;
+                os << R"({"line":)" << e.line << R"(,"did":)" << static_cast<unsigned>(e.did)
+                   << R"(,"sdid":)" << static_cast<unsigned>(e.sdid) << R"(,"dataCount":)"
+                   << static_cast<unsigned>(e.dataCount) << R"(,"name":")"
+                   << json_escape(anc::anc_name(e.did, e.sdid)) << R"(","udw":[)";
+                for (std::size_t i = 0; i < e.udw.size(); ++i)
+                {
+                    if (i != 0) os << ',';
+                    os << static_cast<unsigned>(e.udw[i]);
+                }
+                os << ']';
+                auto const tc = anc::atc_timecode_bcd(e);
+                if (!tc.empty()) os << R"(,"timecode":")" << tc << '"';
+                os << '}';
+            }
+            os << ']';
+        }
+        else
+        {
+            // Not fatal: the bytes are still shown, and saying so beats pretending
+            // the grain was empty.
+            os << R"(,"parseError":"not a readable RFC 8331 frame")";
+        }
+        os << '}';
+
+        ::mxlReleaseFlowReader(instance, reader);
+        ::mxlDestroyInstance(instance);
+        code = 200;
+        return os.str();
+    }
+
     std::string status_json()
     {
         std::ostringstream os;
@@ -676,7 +844,7 @@ namespace
         timeval tv{};
         tv.tv_sec = 1;
         ::setsockopt(srv, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        g_print("control: listening on :%d (POST /start?flow=, DELETE /stop?flow=, GET /status)\n", port);
+        g_print("control: listening on :%d (POST /start?flow=, DELETE /stop?flow=, GET /status, GET /anc?flow=)\n", port);
 
         while (!g_exit.load(std::memory_order_relaxed))
         {
@@ -702,6 +870,8 @@ namespace
                     body = start_session(query_param(target, "flow"), code);
                 else if (method == "DELETE" && target.rfind("/stop", 0) == 0)
                     body = stop_session(query_param(target, "flow"), code);
+                else if (method == "GET" && target.rfind("/anc", 0) == 0)
+                    body = anc_json(query_param(target, "flow"), code);
                 else if (method == "GET" && target.rfind("/status", 0) == 0)
                 {
                     body = status_json();

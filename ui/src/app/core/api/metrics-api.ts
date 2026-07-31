@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
+  AncGrain,
   BookingResponse,
   FlowsResponse,
   OperatorFlowsResponse,
@@ -43,6 +44,14 @@ export class MetricsApi {
    */
   previewStatus(uuid: string): Observable<PreviewStatus> {
     return this.http.get<PreviewStatus>(`/api/preview/${encodeURIComponent(uuid)}`);
+  }
+
+  /**
+   * The newest grain of a data flow. Nothing is provisioned and nothing needs
+   * tearing down — unlike startPreview, this is a plain read.
+   */
+  ancGrain(uuid: string): Observable<AncGrain> {
+    return this.http.get<AncGrain>(`/api/anc/${encodeURIComponent(uuid)}`);
   }
 
   /** Tear the path (and any audio publisher) back down. */

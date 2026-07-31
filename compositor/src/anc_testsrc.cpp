@@ -214,9 +214,15 @@ int main()
         }
 
         std::memcpy(payload, frame.data(), frame.size());
-        // For a data flow a slice is one byte, so validSlices is how many bytes a
-        // reader should trust. mxl-data-probe reads exactly this much.
-        info.validSlices = static_cast<std::uint16_t>(frame.size());
+        // grainSize carries the payload length; validSlices says the grain is
+        // COMPLETE. Those are different things and conflating them makes the flow
+        // unreadable: a grain committed with validSlices < totalSlices is treated
+        // as still being written, so a reader gets OUT_OF_RANGE_TOO_EARLY at the
+        // head and OUT_OF_RANGE_TOO_LATE one grain later, i.e. an empty window it
+        // can never read from. mxl-data-probe reads the length off grainSize and
+        // only consults validSlices for genuinely partial grains.
+        info.grainSize = static_cast<std::uint32_t>(frame.size());
+        info.validSlices = info.totalSlices;
 
         if (auto const ret = ::mxlFlowWriterCommitGrain(writer, &info); ret != MXL_STATUS_OK)
         {

@@ -272,6 +272,79 @@ int main()
         }
     }
 
+    // anc_frame.h's own parser — the one the ANC preview endpoint serves from —
+    // must agree with the probe's on every field. Two parsers that drift apart
+    // would mean the UI shows something the reference tool does not.
+    {
+        struct Case
+        {
+            unsigned h, m, s, f;
+            std::uint16_t line;
+        };
+        for (auto const& c : {Case{13, 45, 7, 22, 9}, Case{0, 0, 0, 0, 0},
+                 Case{23, 59, 59, 29, 2047}, Case{6, 30, 15, 11, 21}})
+        {
+            auto const udw = anc::build_atc_udw(c.h, c.m, c.s, c.f);
+            auto const frame = anc::build_anc_frame(
+                c.line, anc::kAtcDid, anc::kAtcSdid, udw.data(), anc::kAtcDataCount);
+
+            auto const ref =
+                probe::parseAncFrame(std::span<std::uint8_t const>{frame.data(), frame.size()});
+            auto const mine = anc::parse_anc_frame(frame.data(), frame.size());
+
+            auto const tag = std::to_string(c.h) + ":" + std::to_string(c.m);
+            if (!mine.has_value())
+            {
+                check(false, "anc_frame parser accepted the frame (" + tag + ")");
+                continue;
+            }
+            check_eq(mine->ancCount, ref.ancCount, "ancCount agrees (" + tag + ")");
+            check_eq(mine->elements.size(), ref.elements.size(), "element count agrees (" + tag + ")");
+            if (mine->elements.size() == ref.elements.size() && !ref.elements.empty())
+            {
+                auto const& a = mine->elements.front();
+                auto const& b = ref.elements.front();
+                check_eq(a.line, b.lineNumber, "line agrees (" + tag + ")");
+                check_eq(a.did, b.did, "DID agrees (" + tag + ")");
+                check_eq(a.sdid, b.sdid, "SDID agrees (" + tag + ")");
+                check_eq(a.dataCount, b.dataCount, "Data_Count agrees (" + tag + ")");
+                check_eq(a.udw.size(), b.udw.size(), "UDW count agrees (" + tag + ")");
+                for (std::size_t i = 0; i < a.udw.size() && i < b.udw.size(); ++i)
+                {
+                    check_eq(a.udw[i], b.udw[i], "UDW " + std::to_string(i) + " agrees (" + tag + ")");
+                }
+                // And the decode the UI will actually display.
+                char want[16];
+                std::snprintf(want, sizeof(want), "%02u:%02u:%02u:%02u", c.h, c.m, c.s, c.f);
+                check(anc::atc_timecode_bcd(a) == std::string{want},
+                    "timecode decodes to " + std::string{want});
+            }
+        }
+    }
+
+    // Malformed input must be refused, not read past the end: this parses bytes
+    // out of a shared ring that a half-written producer can leave inconsistent.
+    {
+        std::uint8_t tiny[3] = {0, 0, 0};
+        check(!anc::parse_anc_frame(tiny, sizeof(tiny)).has_value(), "refuses a short buffer");
+        check(!anc::parse_anc_frame(nullptr, 0).has_value(), "refuses a null buffer");
+
+        // Length field claiming more than the buffer holds.
+        auto const udw = anc::build_atc_udw(1, 2, 3, 4);
+        auto bad = anc::build_anc_frame(9, anc::kAtcDid, anc::kAtcSdid, udw.data(), anc::kAtcDataCount);
+        bad[0] = 0xff;
+        bad[1] = 0xff;
+        check(!anc::parse_anc_frame(bad.data(), bad.size()).has_value(), "refuses an oversized Length");
+
+        // Truncated mid-payload: the declared count outruns the bytes present.
+        auto truncated = anc::build_anc_frame(9, anc::kAtcDid, anc::kAtcSdid, udw.data(), anc::kAtcDataCount);
+        truncated.resize(truncated.size() - 6);
+        truncated[0] = static_cast<std::uint8_t>((truncated.size() - anc::kRfc8331HeaderBytes) >> 8);
+        truncated[1] = static_cast<std::uint8_t>((truncated.size() - anc::kRfc8331HeaderBytes) & 0xffU);
+        check(!anc::parse_anc_frame(truncated.data(), truncated.size()).has_value(),
+            "refuses a truncated payload");
+    }
+
     if (g_failures == 0)
     {
         std::printf("  all checks passed\n");

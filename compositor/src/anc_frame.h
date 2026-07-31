@@ -10,6 +10,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace anc
@@ -149,5 +152,173 @@ namespace anc
         push_be16(frame, 0);                                          // reserved
         frame.insert(frame.end(), packet.begin(), packet.end());
         return frame;
+    }
+
+    // ── Reading back ────────────────────────────────────────────────────────
+    // The mirror image of the builder, laid out to match libmxl's mxl-data-probe
+    // word for word — including the alignment rules the builder documents. Used
+    // by the ANC preview endpoint, and checked against the probe's own parser in
+    // the round-trip test, so the two cannot drift apart silently.
+    //
+    // Every read is bounds-checked: this parses whatever is sitting in a shared
+    // ring buffer, which a half-written or foreign producer can leave malformed.
+
+    struct AncElement
+    {
+        std::uint16_t line = 0;
+        std::uint8_t did = 0;
+        std::uint8_t sdid = 0;
+        std::uint8_t dataCount = 0;
+        std::vector<std::uint8_t> udw;
+    };
+
+    struct AncFrame
+    {
+        std::uint16_t length = 0;
+        std::uint8_t ancCount = 0;
+        std::vector<AncElement> elements;
+    };
+
+    class BitReader
+    {
+    public:
+        BitReader(std::uint8_t const* data, std::size_t size)
+            : _data{data}
+            , _size{size}
+        {}
+
+        bool read16(std::uint16_t& out)
+        {
+            if (_size - _offset < 2) return false;
+            out = static_cast<std::uint16_t>((_data[_offset] << 8) | _data[_offset + 1]);
+            _offset += 2;
+            return true;
+        }
+
+        std::size_t wordOffset() const { return _offset / 2; }
+
+        /// Ten-bit words, MSB first, starting from the current 16-bit boundary.
+        bool read10(std::uint16_t& out)
+        {
+            while (_bitCount < 10)
+            {
+                std::uint16_t w = 0;
+                if (!read16(w)) return false;
+                _acc = (_acc << 16) | w;
+                _bitCount += 16;
+            }
+            _bitCount -= 10;
+            out = static_cast<std::uint16_t>((_acc >> _bitCount) & 0x03ffU);
+            _acc &= (1U << _bitCount) - 1U;
+            return true;
+        }
+
+        /// Drops any partial 10-bit accumulation, so the next read10 starts on a
+        /// fresh 16-bit word — matching where the probe begins each element's UDW.
+        void realign()
+        {
+            _acc = 0;
+            _bitCount = 0;
+        }
+
+    private:
+        std::uint8_t const* _data;
+        std::size_t _size;
+        std::size_t _offset{0};
+        std::uint32_t _acc{0};
+        std::uint32_t _bitCount{0};
+    };
+
+    inline std::optional<AncFrame> parse_anc_frame(std::uint8_t const* data, std::size_t size)
+    {
+        if (data == nullptr || size < kRfc8331HeaderBytes) return std::nullopt;
+
+        BitReader r{data, size};
+        AncFrame frame;
+        std::uint16_t w = 0;
+        if (!r.read16(frame.length)) return std::nullopt;
+        if (!r.read16(w)) return std::nullopt;
+        frame.ancCount = static_cast<std::uint8_t>(w >> 8);
+        if (!r.read16(w)) return std::nullopt;
+
+        if (static_cast<std::size_t>(frame.length) + kRfc8331HeaderBytes > size) return std::nullopt;
+
+        for (std::uint8_t i = 0; i < frame.ancCount; ++i)
+        {
+            // The probe pads each element to a 32-bit boundary this way.
+            if ((r.wordOffset() % 2) == 0 && !r.read16(w)) return std::nullopt;
+
+            std::uint16_t w0 = 0;
+            std::uint16_t w2 = 0;
+            std::uint16_t w3 = 0;
+            if (!r.read16(w0) || !r.read16(w) || !r.read16(w2) || !r.read16(w3))
+            {
+                return std::nullopt;
+            }
+
+            AncElement e;
+            e.line = static_cast<std::uint16_t>((w0 >> 4) & 0x07ffU);
+            e.did = static_cast<std::uint8_t>((w2 >> 6) & 0x00ffU);
+            e.sdid = static_cast<std::uint8_t>(((w2 & 0x000fU) << 4) | ((w3 >> 12) & 0x000fU));
+            e.dataCount = static_cast<std::uint8_t>((w3 >> 2) & 0x00ffU);
+
+            // UDW start on the next whole word, not in w3's leftover two bits.
+            r.realign();
+            e.udw.reserve(e.dataCount);
+            for (std::uint8_t n = 0; n < e.dataCount; ++n)
+            {
+                std::uint16_t word = 0;
+                if (!r.read10(word)) return std::nullopt;
+                e.udw.push_back(static_cast<std::uint8_t>(word & 0x00ffU));
+            }
+            std::uint16_t checksum = 0;
+            if (!r.read10(checksum)) return std::nullopt;
+
+            frame.elements.push_back(std::move(e));
+        }
+        return frame;
+    }
+
+    /// The DID/SDID pairs libmxl's probe names, so the UI can label a packet
+    /// rather than showing two bare hex bytes.
+    inline char const* anc_name(std::uint8_t did, std::uint8_t sdid)
+    {
+        struct Entry
+        {
+            std::uint8_t did;
+            std::uint8_t sdid;
+            char const* name;
+        };
+        static constexpr Entry kNames[] = {
+            {0x41, 0x01, "SMPTE ST 352 Video Payload ID"           },
+            {0x41, 0x05, "SMPTE ST 2016 Active Format Description" },
+            {0x41, 0x07, "ANSI/SCTE 104 messages"                  },
+            {0x41, 0x08, "SMPTE ST 2031 VBI data"                  },
+            {0x41, 0x0C, "SMPTE ST 2108-1 HDR/WCG metadata"        },
+            {0x43, 0x02, "OP-47 Subtitling Distribution Packet"    },
+            {0x43, 0x03, "OP-47 VANC multipacket"                  },
+            {0x50, 0x01, "Wide Screen Signaling"                   },
+            {0x60, 0x60, "SMPTE ST 12-2 Ancillary Time Code"       },
+            {0x61, 0x01, "SMPTE ST 334 Caption Distribution Packet"},
+            {0x61, 0x02, "SMPTE ST 334 CEA-608 closed captions"    },
+        };
+        for (auto const& e : kNames)
+        {
+            if (e.did == did && e.sdid == sdid) return e.name;
+        }
+        return "";
+    }
+
+    /// The timecode this repo's anc-testsrc writes: BCD per field in the first
+    /// four user data words. Empty for anything else, including a real ST 12M-2
+    /// ATC packet, whose words mean something different — see anc_testsrc.cpp.
+    inline std::string atc_timecode_bcd(AncElement const& e)
+    {
+        if (e.did != kAtcDid || e.sdid != kAtcSdid || e.udw.size() < 4) return {};
+        auto twoDigit = [](std::uint8_t v) { return ((v >> 4) & 0x0fU) * 10U + (v & 0x0fU); };
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%02u:%02u:%02u:%02u", twoDigit(e.udw[0]),
+            twoDigit(e.udw[1]), twoDigit(e.udw[2]), twoDigit(e.udw[3]));
+        return std::string{buf};
     }
 }  // namespace anc

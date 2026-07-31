@@ -14,6 +14,8 @@
 # Endpoints:
 #   GET  /api/flows      -> combined JSON
 #   POST /api/kill/<n>   -> delete the writer-mxl-<n> pod (watch it recover)
+#   GET  /api/anc/<uuid> -> newest grain of a data flow, as hex plus parsed
+#                           RFC 8331 elements (data flows cannot be played)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with
 # the mounted SA token + CA. No pip deps so it runs on stock python:3-slim.
@@ -953,6 +955,20 @@ def preview_status(uuid):
     return 404, {"error": "no session for this flow"}
 
 
+def anc_grain(uuid):
+    """The newest grain of a data flow, for the overlay to display as bytes.
+
+    Data flows are the one format with no route to a browser: mediamtx cannot
+    pull them and there is nothing to push. So rather than provisioning a path,
+    this proxies audio-preview's stateless /anc read — the same pod, because it is
+    the one that already links libmxl — and the UI renders the hex and the RFC
+    8331 elements parsed out of it.
+    """
+    if not _UUID_RE.match(uuid or ""):
+        return 400, {"error": "bad flow id"}
+    return _audio_preview(f"/anc?flow={uuid}")
+
+
 def preview_del(uuid):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -994,6 +1010,10 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, operator_flows())
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/anc/"):
+            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
+            code, body = anc_grain(uuid)
+            self._send(code, body)
         elif self.path.startswith("/api/preview/"):
             # GET on the same collection POST/DELETE use: is this audio preview
             # actually producing yet, or did its reader fail to open?

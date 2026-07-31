@@ -79,8 +79,12 @@ export class OperatorFlowRow {
   protected readonly origin = computed(() => originState(this.flow().originFresh));
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
 
+  // Video is pulled by mediamtx, audio is pushed by the audio-preview pod, and
+  // data is neither — it has no route to a browser at all, so the overlay shows
+  // the grain's bytes instead of playing it. Anything else still has nothing to
+  // offer and says so.
   protected readonly previewable = computed(
-    () => this.format() === 'video' || this.format() === 'audio',
+    () => this.format() === 'video' || this.format() === 'audio' || this.format() === 'data',
   );
 
   protected readonly media = computed(() => {
@@ -102,7 +106,7 @@ export class OperatorFlowRow {
     this.preview$.open({
       id: f.id,
       label: f.label,
-      format: this.format() as 'video' | 'audio',
+      format: this.format() as 'video' | 'audio' | 'data',
       channels: f.detail?.media?.channels ?? DEFAULT_CHANNELS,
     });
   }
