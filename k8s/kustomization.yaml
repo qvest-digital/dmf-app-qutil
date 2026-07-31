@@ -6,7 +6,6 @@ resources:
   - mediamtx-deployment.yaml
   - mediamtx-service.yaml
   - mediamtx-webrtc-udp.yaml
-  - writer-deployment.yaml
   - composite-deployment.yaml
   - composite-service.yaml
   - metrics-aggregator.yaml
@@ -16,7 +15,6 @@ resources:
   # `audio-preview:8090` that the demo-metrics aggregator posts /start to — drop
   # it and every audio preview fails with a DNS error, not a useful message.
   - audio-preview.yaml
-  - audio-testsrc.yaml
   - test-sources.yaml
 
 # Hash-suffixed configmaps: any change to a file under config/ produces

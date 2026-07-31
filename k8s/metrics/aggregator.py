@@ -34,6 +34,9 @@ def _own_namespace():
 
 NS = os.environ.get("DEMO_NS") or _own_namespace()
 GW_NS = os.environ.get("GW_NS", "mxl-system")
+# The writers are booked from the catalog, so they run in the namespace the
+# MediaProduction owns rather than beside this aggregator.
+WRITER_NS = os.environ.get("WRITER_NS", "production-demo-app")
 FLOW_PREFIX = os.environ.get("FLOW_PREFIX", "d4d00000-0000-0000-0000-00000000000")
 N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 
@@ -98,6 +101,8 @@ def build():
     comp_err = stats.get("_error")
 
     pods = safe_k8s(f"/api/v1/namespaces/{NS}/pods").get("items", [])
+    writer_pods = (pods if WRITER_NS == NS
+                   else safe_k8s(f"/api/v1/namespaces/{WRITER_NS}/pods").get("items", []))
     receivers = safe_k8s(
         f"/apis/mxl.qvest-digital.com/v1alpha1/namespaces/{NS}/mxlreceivers").get("items", [])
     mirrors = safe_k8s(
@@ -110,8 +115,12 @@ def build():
     gw_pods = safe_k8s(f"/api/v1/namespaces/{GW_NS}/pods?labelSelector=app.kubernetes.io/component=gateway").get("items", [])
 
     def find_pod(app):
-        for p in pods:
-            if p.get("metadata", {}).get("labels", {}).get("app") == app:
+        # The chart names the release after the claim, so the claim name lands
+        # on app.kubernetes.io/instance. Older raw Deployments carried it as
+        # plain app; both are accepted so a half-migrated cluster still reads.
+        for p in writer_pods:
+            labels = p.get("metadata", {}).get("labels", {})
+            if app in (labels.get("app.kubernetes.io/instance"), labels.get("app")):
                 return p
         return None
 
@@ -1028,10 +1037,14 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "flow out of range"})
             app = f"writer-mxl-{n}"
             killed = []
-            for p in safe_k8s(f"/api/v1/namespaces/{NS}/pods?labelSelector=app={app}").get("items", []):
+            sel = f"app.kubernetes.io/instance={app}"
+            found = safe_k8s(f"/api/v1/namespaces/{WRITER_NS}/pods?labelSelector={sel}").get("items", [])
+            if not found:
+                found = safe_k8s(f"/api/v1/namespaces/{WRITER_NS}/pods?labelSelector=app={app}").get("items", [])
+            for p in found:
                 name = p["metadata"]["name"]
                 try:
-                    k8s(f"/api/v1/namespaces/{NS}/pods/{name}", method="DELETE")
+                    k8s(f"/api/v1/namespaces/{WRITER_NS}/pods/{name}", method="DELETE")
                     killed.append(name)
                 except Exception as e:
                     return self._send(500, {"error": f"delete {name}: {e}"})
