@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.7](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.6...v1.0.0-rc.7) (2026-07-31)
+
+
+### Features
+
+* **k8s:** book the writers from the catalog ([#86](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/86)) ([0a50d66](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/0a50d66c0d04d28d9e0c84d551b6c344e96e2c40))
+
+
+### Continuous Integration
+
+* spare update bots the subject length limit ([#84](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/84)) ([f392a1d](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/f392a1de135a36ceab6b34eb3d8432c6294c54fb))
+
 ## [1.0.0-rc.6](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.5...v1.0.0-rc.6) (2026-07-30)
 
 
