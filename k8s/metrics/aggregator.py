@@ -791,8 +791,8 @@ def operator_flows():
 #
 # Audio flows go the other way round. mediamtx's mxlSource refuses them
 # ("flow <id> is not video (format=audio)"), so nothing can PULL an audio flow —
-# instead the audio-preview pod (k8s/audio-preview.yaml) reads it via libmxl and
-# PUSHES it over RTSP. mediamtx only has a publisher slot for a path that
+# instead the audio-preview container beside it (k8s/mediamtx-deployment.yaml)
+# reads it via libmxl and PUSHES it over RTSP. mediamtx only has a publisher slot for a path that
 # exists, and mediamtx.yml declares just a couple, so the path is created in
 # publisher mode (empty config, no source) before the pod is asked to start.
 #

@@ -48,7 +48,7 @@ spec:
         # operator hasn't materialized the MxlFlowMirror yet.
         - name: install-intent-shim
           # renovate: datasource=docker depName=ghcr.io/qvest-digital/mxl-k8s/shim
-          image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.3
+          image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.14
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: intent-shim

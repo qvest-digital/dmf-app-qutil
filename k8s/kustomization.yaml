@@ -10,11 +10,6 @@ resources:
   - composite-service.yaml
   - metrics-aggregator.yaml
   - txdarwin-output-viewer.yaml
-  # Audible previews of audio flows: mediamtx's mxlSource is video-only, so this
-  # pod reads the flow itself and RTSP-publishes Opus. It carries the Service
-  # `audio-preview:8090` that the demo-metrics aggregator posts /start to — drop
-  # it and every audio preview fails with a DNS error, not a useful message.
-  - audio-preview.yaml
   - test-sources.yaml
 
 # Hash-suffixed configmaps: any change to a file under config/ produces

@@ -52,12 +52,12 @@ spec:
       imagePullSecrets:
         - name: demo-app-ghcr-pull
       initContainers:
-        # Same shim as the compositor — mediamtx-mxl calls
-        # mxlCreateFlowReader and would race the agent's mirror
+        # Same shim as the compositor — mediamtx-mxl and the audio preview
+        # both call mxlCreateFlowReader and would race the agent's mirror
         # materialization without it.
         - name: install-intent-shim
           # renovate: datasource=docker depName=ghcr.io/qvest-digital/mxl-k8s/shim
-          image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.3
+          image: ghcr.io/qvest-digital/mxl-k8s/shim:v1.0.0-rc.14
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: intent-shim
@@ -118,6 +118,85 @@ spec:
               cpu: "10"
               memory: 8Gi
 
+        # Audible previews for MXL AUDIO flows: the feature mediamtx is
+        # missing. Its mxlSource rejects any flow whose format is not video
+        # ("flow <id> is not video (format=audio)") and retries the open every
+        # 5s forever, so there is no mxl:// path from an audio/float32 flow to
+        # a browser. This container reads the flow's per-channel ring buffers
+        # via libmxl, interleaves them to F32LE, encodes Opus for WHEP and AAC
+        # for HLS, and publishes both over RTSP into paths the aggregator
+        # created in publisher mode.
+        #
+        # It rides in this pod rather than one of its own because everything it
+        # needs is already here. The RTSP hop it publishes over is now
+        # loopback, and the flow it reads has to be mirrored to exactly the
+        # node that already has to hold every previewable flow for the video
+        # side. As a Deployment it carried a hard podAffinity onto the
+        # compositor's node instead, which no autoscaler can satisfy: a term
+        # against a running pod is only satisfiable on the node already running
+        # it, so a full compositor node left the preview Pending with no new
+        # node able to help.
+        #
+        # On demand, not always-on: the multiviewer's Operator-flows list can
+        # hold any number of audio flows and its preview overlay opens one at a
+        # time, so a pod per flow would not scale. demo-metrics POSTs
+        # /start?flow=<uuid> when an overlay opens and DELETEs /stop?flow=<uuid>
+        # on close; this one container serves up to MXL_MAX_SESSIONS at once.
+        #
+        # No readinessProbe on purpose. Pod readiness is the AND of its
+        # containers, and gating the multiviewer's HLS and WebRTC on the audio
+        # preview would let a stuck preview blank every video tile. The
+        # liveness probe restarts this container alone.
+        - name: audio-preview
+          image: ghcr.io/qvest-digital/mxl-dmf-demo-app/compositor-mxlk8s:latest
+          imagePullPolicy: Always
+          # Second entry point in the compositor image — same libmxl and
+          # GStreamer link line, sample API instead of the grain API.
+          command: ["/usr/bin/mxl-audio-preview"]
+          ports:
+            - containerPort: 8090
+              name: control
+          env:
+            # The runtime root is what gets mounted; the domain below it is
+            # this process's configuration, the same split the catalog's media
+            # functions use.
+            - name: MXL_DOMAIN
+              value: /run/mxl/domain
+            # Loopback: mediamtx's rtspAddress is :8554 and it is in this pod.
+            - name: MXL_PREVIEW_RTSP_BASE
+              value: rtsp://127.0.0.1:8554/preview-audio-
+            - name: MXL_CONTROL_PORT
+              value: "8090"
+            - name: MXL_MAX_SESSIONS
+              value: "4"
+            - name: LD_PRELOAD
+              value: /opt/mxl-intent/libmxl-intent.so
+          securityContext:
+            capabilities:
+              # libmxl mlocks the tmpfs grain pages on the reader side too.
+              add: ["IPC_LOCK", "SYS_RESOURCE"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: control
+            periodSeconds: 10
+          volumeMounts:
+            - name: mxl-run
+              mountPath: /run/mxl
+              readOnly: false
+            - name: intent-shim
+              mountPath: /opt/mxl-intent
+              readOnly: true
+          resources:
+            # Opus at 128kbit on a couple of channels is trivial next to the
+            # composite's x264 pass.
+            requests:
+              cpu: "250m"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+
         # Caddy sidecar: serves the Angular multiviewer at /, reverse-proxies
         # HLS at /hls/* to mediamtx on localhost, and rewrites mediamtx's
         # cookieCheck 302 Location headers so the browser stays on the
@@ -162,12 +241,14 @@ spec:
         - name: config
           configMap:
             name: mediamtx-config
-        # Per-node MXL domain shared with the mxl-k8s agent + gateway
-        # DaemonSets via hostPath. The agent materializes mirrors here;
-        # mediamtx-mxl's static source reads from this same path.
-        # Mounting the whole /run/mxl (not just domain/) means the
-        # intent-shim always resolves agent.sock through the current
-        # directory entry rather than a pinned inode.
+        # The MXL runtime root, shared with the mxl-k8s agent + gateway
+        # DaemonSets via hostPath: the domain the agent materializes mirrors
+        # into, and the agent.sock the shim reports intent over. Both readers
+        # in this pod get the root and resolve the domain below it themselves.
+        # Mounting the root rather than domain/ and agent.sock separately
+        # matters: a single-file hostPath mount pins the socket's inode at
+        # container start, and the agent unlinks and recreates agent.sock on
+        # every restart, stranding a running consumer on the dead inode.
         - name: mxl-run
           hostPath:
             path: /run/mxl
