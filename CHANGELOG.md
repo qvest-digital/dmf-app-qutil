@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.10](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.9...v1.0.0-rc.10) (2026-08-01)
+
+
+### Bug Fixes
+
+* **k8s:** fold the audio preview into the mediamtx pod ([#91](https://github.com/qvest-digital/mxl-dmf-demo-app/issues/91)) ([84d15eb](https://github.com/qvest-digital/mxl-dmf-demo-app/commit/84d15eb78abdefaf15521ef0e42641720ef903bf))
+
 ## [1.0.0-rc.9](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.8...v1.0.0-rc.9) (2026-07-31)
 
 
