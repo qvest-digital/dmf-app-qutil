@@ -26,3 +26,22 @@ spec:
     - name: api
       port: 9997
       targetPort: 9997
+---
+# The audio preview's own control API. It runs as a container in the mediamtx
+# pod, so this selects the same pods; it keeps its own Service because the name
+# is what the aggregator resolves (AUDIO_PREVIEW_API) and because the two APIs
+# answer for different things.
+apiVersion: v1
+kind: Service
+metadata:
+  name: audio-preview
+  labels:
+    app: audio-preview
+spec:
+  type: ClusterIP
+  selector:
+    app: mediamtx
+  ports:
+    - name: control
+      port: 8090
+      targetPort: control
