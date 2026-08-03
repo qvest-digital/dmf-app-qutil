@@ -20,6 +20,8 @@ metadata:
     {{- include "qutil.labels" $root | nindent 4 }}
 spec:
   className: {{ $root.Values.writers.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ $root.Values.booking.reprovisionOnDrift }}
   booking:
     jobRef: {{ $root.Values.booking.jobRef | quote }}
   parameters:
@@ -54,6 +56,8 @@ metadata:
     {{- include "qutil.labels" $root | nindent 4 }}
 spec:
   className: {{ $root.Values.writers.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ $root.Values.booking.reprovisionOnDrift }}
   booking:
     jobRef: {{ $root.Values.booking.jobRef | quote }}
   parameters:

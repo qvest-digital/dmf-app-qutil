@@ -24,6 +24,8 @@ metadata:
     {{- include "qutil.labels" . | nindent 4 }}
 spec:
   className: {{ .Values.compositor.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
   booking:
     jobRef: {{ .Values.booking.jobRef | quote }}
   parameters:

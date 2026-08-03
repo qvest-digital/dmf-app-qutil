@@ -19,6 +19,8 @@ metadata:
     {{- include "qutil.labels" . | nindent 4 }}
 spec:
   className: {{ .Values.mediamtx.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
   booking:
     jobRef: {{ .Values.booking.jobRef | quote }}
   parameters:
