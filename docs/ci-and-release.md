@@ -60,10 +60,12 @@ labels helper already sets is the easy way to write one.
 
 ## 5. Dependency automation
 
-Renovate runs on `config:recommended`, with `minimumReleaseAge: 3 days` and
-`prHourlyLimit: 2` to keep the noise down. The one third-party image the chart
-runs is pinned by digest in chart values and carries no marker, so nothing
-bumps it automatically.
+Renovate runs on `config:recommended`. `minimumReleaseAge: 3 days` keeps a
+just-published version out until it has settled. `prHourlyLimit: 0` removes the
+rate limit; the option defaults to 2, so it has to be set rather than omitted.
+
+The one third-party image the chart runs is pinned by digest in chart values
+and carries no marker, so nothing bumps it automatically.
 
 The `go-mxl` version is not managed here. MXL's domain protocol requires every
 reader and writer sharing a domain to link a byte-identical `libmxl.so`, so a
