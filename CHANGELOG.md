@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.14](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.13...v1.0.0-rc.14) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ui:** recover a tile from a fatal playback error ([#103](https://github.com/qvest-digital/dmf-app-qutil/issues/103)) ([ad17a23](https://github.com/qvest-digital/dmf-app-qutil/commit/ad17a23ca9af36971be4139082fe92bd368cb14c))
+
 ## [1.0.0-rc.13](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.12...v1.0.0-rc.13) (2026-08-03)
 
 
