@@ -16,19 +16,22 @@ metadata:
   name: {{ .name }}
   labels:
     {{- include "qutil.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: test-source
+    app.kubernetes.io/component: {{ .name }}
 spec:
   replicas: 1
+  # The component carries the source name because there is more than one of
+  # them: a shared component value would make each Deployment select the
+  # other's pods. The name label stays chart-wide, as qutil.labels sets it.
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ .name }}
+      app.kubernetes.io/name: {{ include "qutil.name" $root }}
       app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ .name }}
   template:
     metadata:
       labels:
         {{- include "qutil.labels" $root | nindent 8 }}
-        app.kubernetes.io/name: {{ .name }}
-        app.kubernetes.io/component: test-source
+        app.kubernetes.io/component: {{ .name }}
     spec:
       containers:
         - name: ffmpeg
