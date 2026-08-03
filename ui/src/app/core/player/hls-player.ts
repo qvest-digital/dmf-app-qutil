@@ -93,9 +93,9 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
 
   /**
    * A fatal error means hls.js has already exhausted its own retries, so the
-   * response has to match the error type. Reloading the source instead only
-   * re-fetches the playlist without resetting the pipeline: the tile stays black
-   * while mediamtx opens a fresh HLS session per attempt.
+   * response has to match the error type. The two differ in what has to be
+   * rebuilt, and getting either wrong leaves the element black until the page
+   * is reloaded.
    */
   const onError = (_event: unknown, data: ErrorData) => {
     if (!data.fatal || stopped) return;
@@ -103,9 +103,11 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
     clearRetry();
 
     if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-      // Resets the MediaSource and resumes from the playhead. Rate-limited
-      // because a source that keeps failing to decode would otherwise be
-      // recovered on every error in a loop.
+      // The pipeline is what failed, so reset the MediaSource and resume from
+      // the playhead. Re-fetching the playlist instead leaves the pipeline in
+      // place and the element black, while the server opens a session per
+      // attempt. Rate-limited because a source that keeps failing to decode
+      // would otherwise be recovered on every error in a loop.
       const now = Date.now();
       if (now - recoveredAt < retryMs) return;
       recoveredAt = now;
@@ -118,12 +120,18 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
     }
 
     if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-      // Loading is what failed, so resume loading rather than rebuild. Not
-      // immediately: hls.js documents restarting at once as a way to loop.
+      // The manifest is what failed, and loading it again is the only thing
+      // that recovers it. startLoad is not that: it takes effect only once a
+      // manifest has been parsed, so on a path that was not being served yet
+      // it does nothing and the element never comes back. Paths here are
+      // created on demand, so a player that starts before its path is serving
+      // is the normal case, not an edge one.
+      //
+      // Not immediately: restarting at once is a documented way to loop.
       retry = setTimeout(() => {
         if (stopped) return;
         try {
-          hls?.startLoad();
+          hls?.loadSource(src);
         } catch {
           rebuild();
         }
