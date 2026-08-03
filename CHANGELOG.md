@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.16](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.15...v1.0.0-rc.16) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ui:** reload the manifest when a player outlives its path ([#107](https://github.com/qvest-digital/dmf-app-qutil/issues/107)) ([402019c](https://github.com/qvest-digital/dmf-app-qutil/commit/402019c42476d8810ded29a6f3ce509ef3fd46e7))
+
 ## [1.0.0-rc.15](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.14...v1.0.0-rc.15) (2026-08-03)
 
 
