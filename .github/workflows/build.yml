@@ -3,21 +3,13 @@ name: Push manifests
 # Renders the k8s manifests and pushes them as an OCI artifact for Flux to
 # reconcile. This workflow builds no image.
 #
-# The chart published by chart-publish.yml carries the same workloads. This
-# artifact remains for consumers that reconcile the k8s tree directly.
+# The chart published by chart-publish.yml is the current delivery path and
+# carries the same workloads. This workflow runs on manual dispatch only: the
+# tag it publishes floats, a cluster reconciles that tag directly, and the
+# k8s tree no longer matches the configuration such a cluster supplies. An
+# automatic publish would hand a live consumer a tree it cannot run.
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
-    # Same code path as push: render the manifests + push them as an OCI
-    # artifact tagged pr-<N> so terraform PR envs can repoint their
-    # demo-app OCIRepository at the matching consumer-side spec.
-    paths:
-      - "k8s/**"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
     inputs:
       pr_env:
@@ -92,24 +84,9 @@ jobs:
               --tag "${PR_ENV}-latest" \
               --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
             echo "Tagged: mxl-dmf-demo-app-manifests:${PR_ENV}-latest"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            TAG="pr-${{ github.event.pull_request.number }}"
-            flux tag artifact \
-              "oci://${REPO}:${SHORT_SHA}" \
-              --tag "${TAG}" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:${TAG}"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            flux tag artifact "oci://${REPO}:${SHORT_SHA}" \
-              --tag "${GITHUB_REF_NAME}" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:${GITHUB_REF_NAME}"
-          elif [ "$GITHUB_REF_NAME" = "main" ]; then
-            flux tag artifact \
-              "oci://${REPO}:${SHORT_SHA}" \
-              --tag "latest" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:latest"
           else
-            echo "Skipping tag -- not on main and no pr_env set (branch: $GITHUB_REF_NAME)"
+            # The floating tag is never written here. A cluster reconciles
+            # that tag directly, so moving it would hand a running deployment
+            # a tree built from a different branch than the one it runs.
+            echo "Skipping tag -- no pr_env set (branch: $GITHUB_REF_NAME)"
           fi
