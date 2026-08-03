@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.12](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.11...v1.0.0-rc.12) (2026-08-03)
+
+
+### Bug Fixes
+
+* **chart:** stop repeating a label the helper already sets ([#98](https://github.com/qvest-digital/dmf-app-qutil/issues/98)) ([8262d4a](https://github.com/qvest-digital/dmf-app-qutil/commit/8262d4a31683829b8ceb679bc4cb188680ea5034))
+
 ## [1.0.0-rc.11](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.10...v1.0.0-rc.11) (2026-08-03)
 
 
