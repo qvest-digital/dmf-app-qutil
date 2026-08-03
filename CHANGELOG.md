@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.11](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.10...v1.0.0-rc.11) (2026-08-03)
+
+
+### Features
+
+* **chart:** package the app and its bookings as a chart ([#94](https://github.com/qvest-digital/dmf-app-qutil/issues/94)) ([7e6e7c7](https://github.com/qvest-digital/dmf-app-qutil/commit/7e6e7c779a3872740a2b50fac167fff793ea738d))
+* **multiviewer:** serve the tiles from paths made on request ([#95](https://github.com/qvest-digital/dmf-app-qutil/issues/95)) ([8c41275](https://github.com/qvest-digital/dmf-app-qutil/commit/8c412757a4bc077533ca905c15564402cb5af987))
+
+
+### Miscellaneous
+
+* shed the compositor and document the app as a booking consumer ([#93](https://github.com/qvest-digital/dmf-app-qutil/issues/93)) ([d02feae](https://github.com/qvest-digital/dmf-app-qutil/commit/d02feae7c15c1456d4f950b915371ec654752c50))
+
 ## [1.0.0-rc.10](https://github.com/qvest-digital/mxl-dmf-demo-app/compare/v1.0.0-rc.9...v1.0.0-rc.10) (2026-08-01)
 
 
