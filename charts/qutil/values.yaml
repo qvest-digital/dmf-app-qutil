@@ -131,6 +131,14 @@ writers:
 
 booking:
   jobRef: mediaops/demo-app
+  # These claims are applied by this release, not raised per job, so their
+  # parameters change whenever the release is upgraded and their classes change
+  # whenever the catalog is. Without this the booked functions keep running what
+  # they were first provisioned with until something deletes the claims.
+  #
+  # It costs a workload restart when an input moves, which is the trade a claim
+  # raised per job would not want and this one does.
+  reprovisionOnDrift: true
 
 # Gateway API route. The hostname is per-cluster and has no sensible default.
 ingress:
