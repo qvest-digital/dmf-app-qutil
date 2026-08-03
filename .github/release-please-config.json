@@ -8,7 +8,9 @@
   "prerelease": true,
   "initial-version": "1.0.0-rc.0",
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": ["charts/qutil/Chart.yaml"]
+    }
   },
   "changelog-sections": [
     {"type": "feat",     "section": "Features"},
