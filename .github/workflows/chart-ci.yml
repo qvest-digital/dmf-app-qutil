@@ -1,0 +1,26 @@
+name: chart
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - run: helm lint charts/qutil
+
+      # helm accepts a duplicated mapping key; the post-renderer Flux installs
+      # through refuses the document, so a chart that lints can still fail to
+      # install.
+      - run: pip install --quiet pyyaml
+      - run: hack/check-render.py charts/qutil
