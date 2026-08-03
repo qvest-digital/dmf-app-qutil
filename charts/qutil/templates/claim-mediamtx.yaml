@@ -1,0 +1,30 @@
+{{- if .Values.mediamtx.enabled }}
+{{- /* The media server the multiviewer plays from. Booked rather than
+       deployed: it is a catalog media function, and its image, MXL runtime
+       volume and WebRTC UDP service all come from the class.
+
+       paths carries exactly one entry, and deliberately no per-flow path. A
+       publisher path has to exist before the compositor can push into it, and
+       that one never changes. Per-flow preview paths are created and deleted
+       over the HTTP API while the server runs: routing them through the claim
+       would roll the pod on every overlay open, and claim parameters are
+       consumed at provision time only, so an edit would not take effect on a
+       bound claim anyway. */ -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.mediamtx.claimName }}
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.mediamtx.className }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+  parameters:
+    paths:
+      {{- toYaml .Values.mediamtx.paths | nindent 6 }}
+    {{- with .Values.mediamtx.parameters }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

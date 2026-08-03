@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "qutil.fullname" . }}-ui
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+data:
+  # Rendered through tpl so the proxy targets follow the booked claims.
+  Caddyfile: |
+{{ tpl (.Files.Get "files/Caddyfile") . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "qutil.fullname" . }}-ui
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ui.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "qutil.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ui
+  template:
+    metadata:
+      annotations:
+        # A Caddyfile change has to reach a running pod, and a ConfigMap
+        # update alone does not restart one.
+        checksum/config: {{ tpl (.Files.Get "files/Caddyfile") . | sha256sum }}
+      labels:
+        {{- include "qutil.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ui
+    spec:
+      {{- if .Values.imagePullSecret.enabled }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      {{- end }}
+      containers:
+        - name: caddy
+          image: {{ include "qutil.ui.image" . }}
+          imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.ui.service.targetPort }}
+          volumeMounts:
+            - name: caddy-conf
+              mountPath: /etc/caddy
+              readOnly: true
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+      volumes:
+        - name: caddy-conf
+          configMap:
+            name: {{ include "qutil.fullname" . }}-ui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "qutil.fullname" . }}-ui
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "qutil.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ui
+  ports:
+    - name: http
+      port: {{ .Values.ui.service.port }}
+      targetPort: http

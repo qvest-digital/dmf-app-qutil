@@ -1,0 +1,54 @@
+{
+  auto_https off
+}
+:8080 {
+  encode gzip
+
+  # handle / handle_path blocks are mutually exclusive and run in source
+  # order, so this catches /healthz before the catch-all hits it. Plain
+  # `respond /healthz` would be reordered late by Caddy and swallowed
+  # by the file_server below.
+  handle /healthz {
+    respond "ok" 200
+  }
+
+  # Per-flow RDMA-delivery metrics from the compositor's stats server. The
+  # compositor is booked into the production namespace, so this crosses a
+  # namespace boundary rather than reaching a pod-local port.
+  handle /stats.json {
+    reverse_proxy http://{{ .Values.compositor.claimName }}.{{ include "qutil.productionNamespace" . }}:9090
+  }
+
+  # Detailed per-flow metrics and the flow-kill control, served by the
+  # aggregator in this release's own namespace.
+  handle /api/* {
+    reverse_proxy http://{{ include "qutil.fullname" . }}-aggregator:{{ .Values.aggregator.service.port }}
+  }
+
+  # The media server is a booked media function, not a container in this pod,
+  # so HLS and WHEP cross a namespace boundary too. Rewrite the Location
+  # header so the WHEP session resource stays under /webrtc.
+  # (ICE media does NOT go through here -- that is the UDP LoadBalancer the
+  # mediamtx class publishes.)
+  handle_path /hls/* {
+    reverse_proxy http://{{ .Values.mediamtx.claimName }}.{{ include "qutil.productionNamespace" . }}:8888 {
+      header_down Location "^/(.*)$" "/hls/$1"
+    }
+  }
+
+  handle_path /webrtc/* {
+    reverse_proxy http://{{ .Values.mediamtx.claimName }}.{{ include "qutil.productionNamespace" . }}:8889 {
+      header_down Location "^/(.*)$" "/webrtc/$1"
+    }
+  }
+
+  # The multiviewer is a single-page app with a route per tab. Those paths are
+  # not files, so a reload or a shared link would 404 against the file_server;
+  # try_files hands anything that is not a real asset to index.html and lets
+  # the router resolve it.
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}

@@ -1,0 +1,76 @@
+{{- if .Values.testSources.enabled }}
+{{- /* Cluster-internal SRT generators standing in for playout sources. Each
+       dials one srt-ingest bridge, so they are only useful where srt-ingest is
+       deployed and the bridge Secret exists.
+
+       Shell variables are written without braces. The passphrase Secret
+       belongs to srt-ingest, which may appear after this app, so the volume is
+       optional and the script waits for the key rather than the pod failing to
+       start on a missing mount. */ -}}
+{{- $root := . }}
+{{- range .Values.testSources.sources }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "qutil.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: test-source
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .name }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "qutil.labels" $root | nindent 8 }}
+        app.kubernetes.io/name: {{ .name }}
+        app.kubernetes.io/component: test-source
+    spec:
+      containers:
+        - name: ffmpeg
+          image: {{ $root.Values.testSources.image }}
+          env:
+            - name: TARGET
+              value: {{ .target | quote }}
+            - name: LABEL
+              value: {{ .label | quote }}
+            - name: PATTERN
+              value: {{ .pattern | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+              until [ -s /secrets/SRT_PASSPHRASE ]; do
+                echo "warte auf {{ $root.Values.testSources.bridgeSecretName }} (kommt mit srt-ingest)"
+                sleep 10
+              done
+              SRT_PASSPHRASE=$(cat /secrets/SRT_PASSPHRASE)
+              while true; do
+                ffmpeg -hide_banner -loglevel warning -re \
+                  -f lavfi -i "$PATTERN" \
+                  -vf "drawtext=fontfile=$FONT:text='$LABEL':fontcolor=white:fontsize=64:box=1:boxcolor=black@0.6:boxborderw=16:x=(w-text_w)/2:y=60,drawtext=fontfile=$FONT:text='%{localtime\:%T}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=12:x=(w-text_w)/2:y=h-130" \
+                  -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p \
+                  -b:v 3000k -g 30 \
+                  -mode caller -pbkeylen 16 -passphrase "$SRT_PASSPHRASE" \
+                  -f mpegts "srt://$TARGET" || true
+                echo "feed to $TARGET ended, reconnecting in 5s"
+                sleep 5
+              done
+          resources:
+            {{- toYaml $root.Values.testSources.resources | nindent 12 }}
+          volumeMounts:
+            - name: bridge-secret
+              mountPath: /secrets
+              readOnly: true
+      volumes:
+        - name: bridge-secret
+          secret:
+            secretName: {{ $root.Values.testSources.bridgeSecretName }}
+            optional: true
+{{- end }}
+{{- end }}
