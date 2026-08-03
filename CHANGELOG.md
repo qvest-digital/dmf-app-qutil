@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.15](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.14...v1.0.0-rc.15) (2026-08-03)
+
+
+### Features
+
+* **chart:** let the booked functions follow their inputs ([#105](https://github.com/qvest-digital/dmf-app-qutil/issues/105)) ([35c2442](https://github.com/qvest-digital/dmf-app-qutil/commit/35c24424a5d5be014c9cae06d703f7a14f6e8439))
+
 ## [1.0.0-rc.14](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.13...v1.0.0-rc.14) (2026-08-03)
 
 
