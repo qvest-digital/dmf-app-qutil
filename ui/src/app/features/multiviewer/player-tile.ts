@@ -28,11 +28,6 @@ export class PlayerTile {
 
   private readonly shell = viewChild.required(VideoShell);
 
-  /** The mediamtx path this tile plays. */
-  get path(): string {
-    return `mxl-${this.n()}`;
-  }
-
   get video(): HTMLVideoElement {
     return this.shell().video;
   }

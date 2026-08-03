@@ -11,13 +11,13 @@ describe('PlayerRegistry', () => {
     registry.track({ kind: 'pc', stop: () => undefined });
     registry.track({ kind: 'pc', stop: () => undefined });
     registry.track({ kind: 'hls', stop: () => undefined });
-    expect(registry.counts()).toEqual({ pc: 2, hls: 1, timer: 0 });
+    expect(registry.counts()).toEqual({ pc: 2, hls: 1, timer: 0, preview: 0 });
   });
 
   it('forgets a dropped entry', () => {
     const entry = registry.track({ kind: 'hls', stop: () => undefined });
     registry.drop(entry);
-    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0 });
+    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0, preview: 0 });
   });
 
   // The whole point of the registry: a hidden tab must leave nothing decoding.
@@ -26,11 +26,14 @@ describe('PlayerRegistry', () => {
     registry.track({ kind: 'pc', stop: () => stopped.push('pc') });
     registry.track({ kind: 'hls', stop: () => stopped.push('hls') });
     registry.track({ kind: 'timer', stop: () => stopped.push('timer') });
+    // A held mediamtx path is torn down by the same pass, which is what stops a
+    // tile leaving a reader running on the server after it leaves the screen.
+    registry.track({ kind: 'preview', stop: () => stopped.push('preview') });
 
     registry.teardownAll();
 
-    expect(stopped.sort()).toEqual(['hls', 'pc', 'timer']);
-    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0 });
+    expect(stopped.sort()).toEqual(['hls', 'pc', 'preview', 'timer']);
+    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0, preview: 0 });
   });
 
   // The original swallowed a ReferenceError here and left the PeerConnection open.
@@ -48,18 +51,18 @@ describe('PlayerRegistry', () => {
 
     expect(() => registry.teardownAll()).not.toThrow();
     expect(stopped).toEqual(['hls']);
-    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0 });
+    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0, preview: 0 });
   });
 
   it('survives an entry that drops itself while being stopped', () => {
     const entry = registry.track({ kind: 'hls', stop: () => registry.drop(entry) });
     expect(() => registry.teardownAll()).not.toThrow();
-    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0 });
+    expect(registry.counts()).toEqual({ pc: 0, hls: 0, timer: 0, preview: 0 });
   });
 
   it('exposes the verification probe the runbook uses', () => {
     const probe = (globalThis as unknown as { __mvDebug?: { counts: () => unknown } }).__mvDebug;
     registry.track({ kind: 'pc', stop: () => undefined });
-    expect(probe?.counts()).toEqual({ pc: 1, hls: 0, timer: 0 });
+    expect(probe?.counts()).toEqual({ pc: 1, hls: 0, timer: 0, preview: 0 });
   });
 });
