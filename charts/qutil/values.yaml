@@ -96,27 +96,74 @@ writers:
   grainRate:
     numerator: 30000
     denominator: 1001
+  # Per pattern, because the spread is wide: an animated pattern regenerates
+  # every frame where a static one repeats it. The class ships one envelope for
+  # all of them, sized for 1080p50, which reserves several times what any of
+  # these needs at this geometry and makes a cluster look full while it idles.
+  #
+  # Figures are measured at this geometry on both an AWS and a bare-metal
+  # cluster, taken as the lifetime average of the pod's cgroup over hours. The
+  # class README's 720p30 numbers are scaled rather than measured and read 3 to
+  # 5 times low, so they are not the basis here.
+  #
+  # Requests carry the higher of the two clusters plus room, since the same
+  # pattern costs about twice as much on the AWS CPUs. Limits stay well clear of
+  # the peak: none of these has ever been throttled and none should start.
   video:
     - name: writer-mxl-1
       groupHint: mxl-multiviewer-1
       flowId: d4d00000-0000-0000-0000-000000000001
       pattern: smpte
       overlayText: MXL-1
+      # 531m bare metal, 479m AWS.
+      resources:
+        requests:
+          cpu: 700m
+          memory: 256Mi
+        limits:
+          cpu: "1500m"
+          memory: 512Mi
     - name: writer-mxl-2
       groupHint: mxl-multiviewer-2
       flowId: d4d00000-0000-0000-0000-000000000002
       pattern: ball
       overlayText: MXL-2
+      # The animated one, and the only writer that needs more than a core:
+      # 611m bare metal, 1132m AWS. The bare-metal figure is the cost of the
+      # ~25 grains/s it currently reaches, not of a full 30.
+      resources:
+        requests:
+          cpu: 1400m
+          memory: 256Mi
+        limits:
+          cpu: "2500m"
+          memory: 512Mi
     - name: writer-mxl-3
       groupHint: mxl-multiviewer-3
       flowId: d4d00000-0000-0000-0000-000000000003
       pattern: gamut
       overlayText: MXL-3
+      # 174m bare metal, 46m AWS.
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "800m"
+          memory: 512Mi
     - name: writer-mxl-4
       groupHint: mxl-multiviewer-4
       flowId: d4d00000-0000-0000-0000-000000000004
       pattern: checkers-8
       overlayText: MXL-4
+      # 188m bare metal, 96m AWS.
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "800m"
+          memory: 512Mi
   audio:
     enabled: true
     name: audio-testsrc
@@ -128,6 +175,16 @@ writers:
     # A fifth apart, so the two channels stay tellable apart on a meter.
     frequencies: [440, 660]
     volume: 0.5
+    # About a core on both clusters, 1026m and 977m, which is more than any
+    # video writer here except the animated one. Sized to what it uses rather
+    # than to what generating a sine ought to cost.
+    resources:
+      requests:
+        cpu: 1200m
+        memory: 128Mi
+      limits:
+        cpu: "2"
+        memory: 256Mi
 
 booking:
   jobRef: mediaops/demo-app

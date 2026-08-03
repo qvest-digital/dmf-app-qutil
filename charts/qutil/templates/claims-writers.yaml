@@ -41,6 +41,10 @@ spec:
     extraEnv:
       - name: MXL_OVERLAY_FORMAT
         value: v210
+    # The class sizes every writer alike, for 1080p50. What a writer costs is
+    # mostly its pattern, so each states its own.
+    resources:
+      {{- toYaml .resources | nindent 6 }}
 {{- end }}
 {{- if .Values.writers.audio.enabled }}
 {{- with .Values.writers.audio }}
@@ -73,6 +77,8 @@ spec:
         wave: {{ .wave }}
         frequencies: {{ toJson .frequencies }}
         volume: {{ .volume }}
+    resources:
+      {{- toYaml .resources | nindent 6 }}
 {{- end }}
 {{- end }}
 {{- end }}
