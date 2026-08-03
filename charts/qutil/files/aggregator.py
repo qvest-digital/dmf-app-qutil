@@ -2,8 +2,8 @@
 # demo-metrics: dependency-free aggregator for the multiviewer client.
 #
 # Merges, per flow, everything we can cheaply reach:
-#   - compositor  : http://composite:9090/ (measured per-flow grains/s, Mbit/s,
-#                    grains pushed/dropped — see the GRAIN_RATE comment)
+#   - compositor  : the stats endpoint its claim publishes (measured per-flow
+#                    grains/s, Mbit/s, grains pushed/dropped -- see GRAIN_RATE)
 #   - writer pod  : k8s API (node, phase, restarts, image, pattern, age)
 #   - receiver    : MxlReceiver CR (phase, provider, bound mirror)
 #   - mirror      : MxlFlowMirror CR (phase, sourceNode, provider)
@@ -17,7 +17,7 @@
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with
 # the mounted SA token + CA. No pip deps so it runs on stock python:3-slim.
-import base64, json, os, re, ssl, urllib.request, urllib.error
+import base64, json, os, re, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -51,7 +51,9 @@ N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 # grain rate, so the shape is right even though the value cannot change.
 GRAIN_RATE = 30000.0 / 1001.0   # 29.97 fps
 GRAIN_BYTES = 2488320           # 720p v210 (1296 px wide -> 3456 B/row * 720)
-COMPOSITOR = os.environ.get("COMPOSITOR_STATS", "http://composite:9090/")
+# Resolved from the compositor claim like every other booked address; see
+# _resolve_base. An explicit value still wins, for a port-forwarded dev loop.
+COMPOSITOR = os.environ.get("COMPOSITOR_STATS")
 
 API = "https://kubernetes.default.svc"
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -76,8 +78,13 @@ def safe_k8s(path):
 
 
 def compositor_stats():
+    base = _resolve_base(COMPOSITOR, "compositor-stats", COMPOSITOR_CLAIM,
+                         "compositor", "stats")
+    if not base:
+        return {"_error": "no ready compositor claim in " + CLAIM_NS,
+                "flows": []}
     try:
-        with urllib.request.urlopen(COMPOSITOR, timeout=5) as r:
+        with urllib.request.urlopen(base.rstrip("/") + "/", timeout=5) as r:
             return json.load(r)
     except Exception as e:
         return {"_error": str(e), "flows": []}
@@ -307,7 +314,7 @@ def build():
     }
 
 
-# ── Booking lifecycle (DMF-298/303 showcase) ────────────────────────────────
+# ── Booking lifecycle ───────────────────────────────────────────────────────
 # The MediaOps booking deploys a per-booking txDarwin instance: a
 # MediaFunctionInstance CR, from which the DMF operator renders a HelmRelease,
 # which Flux turns into a pod. The showcase screen needs all three, plus the
@@ -801,9 +808,38 @@ def operator_flows():
 # MPEG-TS HLS variant refuses Opus outright ("supports MPEG-4 Audio only") with
 # a muxer that crashes on publish — and the overlay needs both, since it tries
 # WHEP first and falls back to HLS wherever ICE cannot complete.
-MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://mediamtx:9997")
-AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API", "http://audio-preview:8090")
+# Both services are booked media functions now, so neither has a fixed Service
+# name this aggregator can assume: mediamtx and the compositor are provisioned
+# per production, in the namespace the MediaProduction owns, under whatever the
+# claim is called. The address is published on the claim, so it is read from
+# there rather than guessed. An explicit env var still wins, which is what a
+# port-forwarded dev loop uses.
+MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
+AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
+
+# Where the claims live, and what they are called. The names come from chart
+# values; empty means "find the one claim of that class in the namespace",
+# which is what a single-production install wants.
+CLAIM_NS = os.environ.get("CLAIM_NS", WRITER_NS)
+MEDIAMTX_CLAIM = os.environ.get("MEDIAMTX_CLAIM", "")
+COMPOSITOR_CLAIM = os.environ.get("COMPOSITOR_CLAIM", "")
+
+# The class a nameless claim is looked up by. A cluster may register a class
+# under a different name than the catalog's default, so this follows the same
+# value the claim was rendered from rather than assuming the two agree.
+MEDIAMTX_CLASS = os.environ.get("MEDIAMTX_CLASS", "mediamtx")
+COMPOSITOR_CLASS = os.environ.get("COMPOSITOR_CLASS", "compositor")
+
+# A claim's address only changes when it is re-provisioned, so re-reading it per
+# request would spend an API call on an answer that is almost always the same.
+# Ten seconds is short enough that a re-provision is picked up within one
+# player retry and long enough that four tiles starting at once cost one read.
+_ENDPOINT_TTL = 10.0
+_endpoint_cache = {}
+_endpoint_lock = threading.Lock()
+
+_CLAIMS_API = "/apis/dmf.qvest-digital.com/v1alpha1"
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -840,12 +876,74 @@ def _http_json(base, path, method="GET", body=None):
         return 503, {"error": f"{base} unreachable: {e}"}
 
 
+def _claim_endpoint(claim_name, class_name, ep_name):
+    """The URL a booked function publishes for one of its endpoints.
+
+    The lifecycle plane renders a class's endpointTemplates once, at provision
+    time, and the binder copies the result onto the claim as
+    status.handle.endpoints. That is the only address a consumer is promised:
+    the Service name is the claim's, in whatever namespace the production owns,
+    so nothing here may assume either.
+
+    handle.ready gates it. An endpoint published for a function whose workload
+    is not up yet resolves to a Service with no backend, which fails as a
+    connection timeout rather than as the "not ready yet" it actually is.
+    """
+    claim = None
+    if claim_name:
+        got = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}"
+                       f"/mediafunctionclaims/{claim_name}")
+        if not got.get("_error"):
+            claim = got
+    else:
+        # No name configured: a single-production install has exactly one claim
+        # of each class, so the class is enough to find it. Two would be
+        # ambiguous, and picking one at random would be worse than saying so.
+        listing = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}"
+                           f"/mediafunctionclaims")
+        matches = [c for c in listing.get("items", [])
+                   if (c.get("spec") or {}).get("className") == class_name]
+        if len(matches) == 1:
+            claim = matches[0]
+    if not claim:
+        return None
+    handle = (claim.get("status") or {}).get("handle") or {}
+    if not handle.get("ready"):
+        return None
+    for ep in handle.get("endpoints") or []:
+        if ep.get("name") == ep_name:
+            return ep.get("url")
+    return None
+
+
+def _resolve_base(override, cache_key, claim_name, class_name, ep_name):
+    if override:
+        return override
+    now = time.monotonic()
+    with _endpoint_lock:
+        hit = _endpoint_cache.get(cache_key)
+        if hit and now - hit[0] < _ENDPOINT_TTL:
+            return hit[1]
+    url = _claim_endpoint(claim_name, class_name, ep_name)
+    with _endpoint_lock:
+        _endpoint_cache[cache_key] = (now, url)
+    return url
+
+
 def _mtx(path, method="GET", body=None):
-    return _http_json(MEDIAMTX_API, path, method, body)
+    base = _resolve_base(MEDIAMTX_API, "mediamtx", MEDIAMTX_CLAIM,
+                         MEDIAMTX_CLASS, "api")
+    if not base:
+        return 503, {"error": "no ready mediamtx claim in " + CLAIM_NS}
+    return _http_json(base, path, method, body)
 
 
 def _audio_preview(path, method="GET"):
-    return _http_json(AUDIO_PREVIEW_API, path, method)
+    base = _resolve_base(AUDIO_PREVIEW_API, "audio-preview", COMPOSITOR_CLAIM,
+                         COMPOSITOR_CLASS, "audio-preview")
+    if not base:
+        return 503, {"error": "no ready compositor claim in " + CLAIM_NS}
+    return _http_json(base, path, method)
 
 
 def _known_flow(uuid):
@@ -856,7 +954,36 @@ def _known_flow(uuid):
     return None
 
 
-def preview_add(uuid):
+# Who is holding a preview open. The multiviewer's four tiles and the operator
+# overlay can ask for the same flow at once, and both derive the same path name
+# from the uuid, so an unconditional delete on close would drop the path out
+# from under whoever else is still playing it. Holders are counted per flow and
+# the path only goes when the last one lets go.
+_holders = {}
+_holders_lock = threading.Lock()
+
+
+def _hold(uuid, owner):
+    with _holders_lock:
+        _holders.setdefault(uuid, set()).add(owner)
+
+
+def _release(uuid, owner):
+    """Drop one holder. True when that was the last one."""
+    with _holders_lock:
+        owners = _holders.get(uuid)
+        if owners is None:
+            # Nothing recorded: a delete for a preview this process did not
+            # start, which is what a restarted aggregator sees. Tear it down.
+            return True
+        owners.discard(owner)
+        if owners:
+            return False
+        _holders.pop(uuid, None)
+        return True
+
+
+def preview_add(uuid, owner="overlay"):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
     fl = _known_flow(uuid)
@@ -865,7 +992,10 @@ def preview_add(uuid):
     d = fl.get("spec", {}).get("definition", {}) or {}
     fmt = (d.get("format") or "").rsplit(":", 1)[-1]
     if fmt == "audio":
-        return preview_add_audio(uuid)
+        code, res = preview_add_audio(uuid)
+        if code == 200:
+            _hold(uuid, owner)
+        return code, res
     if fmt != "video":
         # Only video can be pulled by mediamtx and only audio has a publisher to
         # push it, so anything else (data/smpte291) has no route to a browser.
@@ -880,10 +1010,18 @@ def preview_add(uuid):
     if code != 200:
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000,
+                # Force a keyframe every second so the HLS segmenter always has
+                # a cut point. High-complexity content (noise, gamut sweeps,
+                # dense checkerboards) otherwise defers IDRs far enough that the
+                # muxer cannot form a segment and index.m3u8 answers HTTP 500.
+                # Low-motion patterns emit IDRs often enough to hide it, which
+                # is why this only shows on some flows.
+                "mxlH264IDRPeriod": 30}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
+    _hold(uuid, owner)
     return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
                  "whep": f"/webrtc/{name}/whep", "format": "video"}
 
@@ -953,9 +1091,14 @@ def preview_status(uuid):
     return 404, {"error": "no session for this flow"}
 
 
-def preview_del(uuid):
+def preview_del(uuid, owner="overlay"):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
+    if not _release(uuid, owner):
+        # Somebody else is still playing this flow. Reporting the release as
+        # done is honest: this holder is gone, and the path staying up is the
+        # point of counting them.
+        return 200, {"released": uuid}
     # Stop the publisher before dropping its path, so the pipeline sends EOS into
     # a path that still exists. Both variants are attempted rather than looking
     # the flow's format up again: the flow may have been deleted while the
@@ -980,6 +1123,18 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _preview_args(self):
+        """(uuid, owner) from /api/preview/<uuid>[?owner=<token>].
+
+        The owner names who is asking, so the four tiles and the operator
+        overlay can hold the same flow open without either one's close
+        dropping the path the other is playing.
+        """
+        parts = urllib.parse.urlsplit(self.path)
+        uuid = parts.path.rstrip("/").rsplit("/", 1)[1]
+        owner = urllib.parse.parse_qs(parts.query).get("owner", ["overlay"])[0]
+        return uuid, owner
+
     def log_message(self, *a):
         pass
 
@@ -997,7 +1152,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/preview/"):
             # GET on the same collection POST/DELETE use: is this audio preview
             # actually producing yet, or did its reader fail to open?
-            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
+            uuid, _ = self._preview_args()
             try:
                 code, res = preview_status(uuid)
             except Exception as e:
@@ -1015,16 +1170,16 @@ class H(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.path.startswith("/api/preview/"):
-            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
-            code, res = preview_del(uuid)
+            uuid, owner = self._preview_args()
+            code, res = preview_del(uuid, owner)
             return self._send(code, res)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
         if self.path.startswith("/api/preview/"):
-            uuid = self.path.rstrip("/").rsplit("/", 1)[1]
+            uuid, owner = self._preview_args()
             try:
-                code, res = preview_add(uuid)
+                code, res = preview_add(uuid, owner)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)

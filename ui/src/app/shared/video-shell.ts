@@ -11,8 +11,8 @@ import {
  * A <video> with a loading overlay on top of it.
  *
  * The spinner sits over the picture until the element actually plays, and comes
- * back if the source resets (the txDarwin/SRT switch, a WebRTC reconnect): the
- * ICE handshake takes a moment, and on HLS fallback so does buffering.
+ * back if the source resets (a WebRTC reconnect, a switch to another stream):
+ * the ICE handshake takes a moment, and on HLS fallback so does buffering.
  *
  * The host is display:contents so `.vwrap` remains the grid/flex item its parent
  * laid out, exactly as when the original page injected the wrapper by hand.

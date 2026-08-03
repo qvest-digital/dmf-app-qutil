@@ -6,3 +6,7 @@
 # Local agent tooling scratch state. It is written into whichever directory is
 # current, so it turns up scattered through the tree and is never a build input.
 .omc/
+
+# Bytecode from running the aggregator locally. A copy was tracked, so every
+# local run produced a diff in a file nothing reads.
+__pycache__/

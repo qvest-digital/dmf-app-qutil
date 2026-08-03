@@ -1,6 +1,12 @@
 import { Injectable } from '@angular/core';
 
-export type PlayerKind = 'pc' | 'hls' | 'timer';
+/**
+ * `preview` is not a decoder: it is a server-side mediamtx path held open for a
+ * player. It registers here so that whatever tears players down releases the
+ * path in the same pass, rather than leaving a reader running for a tile that
+ * is no longer on screen.
+ */
+export type PlayerKind = 'pc' | 'hls' | 'timer' | 'preview';
 
 export interface PlayerEntry {
   kind: PlayerKind;
@@ -12,7 +18,7 @@ export interface PlayerEntry {
  *
  * Chrome does NOT throttle background-tab WebRTC decode, so the always-on WHEP
  * players kept decoding (and pulling ~12 Mbit/s) while this page sat behind a
- * Google Meet tab — starving Meet and dropping the call. Every PeerConnection,
+ * Google Meet tab, starving Meet and dropping the call. Every PeerConnection,
  * Hls instance and scene timer registers here so a hidden tab or a route change
  * can tear the whole set down and rebuild only what the visible page needs.
  */
@@ -52,7 +58,7 @@ export class PlayerRegistry {
   }
 
   counts(): Record<PlayerKind, number> {
-    const c: Record<PlayerKind, number> = { pc: 0, hls: 0, timer: 0 };
+    const c: Record<PlayerKind, number> = { pc: 0, hls: 0, timer: 0, preview: 0 };
     for (const entry of this.live) c[entry.kind]++;
     return c;
   }

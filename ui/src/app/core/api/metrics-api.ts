@@ -32,9 +32,18 @@ export class MetricsApi {
     return this.http.get<BookingResponse>('/api/booking');
   }
 
-  /** Provision a mediamtx path for this flow (pull for video, push for audio). */
-  startPreview(uuid: string): Observable<PreviewSession> {
-    return this.http.post<PreviewSession>(`/api/preview/${encodeURIComponent(uuid)}`, null);
+  /**
+   * Provision a mediamtx path for this flow (pull for video, push for audio).
+   *
+   * `owner` names who is asking. A tile and the operator overlay can play the
+   * same flow at once and both resolve to the same path, so the aggregator
+   * counts holders and only tears the path down when the last one releases it.
+   */
+  startPreview(uuid: string, owner?: string): Observable<PreviewSession> {
+    return this.http.post<PreviewSession>(
+      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
+      null,
+    );
   }
 
   /**
@@ -45,9 +54,18 @@ export class MetricsApi {
     return this.http.get<PreviewStatus>(`/api/preview/${encodeURIComponent(uuid)}`);
   }
 
-  /** Tear the path (and any audio publisher) back down. */
-  stopPreview(uuid: string): Observable<unknown> {
-    return this.http.delete(`/api/preview/${encodeURIComponent(uuid)}`);
+  /**
+   * Release this owner's hold on the path. The path itself only goes when no
+   * other owner is still holding it.
+   */
+  stopPreview(uuid: string, owner?: string): Observable<unknown> {
+    return this.http.delete(
+      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
+    );
+  }
+
+  private ownerQuery(owner?: string): string {
+    return owner ? `?owner=${encodeURIComponent(owner)}` : '';
   }
 
   /** Delete flow n's writer pod, so the audience can watch Kubernetes recover it. */

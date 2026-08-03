@@ -34,11 +34,11 @@ describe('App', () => {
 
     expect(tabs.map((t) => t.textContent!.trim())).toEqual([
       'Multiviewer',
-      'txDarwin / SRT',
+      'SRT Camera',
       'Composite',
       'Booking',
     ]);
-    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/tx', '/cp', '/bk']);
+    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/srt', '/cp', '/bk']);
   });
 
   // It must exist from the start but stay hidden: the <video> it owns has to be
