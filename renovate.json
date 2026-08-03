@@ -2,13 +2,5 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", ":semanticCommits"],
   "minimumReleaseAge": "3 days",
-  "prHourlyLimit": 2,
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "k8s image pins tagged with inline renovate markers",
-      "managerFilePatterns": ["/^k8s/.+\\.yaml$/"],
-      "matchStrings": ["# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+image:\\s*\"?(?<depNameTemplate>[^\":@\\s]+)[:@](?<currentValue>[^\"\\s]+)\"?"]
-    }
-  ]
+  "prHourlyLimit": 2
 }

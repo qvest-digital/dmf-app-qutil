@@ -72,8 +72,8 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           # sha tag always; version tag on a release. github.event.release.tag_name
-          # is reliable on `release` events (GITHUB_REF is not). Image tags omit the
-          # leading `v` (Docker convention); the manifest artifact keeps it (build.yml).
+          # is reliable on `release` events (GITHUB_REF is not). Image tags omit
+          # the leading `v`, per Docker convention.
           echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           if [[ -n "$RELEASE_TAG" ]]; then
             echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
