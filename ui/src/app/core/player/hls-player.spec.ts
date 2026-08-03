@@ -112,14 +112,34 @@ describe('hlsPlay fatal error recovery', () => {
     expect(built[0].recoverCount).toBe(2);
   });
 
-  it('resumes loading on a fatal network error, after a delay', () => {
+  // Paths are created on demand, so a player that starts before its path is
+  // serving is the normal case: the manifest 404s, hls.js exhausts its retries,
+  // and only loading the source again brings the element back. startLoad does
+  // not, because it takes effect only once a manifest has been parsed -- which
+  // is the whole failure being recovered from.
+  it('loads the source again on a fatal network error, after a delay', () => {
     hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
     built[0].raise(FakeHls.ErrorTypes.NETWORK_ERROR);
 
-    expect(built[0].startLoadCount).toBe(0);
-    vi.advanceTimersByTime(5000);
-    expect(built[0].startLoadCount).toBe(1);
     expect(built[0].sources).toEqual(['/hls/preview-a/index.m3u8']);
+    vi.advanceTimersByTime(5000);
+    expect(built[0].sources).toEqual([
+      '/hls/preview-a/index.m3u8',
+      '/hls/preview-a/index.m3u8',
+    ]);
+    expect(built[0].startLoadCount).toBe(0);
+    expect(built).toHaveLength(1);
+  });
+
+  // The path appearing late is what the retry exists for, so recovery has to
+  // keep working across repeated failures rather than give up after one.
+  it('keeps re-requesting a manifest that is not served yet', () => {
+    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    for (let i = 0; i < 3; i++) {
+      built[0].raise(FakeHls.ErrorTypes.NETWORK_ERROR);
+      vi.advanceTimersByTime(5000);
+    }
+    expect(built[0].sources).toHaveLength(4);
   });
 
   it('replaces the instance when the error type cannot be recovered', () => {
@@ -140,7 +160,8 @@ describe('hlsPlay fatal error recovery', () => {
     handle.stop();
     vi.advanceTimersByTime(5000);
 
-    expect(built[0].startLoadCount).toBe(0);
+    expect(built[0].sources).toEqual(['/hls/preview-a/index.m3u8']);
+    expect(built[0].destroyed).toBe(true);
     expect(built).toHaveLength(1);
     expect(registry.counts().hls).toBe(0);
   });
