@@ -418,6 +418,37 @@ main {
   min-height: 16px;
 }
 
+/* Data preview: a data flow cannot be played, so the grain's bytes are the
+   picture. Scrolls internally rather than growing the card off-screen. */
+.pv-anc {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.pv-anc-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+.pv-anc-note {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.pv-hex {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .btn {
   border-radius: var(--qv-radius-pill);
   border: 2px solid rgba(255, 255, 255, 0.5);
