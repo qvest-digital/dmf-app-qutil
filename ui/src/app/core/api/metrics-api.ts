@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
+  AncGrain,
   BookingResponse,
   FlowsResponse,
   OperatorFlowsResponse,
@@ -59,9 +60,15 @@ export class MetricsApi {
    * other owner is still holding it.
    */
   stopPreview(uuid: string, owner?: string): Observable<unknown> {
-    return this.http.delete(
-      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
-    );
+    return this.http.delete(`/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`);
+  }
+
+  /**
+   * The newest grain of a data flow. No owner and no teardown: unlike a video or
+   * audio preview this provisions nothing, it just reads what is already there.
+   */
+  ancGrain(uuid: string): Observable<AncGrain> {
+    return this.http.get<AncGrain>(`/api/anc/${encodeURIComponent(uuid)}`);
   }
 
   private ownerQuery(owner?: string): string {

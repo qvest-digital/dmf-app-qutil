@@ -259,6 +259,42 @@ export interface PreviewSession {
   error?: string;
 }
 
+/** One ancillary-data packet inside a grain, as the preview pod parsed it. */
+export interface AncElement {
+  line: number;
+  did: number;
+  sdid: number;
+  dataCount: number;
+  /** The DID/SDID pair's registered meaning, or '' when it is not a known one. */
+  name?: string;
+  udw: number[];
+  /**
+   * Only present for the timecode this demo's anc-testsrc writes, which carries
+   * BCD per field. A real ST 12M-2 packet uses these words differently, so the
+   * absence of a timecode here is not the absence of one in the data.
+   */
+  timecode?: string;
+}
+
+/**
+ * The newest grain of a data flow. There is no route from `video/smpte291` to a
+ * browser, so the overlay shows the bytes instead of playing anything.
+ */
+export interface AncGrain {
+  flow: string;
+  index: number;
+  grainSize: number;
+  validSlices: number;
+  totalSlices: number;
+  /** Lowercase hex, no separators — the readable part of the grain. */
+  bytes: string;
+  ancCount?: number;
+  elements?: AncElement[];
+  /** Set when the bytes are not a readable RFC 8331 frame; they are still shown. */
+  parseError?: string;
+  error?: string;
+}
+
 /** One entry of the audio-preview pod's /status, proxied verbatim. */
 export interface PreviewStatus {
   flow?: string;

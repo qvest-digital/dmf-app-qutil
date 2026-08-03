@@ -129,6 +129,23 @@ writers:
     frequencies: [440, 660]
     volume: 0.5
 
+# An ancillary-data producer, so the multiviewer has a video/smpte291 flow to
+# list and preview. Off until the DMF catalog carries the class: the binary ships
+# from dmf-mf-mxl-compositor, and a claim against a class that does not exist
+# never provisions.
+ancTestSource:
+  enabled: false
+  claimName: anc-testsrc
+  className: mxl-anc-testsrc
+  groupHint: mxl-anc-testsrc
+  # a0d2 = ancillary demo 1, next to the audio source's a0d1.
+  flowId: a0d20000-0000-0000-0000-000000000001
+  grainRate:
+    numerator: 30000
+    denominator: 1001
+  ancLine: 9
+  parameters: {}
+
 booking:
   jobRef: mediaops/demo-app
 
