@@ -1,0 +1,40 @@
+{{- if .Values.compositor.enabled }}
+{{- /* The mosaic, and the audio preview that rides in the same image.
+
+       compositeOut and audioPreview.rtspBase are peer addresses: they name the
+       media server booked beside this one, so they can only be filled in once
+       both are in the same production namespace. They match the rtsp endpoint
+       the mediamtx class publishes, rtsp://<claim>.<namespace>:8554.
+
+       flowIds is what the mosaic tiles, which is the whole point of the
+       booking, so it is derived from the same writer list the claims above
+       are rendered from rather than restated. */ -}}
+{{- $ns := include "qutil.productionNamespace" . -}}
+{{- $rtsp := printf "rtsp://%s.%s:8554" .Values.mediamtx.claimName $ns -}}
+{{- $flows := list -}}
+{{- range .Values.writers.video -}}
+{{- $flows = append $flows .flowId -}}
+{{- end -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.compositor.claimName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.compositor.className }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+  parameters:
+    flowIds: {{ join " " $flows | quote }}
+    compositeOut: {{ printf "%s/composite" $rtsp | quote }}
+    frameWidth: {{ .Values.compositor.frameWidth }}
+    frameHeight: {{ .Values.compositor.frameHeight }}
+    audioPreview:
+      # The flow id is appended per preview by the control API.
+      rtspBase: {{ printf "%s/preview-audio-" $rtsp | quote }}
+    {{- with .Values.compositor.parameters }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

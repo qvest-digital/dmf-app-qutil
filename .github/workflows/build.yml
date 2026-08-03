@@ -1,47 +1,24 @@
 name: Push manifests
 
-# This workflow builds no image — the compositor image has its own workflow
-# (build-compositor.yml); mediamtx-mxl is published by qvest-digital/mediamtx
-# CI (feature/mxl-static-source). All this one does is render the k8s
-# manifests and push them as an OCI artifact for Flux to reconcile.
+# Renders the k8s manifests and pushes them as an OCI artifact for Flux to
+# reconcile. This workflow builds no image.
 #
-# PR env integration (called by mxl-dmf-terraform cd-pr-feature-up.yml):
-#   workflow_call with pr_env=pr-185 + ref=feature/my-feature
-#   → checks out the feature branch, pushes manifests, tags as pr-185-latest
+# The chart published by chart-publish.yml is the current delivery path and
+# carries the same workloads. This workflow runs on manual dispatch only: the
+# tag it publishes floats, a cluster reconciles that tag directly, and the
+# k8s tree no longer matches the configuration such a cluster supplies. An
+# automatic publish would hand a live consumer a tree it cannot run.
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
-    # Same code path as push: render the manifests + push them as an OCI
-    # artifact tagged pr-<N> so terraform PR envs can repoint their
-    # demo-app OCIRepository at the matching consumer-side spec.
-    paths:
-      - "k8s/**"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
     inputs:
       pr_env:
-        description: "PR env name (e.g. pr-185) — if set, builds from 'ref' and tags as <pr_env>-latest"
+        description: "PR env name (e.g. pr-185) -- if set, builds from 'ref' and tags as <pr_env>-latest"
         required: false
         default: ""
       ref:
-        description: "Git ref to checkout — only used when pr_env is set"
+        description: "Git ref to checkout -- only used when pr_env is set"
         required: false
-        default: "main"
-  workflow_call:
-    inputs:
-      pr_env:
-        description: "PR env name (e.g. pr-185) — if set, builds from 'ref' and tags as <pr_env>-latest"
-        required: false
-        type: string
-        default: ""
-      ref:
-        description: "Git ref to checkout — only used when pr_env is set"
-        required: false
-        type: string
         default: "main"
 
 permissions:
@@ -101,30 +78,15 @@ jobs:
           echo "Pushed: mxl-dmf-demo-app-manifests:${SHORT_SHA}"
 
           if [ -n "$PR_ENV" ]; then
-            # Called by terraform PR env — tag as <pr_env>-latest.
+            # Called by terraform PR env -- tag as <pr_env>-latest.
             flux tag artifact \
               "oci://${REPO}:${SHORT_SHA}" \
               --tag "${PR_ENV}-latest" \
               --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
             echo "Tagged: mxl-dmf-demo-app-manifests:${PR_ENV}-latest"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            TAG="pr-${{ github.event.pull_request.number }}"
-            flux tag artifact \
-              "oci://${REPO}:${SHORT_SHA}" \
-              --tag "${TAG}" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:${TAG}"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            flux tag artifact "oci://${REPO}:${SHORT_SHA}" \
-              --tag "${GITHUB_REF_NAME}" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:${GITHUB_REF_NAME}"
-          elif [ "$GITHUB_REF_NAME" = "main" ]; then
-            flux tag artifact \
-              "oci://${REPO}:${SHORT_SHA}" \
-              --tag "latest" \
-              --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}"
-            echo "Tagged: mxl-dmf-demo-app-manifests:latest"
           else
-            echo "Skipping tag — not on main and no pr_env set (branch: $GITHUB_REF_NAME)"
+            # The floating tag is never written here. A cluster reconciles
+            # that tag directly, so moving it would hand a running deployment
+            # a tree built from a different branch than the one it runs.
+            echo "Skipping tag -- no pr_env set (branch: $GITHUB_REF_NAME)"
           fi

@@ -1,0 +1,74 @@
+{{- if .Values.writers.enabled }}
+{{- /* One claim per flow: a writer pod writes one flow, so four tiles are four
+       claims. Everything cluster-shaped -- the image, its pull secret, the
+       volume holding the MXL runtime root, node tolerations -- comes from the
+       MediaFunctionClass and is deliberately absent here.
+
+       Geometry is stated per claim rather than inherited from the class:
+       animated videotestsrc patterns stall the test source at v210 1080p, and
+       one of these runs `ball`. It also has to match what the compositor tiles
+       and what the multiviewer expects. */ -}}
+{{- $root := . }}
+{{- range .Values.writers.video }}
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .name }}
+  namespace: {{ include "qutil.productionNamespace" $root }}
+  labels:
+    {{- include "qutil.labels" $root | nindent 4 }}
+spec:
+  className: {{ $root.Values.writers.className }}
+  booking:
+    jobRef: {{ $root.Values.booking.jobRef | quote }}
+  parameters:
+    flow:
+      group_hint: {{ .groupHint }}
+      video_output:
+        id: {{ .flowId }}
+        flow_pattern: {{ .pattern }}
+        overlay_text: {{ .overlayText | quote }}
+        frame_width: {{ $root.Values.writers.frameWidth }}
+        frame_height: {{ $root.Values.writers.frameHeight }}
+        grain_rate:
+          numerator: {{ $root.Values.writers.grainRate.numerator }}
+          denominator: {{ $root.Values.writers.grainRate.denominator }}
+    # Blend the overlay directly on 10-bit packed v210 instead of the I420
+    # fast path, so the tiles show what a v210 overlay costs.
+    extraEnv:
+      - name: MXL_OVERLAY_FORMAT
+        value: v210
+{{- end }}
+{{- if .Values.writers.audio.enabled }}
+{{- with .Values.writers.audio }}
+---
+# The audio tone the preview plays. Video is switched off: this claim books a
+# writer that produces only the audio flow.
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .name }}
+  namespace: {{ include "qutil.productionNamespace" $root }}
+  labels:
+    {{- include "qutil.labels" $root | nindent 4 }}
+spec:
+  className: {{ $root.Values.writers.className }}
+  booking:
+    jobRef: {{ $root.Values.booking.jobRef | quote }}
+  parameters:
+    flow:
+      group_hint: {{ .groupHint }}
+      video_output:
+        enabled: false
+      audio_output:
+        enabled: true
+        id: {{ .flowId }}
+        sample_rate: {{ .sampleRate }}
+        channel_count: {{ .channelCount }}
+        wave: {{ .wave }}
+        frequencies: {{ toJson .frequencies }}
+        volume: {{ .volume }}
+{{- end }}
+{{- end }}
+{{- end }}

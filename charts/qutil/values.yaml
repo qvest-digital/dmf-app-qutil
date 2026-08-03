@@ -1,0 +1,182 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# The namespace a MediaProduction owns, which this release books into. No
+# default: the release writes claims into a namespace it does not own, so a
+# wrong guess would book against the wrong production. The chart fails to
+# render without it.
+#
+# One production takes one qutil release. Installing this chart twice against
+# the same production creates a second set of claims under the same names.
+production:
+  namespace: ""
+
+# Serves the multiviewer bundle and reverse-proxies the aggregator, the
+# compositor stats and the media server. Caddy is the whole container: the
+# media server is a booked media function now, not a sidecar.
+ui:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/qvest-digital/dmf-app-qutil/ui
+    # Empty resolves to the chart's appVersion, which the publish workflow
+    # stamps with the release version. Pin only to run an off-release image.
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# Merges writer pod state, MXL control-plane CRs and the media server's path
+# API into what the multiviewer polls. Also creates and deletes preview paths
+# on demand, which is why it needs the media server's API endpoint.
+aggregator:
+  replicaCount: 1
+  image:
+    repository: python
+    tag: "3.12-slim"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8088
+  # Namespace holding the mxl-k8s gateway pods, read for the gateway panel.
+  gatewayNamespace: mxl-system
+  # The four video flows the multiviewer tiles. Fixed by design: the tile grid
+  # is a fixed four, and only the way they are served became dynamic.
+  flowPrefix: d4d00000-0000-0000-0000-00000000000
+  flowCount: 4
+  # Namespace the per-booking txDarwin instances are deployed into.
+  bookingNamespace: txdarwin
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# Booked media functions. Each is a MediaFunctionClaim rendered into
+# production.namespace. A claim names a class and carries only what makes this
+# booking different; the class supplies everything cluster-shaped.
+mediamtx:
+  enabled: true
+  claimName: mediamtx
+  className: mediamtx
+  # The only static path a booking declares. Publisher mode, no flowId: the
+  # compositor pushes its mosaic into it. Per-flow preview paths are created
+  # over the HTTP API at runtime and deliberately absent here -- a path change
+  # through the claim would roll the pod, and claim parameters are consumed at
+  # provision time only.
+  paths:
+    composite: {}
+  parameters: {}
+
+compositor:
+  enabled: true
+  claimName: compositor
+  className: compositor
+  # Tile geometry has to match what the writers produce and what the
+  # multiviewer expects.
+  frameWidth: 1296
+  frameHeight: 720
+  parameters: {}
+
+# One claim per flow: a writer pod writes one flow, so four tiles are four
+# claims. Geometry is stated per claim rather than inherited from the class.
+writers:
+  enabled: true
+  className: mxl-writer
+  frameWidth: 1296
+  frameHeight: 720
+  grainRate:
+    numerator: 30000
+    denominator: 1001
+  video:
+    - name: writer-mxl-1
+      groupHint: mxl-multiviewer-1
+      flowId: d4d00000-0000-0000-0000-000000000001
+      pattern: smpte
+      overlayText: MXL-1
+    - name: writer-mxl-2
+      groupHint: mxl-multiviewer-2
+      flowId: d4d00000-0000-0000-0000-000000000002
+      pattern: ball
+      overlayText: MXL-2
+    - name: writer-mxl-3
+      groupHint: mxl-multiviewer-3
+      flowId: d4d00000-0000-0000-0000-000000000003
+      pattern: gamut
+      overlayText: MXL-3
+    - name: writer-mxl-4
+      groupHint: mxl-multiviewer-4
+      flowId: d4d00000-0000-0000-0000-000000000004
+      pattern: checkers-8
+      overlayText: MXL-4
+  audio:
+    enabled: true
+    name: audio-testsrc
+    groupHint: mxl-audio-testsrc
+    flowId: a0d10000-0000-0000-0000-000000000001
+    sampleRate: 48000
+    channelCount: 2
+    wave: sine
+    # A fifth apart, so the two channels stay tellable apart on a meter.
+    frequencies: [440, 660]
+    volume: 0.5
+
+booking:
+  jobRef: mediaops/demo-app
+
+# Gateway API route. The hostname is per-cluster and has no sensible default.
+ingress:
+  enabled: true
+  hostname: ""
+  parentRef:
+    name: istio-ingressgateway
+    namespace: istio-system
+    sectionName: https
+
+# ESO renders a dockerconfigjson Secret from a GHCR PAT so kubelet can pull
+# the private UI image.
+imagePullSecret:
+  enabled: true
+  name: demo-app-ghcr-pull
+  secretStore:
+    create: true
+    name: aws-secretsmanager
+    region: eu-central-1
+  remoteRef:
+    key: mxl/dev/demo-app/ghcr-pat
+    usernameProperty: username
+    passwordProperty: pat
+  refreshInterval: 1h
+
+# Cluster-internal SRT generators standing in for playout sources. Each dials
+# one srt-ingest bridge and waits for the bridge Secret, so they idle harmlessly
+# where srt-ingest is absent. Disable them there rather than leaving them to
+# wait.
+testSources:
+  enabled: true
+  image: linuxserver/ffmpeg@sha256:e6b338a3a9d7ca2a33d345fa683d68767f799f2c13694542ba5bfb4f63dff585
+  bridgeSecretName: srt-mxl-bridge-secret
+  sources:
+    - name: srt-test-source-2
+      target: srt-mxl-bridge-instance-2:9001
+      label: ZUSPIELER 2
+      pattern: "mandelbrot=size=1296x720:rate=30"
+    - name: srt-test-source-3
+      target: srt-mxl-bridge-instance-3:9002
+      label: ZUSPIELER 3
+      pattern: "smptebars=size=1296x720:rate=30"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi

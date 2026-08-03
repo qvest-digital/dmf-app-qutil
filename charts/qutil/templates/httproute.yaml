@@ -1,0 +1,25 @@
+{{- if .Values.ingress.enabled }}
+{{- /* Everything on the hostname reaches the UI; Caddy dispatches from there.
+       The hostname is per-cluster and carries no default. */ -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "qutil.fullname" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.ingress.parentRef.name }}
+      namespace: {{ .Values.ingress.parentRef.namespace }}
+      sectionName: {{ .Values.ingress.parentRef.sectionName }}
+  hostnames:
+    - {{ required "ingress.hostname is required while ingress.enabled" .Values.ingress.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "qutil.fullname" . }}-ui
+          port: {{ .Values.ui.service.port }}
+{{- end }}

@@ -1,12 +1,8 @@
 name: Build & Push multiviewer UI image
 
-# Builds the Angular multiviewer and pushes it to GHCR under this repo's
-# namespace. Mediamtx's existing ghcr-pull-secret (rendered by ExternalSecrets
-# from AWS SM) covers pulls of this image too — same registry, same auth, so no
-# extra secret to wire.
-#
-# The manifests themselves are pushed by build.yml; this workflow only produces
-# the image the mediamtx pod's caddy sidecar runs.
+# Builds the Angular multiviewer into a Caddy image and pushes it to GHCR under
+# this repository's namespace. The chart leaves image.tag empty and resolves the
+# image at the chart's appVersion, so a release publishes both at one version.
 
 on:
   push:
@@ -29,7 +25,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/qvest-digital/mxl-dmf-demo-app/ui
+  # github.repository rather than a literal: a GHCR package does not follow a
+  # repository rename, so a literal would keep publishing under the old name
+  # while the chart resolves the new one.
+  IMAGE: ghcr.io/${{ github.repository }}/ui
 
 jobs:
   build-and-push:
