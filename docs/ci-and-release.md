@@ -12,9 +12,6 @@ Two, and they carry the same version:
 No media function image is built here. Each is built and released by the
 repository that owns its sources, and deployed by a chart in the DMF catalog.
 
-A rendered `k8s/` OCI manifest artifact is also published, for consumers that
-reconcile the manifest tree rather than the chart.
-
 ## 2. One version for both
 
 The chart version, the image tag and the release version are the same string.
@@ -50,16 +47,25 @@ Changelog sections follow the conventional-commit type: `feat`, `fix`, `deps`,
 `perf`, `revert`, `refactor`, `build`, `ci` and `chore` are visible; `docs`,
 `style` and `test` are collected but hidden.
 
-## 4. Dependency automation
+## 4. Chart checks
 
-Renovate manages image pins carrying an inline marker:
+`helm lint` runs on every pull request, and `hack/check-render.py` renders the
+chart under one value set per toggle and parses the result strictly.
 
-```yaml
-# renovate: datasource=<datasource> depName=<depName> [versioning=<versioning>]
-image: "<image>:<currentValue>"
-```
+The second one exists because helm accepts a duplicated mapping key and keeps
+the last, while the post-renderer Flux installs through refuses the document.
+A chart that lints and templates cleanly can therefore still fail to install
+with `mapping key ... already defined`. Repeating a label that the shared
+labels helper already sets is the easy way to write one.
 
-`minimumReleaseAge: 3 days` and `prHourlyLimit: 2` keep the noise down.
+## 5. Dependency automation
+
+Renovate runs on `config:recommended`. `minimumReleaseAge: 3 days` keeps a
+just-published version out until it has settled. `prHourlyLimit: 0` removes the
+rate limit; the option defaults to 2, so it has to be set rather than omitted.
+
+The one third-party image the chart runs is pinned by digest in chart values
+and carries no marker, so nothing bumps it automatically.
 
 The `go-mxl` version is not managed here. MXL's domain protocol requires every
 reader and writer sharing a domain to link a byte-identical `libmxl.so`, so a

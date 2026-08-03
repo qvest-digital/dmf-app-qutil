@@ -72,5 +72,10 @@ breaks that.
 
 ## Before finish
 
-`helm lint charts/*` and the UI test suite pass. No hardcoded Service address
-for a booked function. No static per-flow path anywhere.
+`helm lint charts/*`, `hack/check-render.py charts/qutil` and the UI test suite
+pass. No hardcoded Service address for a booked function. No static per-flow
+path anywhere.
+
+`helm lint` alone is not enough: it accepts a duplicated mapping key, and the
+post-renderer Flux installs through refuses the document. That is what
+`check-render.py` catches.
