@@ -22,15 +22,22 @@ version, and `image.tag` is left empty in values, so the deployment's
 exactly the chart's own version. Nothing has to keep two numbers in step
 because there is only one.
 
-Two ways to break it, both silent:
+`Chart.yaml` carries `# x-release-please-version` on both `version` and
+`appVersion`, and the `extra-files` entry names `type: generic`. The type is
+not optional decoration: a bare path string makes release-please infer an
+updater from the extension, and the `yaml` updater reformats the document,
+strips every comment (the markers with them) and moves `version` alone. The
+generic updater replaces the first version on each annotated line and leaves
+the rest of the file untouched.
 
-- Declaring more than one release-please package. With
-  `separate-pull-requests`, multiple components produce one release PR and one
-  tag *per component*, so there is no single version left to share. Use one
-  package.
-- Expecting a generic `extra-files` entry to bump `Chart.yaml`. Only
-  `release-type: helm` or an `# x-release-please-version` marker in the file
-  moves a chart version.
+The published artifact survives that either way, because the packaging step
+passes `--version` and `--app-version` explicitly. What breaks is a render
+straight from a checkout, which resolves an image one release behind.
+
+The other way to break the shared version: declaring more than one
+release-please package. With `separate-pull-requests`, multiple components
+produce one release PR and one tag *per component*, so there is no single
+version left to share. Use one package.
 
 ## 3. Releases
 
