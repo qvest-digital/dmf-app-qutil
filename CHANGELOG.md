@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.13](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.12...v1.0.0-rc.13) (2026-08-03)
+
+
+### Bug Fixes
+
+* **chart:** keep appVersion on the release version ([#100](https://github.com/qvest-digital/dmf-app-qutil/issues/100)) ([dc6d68e](https://github.com/qvest-digital/dmf-app-qutil/commit/dc6d68ef7f1e6bdc76594e5ce4042858da38f96b))
+
 ## [1.0.0-rc.12](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.11...v1.0.0-rc.12) (2026-08-03)
 
 
