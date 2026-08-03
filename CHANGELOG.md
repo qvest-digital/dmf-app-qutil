@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.17](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.16...v1.0.0-rc.17) (2026-08-03)
+
+
+### Bug Fixes
+
+* **chart:** size each writer to the pattern it generates ([#109](https://github.com/qvest-digital/dmf-app-qutil/issues/109)) ([9cd04ec](https://github.com/qvest-digital/dmf-app-qutil/commit/9cd04ec5317c54fa11d63e485a015bbf165cbc2e))
+
 ## [1.0.0-rc.16](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.15...v1.0.0-rc.16) (2026-08-03)
 
 
