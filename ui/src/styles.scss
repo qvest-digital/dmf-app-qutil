@@ -588,35 +588,13 @@ footer {
   color: #fff;
 }
 
-/* txDarwin / SRT switcher */
+/* Single-player pages: the SRT ingest and the composite mosaic. */
 .tx-main {
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   max-width: 1180px;
-}
-.tx-toggle {
-  display: flex;
-  gap: 8px;
-}
-.txbtn {
-  border-radius: var(--qv-radius-pill);
-  border: 2px solid var(--qv-orange);
-  color: var(--qv-orange);
-  background: transparent;
-  font-family: inherit;
-  font-weight: 700;
-  font-size: 13px;
-  padding: 0.45em 1.2em;
-  cursor: pointer;
-}
-.txbtn:hover {
-  background: rgba(240, 80, 18, 0.08);
-}
-.txbtn.active {
-  background: var(--qv-orange);
-  color: #fff;
 }
 .tx-video {
   width: 100%;
