@@ -221,21 +221,71 @@ imagePullSecret:
     passwordProperty: pat
   refreshInterval: 1h
 
+# The SRT sources feeding the production. One claim per source: the ingest
+# decodes one stream into one set of flows, so three sources are three claims
+# rather than one claim scaled to three.
+#
+# The port and the flow ids are per booking by necessity. The pod runs
+# hostNetwork, so the port is a host port and two claims on one node must not
+# share it; two claims sharing a flow id write over each other's grains.
+srtIngest:
+  enabled: true
+  className: srt-mxl-ingest
+  # Gates the public endpoint: only a sender passing the matching value
+  # connects. The generators below read the same Secret to dial the ingests.
+  # Disable where the cluster syncs this Secret itself, as it does for the pull
+  # secret.
+  passphrase:
+    enabled: true
+    secretName: srt-ingest-passphrase
+    key: SRT_PASSPHRASE
+    # Cluster-scoped on purpose: one definition then serves both the release
+    # namespace and the production namespace, and it is the store the clusters
+    # already provide.
+    secretStore:
+      kind: ClusterSecretStore
+      name: aws-secretsmanager
+    remoteRef:
+      key: mxl/dev/srt-ingest/passphrase
+      property: passphrase
+    refreshInterval: 1h
+  # Source 1 is the one a camera normally feeds; the in-cluster generators
+  # below cover 2 and 3. The ports differ because they are host ports.
+  sources:
+    - name: srt-ingest-1
+      groupHint: srt-ingest-1
+      port: 9000
+      videoFlowId: b2000000-0000-0000-0000-000000000001
+      audioFlowId: aea7b9e9-1e5b-4333-9ac4-8689053a77de
+      ancFlowId: c3000000-0000-0000-0000-000000000001
+    - name: srt-ingest-2
+      groupHint: srt-ingest-2
+      port: 9001
+      videoFlowId: b2000000-0000-0000-0000-000000000002
+      audioFlowId: 2fffed31-8d6f-4558-b368-4a925d364fd3
+      ancFlowId: c3000000-0000-0000-0000-000000000002
+    - name: srt-ingest-3
+      groupHint: srt-ingest-3
+      port: 9002
+      videoFlowId: b2000000-0000-0000-0000-000000000003
+      audioFlowId: b906f97d-5c90-4db2-976a-cd8a3a655925
+      ancFlowId: c3000000-0000-0000-0000-000000000003
+
 # Cluster-internal SRT generators standing in for playout sources. Each dials
-# one srt-ingest bridge and waits for the bridge Secret, so they idle harmlessly
-# where srt-ingest is absent. Disable them there rather than leaving them to
-# wait.
+# one booked ingest by its claim name in the production namespace, so they are
+# only useful where those claims are bound.
 testSources:
   enabled: true
   image: linuxserver/ffmpeg@sha256:e6b338a3a9d7ca2a33d345fa683d68767f799f2c13694542ba5bfb4f63dff585
-  bridgeSecretName: srt-mxl-bridge-secret
   sources:
     - name: srt-test-source-2
-      target: srt-mxl-bridge-instance-2:9001
+      claim: srt-ingest-2
+      port: 9001
       label: ZUSPIELER 2
       pattern: "mandelbrot=size=1296x720:rate=30"
     - name: srt-test-source-3
-      target: srt-mxl-bridge-instance-3:9002
+      claim: srt-ingest-3
+      port: 9002
       label: ZUSPIELER 3
       pattern: "smptebars=size=1296x720:rate=30"
   resources:

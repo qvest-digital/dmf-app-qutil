@@ -1,0 +1,69 @@
+{{- if .Values.srtIngest.enabled }}
+{{- /* One claim per SRT source. The ingest decodes one stream into one set of
+       flows, so three sources are three claims rather than one claim scaled to
+       three.
+
+       Both the port and the flow ids are per booking by necessity, not by
+       taste. The pod runs hostNetwork, so the port is a host port and two
+       claims landing on one node must not share it; two claims sharing a flow
+       id would write over each other's grains.
+
+       Everything cluster-shaped -- image, pull secret, the volume holding the
+       MXL runtime root, the load balancer that fronts the endpoint, node
+       tolerations -- comes from the MediaFunctionClass and the cluster's
+       catalog values, not from here. */ -}}
+{{- $root := . }}
+{{- range .Values.srtIngest.sources }}
+---
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .name }}
+  namespace: {{ include "qutil.productionNamespace" $root }}
+  labels:
+    {{- include "qutil.labels" $root | nindent 4 }}
+spec:
+  className: {{ $root.Values.srtIngest.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ $root.Values.booking.reprovisionOnDrift }}
+  booking:
+    jobRef: {{ $root.Values.booking.jobRef | quote }}
+  parameters:
+    srt:
+      port: {{ .port }}
+      {{- with $root.Values.srtIngest.passphrase.secretName }}
+      passphrase:
+        secretName: {{ . }}
+        key: {{ $root.Values.srtIngest.passphrase.key }}
+      {{- end }}
+      {{- with .codec }}
+      codec: {{ . }}
+      {{- end }}
+      {{- with .latencyMs }}
+      latencyMs: {{ . }}
+      {{- end }}
+    flow:
+      # Pairs this source's video, audio and timecode flows for a consumer.
+      group_hint: {{ .groupHint }}
+      video_output:
+        id: {{ .videoFlowId }}
+      audio_output:
+        enabled: {{ .audioFlowId | not | not }}
+        {{- with .audioFlowId }}
+        id: {{ . }}
+        {{- end }}
+      anc_output:
+        enabled: {{ .ancFlowId | not | not }}
+        {{- with .ancFlowId }}
+        id: {{ . }}
+        {{- end }}
+      {{- with .grainRate }}
+      grain_rate:
+        numerator: {{ .numerator }}
+        denominator: {{ .denominator }}
+      {{- end }}
+    {{- with .parameters }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}
