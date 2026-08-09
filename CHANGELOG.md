@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-rc.20](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.19...v1.0.0-rc.20) (2026-08-09)
+
+
+### Bug Fixes
+
+* **preview:** drive the channel meters at frame rate ([#119](https://github.com/qvest-digital/dmf-app-qutil/issues/119)) ([9355038](https://github.com/qvest-digital/dmf-app-qutil/commit/9355038b93bf77478128bf0b85631e0b1f4043fa))
+* **qutil:** run the SRT generators on the host network ([#117](https://github.com/qvest-digital/dmf-app-qutil/issues/117)) ([0871920](https://github.com/qvest-digital/dmf-app-qutil/commit/0871920fa9a9430948a3bb50b7b75f4e19f11ca5))
+
 ## [1.0.0-rc.19](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.18...v1.0.0-rc.19) (2026-08-09)
 
 
