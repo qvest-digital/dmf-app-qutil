@@ -38,6 +38,24 @@ const PEAK_DECAY = 0.012;
 const HOT_DBFS = -6;
 const MAX_CHANNELS = 8;
 const SPECTRUM_COLUMNS = 64;
+/**
+ * How fast a bar falls when the reported level drops, in dB per second. Matches
+ * the audio preview's own envelope, so carrying the level between polls follows
+ * the curve the reported value is already on rather than inventing one.
+ */
+const LEVEL_DECAY_DB_PER_SEC = 30;
+
+/**
+ * One step of meter ballistics: rise to the target at once, fall at a fixed
+ * rate. Reported levels arrive a few times a second and the canvas redraws
+ * sixty; without this the bars would sit still and then jump, which reads as
+ * lag even when the numbers are current.
+ */
+export function advanceLevelDb(current: number, target: number, dtMs: number): number {
+  if (target >= current) return target;
+  return Math.max(target, current - (LEVEL_DECAY_DB_PER_SEC * Math.max(dtMs, 0)) / 1000);
+}
+
 /** Past this many bars the strip needs the wider half of the canvas. */
 const WIDE_STRIP_CHANNELS = 8;
 
@@ -49,6 +67,11 @@ const WIDE_STRIP_CHANNELS = 8;
  * measuring the decoded stream would meter the pair being listened to and say
  * nothing about the rest of a 12-channel flow. The spectrum stays client-side
  * off the decoded stream, which is the part that is actually audible.
+ *
+ * Those levels arrive a few times a second and are already an envelope, so the
+ * bars are driven by ballistics at frame rate rather than set to whatever the
+ * last poll said: the movement between polls is the fall the reported level is
+ * on, not an invented interpolation.
  *
  * With no reported levels (an audio-preview that predates them) the bars fall
  * back to measuring the decoded stream, which is right for the stereo flows
@@ -79,6 +102,9 @@ export class AudioMeters {
 
   private viz: Visualisation | null = null;
   private frame = 0;
+  /** Displayed level per bar, in dBFS, carried between frames by the ballistics. */
+  private levelsDb: number[] = [];
+  private lastFrameAt = 0;
   /**
    * Kept across frames so the reported levels, which arrive once a poll rather
    * than once a frame, still read as meters rather than as a value that jumps
@@ -170,6 +196,8 @@ export class AudioMeters {
       this.viz = null;
     }
     this.sourceHold = [];
+    this.levelsDb = [];
+    this.lastFrameAt = 0;
     if (!wasRunning) return;
     const canvas = this.canvasRef().nativeElement;
     canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
@@ -212,10 +240,19 @@ export class AudioMeters {
     // Two label lines under every bar, the channel and its level.
     const barHeight = H - pad * 2 - 28;
 
+    // Wall clock rather than a fixed step: rAF is throttled in a background tab
+    // and skips frames under load, and a decay measured in frames would run at
+    // whatever rate the browser felt like.
+    const now = performance.now();
+    const dt = this.lastFrameAt ? now - this.lastFrameAt : 0;
+    this.lastFrameAt = now;
+
     const selected = this.selected();
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
-      const db = peaks.length ? peaks[c] : this.decodedDb(viz, c);
+      const target = peaks.length ? peaks[c] : this.decodedDb(viz, c);
+      const db = advanceLevelDb(this.levelsDb[c] ?? -120, target, dt);
+      this.levelsDb[c] = db;
       const v = AudioMeters.norm(db);
       this.sourceHold[c] ??= { peak: 0, hold: 0 };
       AudioMeters.advance(this.sourceHold[c], v);
