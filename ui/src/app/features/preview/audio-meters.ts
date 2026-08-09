@@ -32,28 +32,36 @@ interface Visualisation {
 
 /** Peak-hold dwell before the marker starts sliding back down. */
 const PEAK_HOLD_MS = 900;
-/** How fast it slides, per frame. */
-const PEAK_DECAY = 0.012;
+/** How fast it slides once the dwell is over, in bar heights per second. */
+const PEAK_DECAY_PER_SEC = 0.7;
 /** Above this the bar turns orange — the usual "too hot" cue. */
 const HOT_DBFS = -6;
 const MAX_CHANNELS = 8;
 const SPECTRUM_COLUMNS = 64;
 /**
- * How fast a bar falls when the reported level drops, in dB per second. Matches
- * the audio preview's own envelope, so carrying the level between polls follows
- * the curve the reported value is already on rather than inventing one.
+ * Time constants for a bar chasing a new level, rising and falling. Asymmetric
+ * because that is what a level meter does: catch a transient, let it go slowly
+ * enough to read.
  */
-const LEVEL_DECAY_DB_PER_SEC = 30;
+const ATTACK_MS = 25;
+const RELEASE_MS = 220;
 
 /**
- * One step of meter ballistics: rise to the target at once, fall at a fixed
- * rate. Reported levels arrive a few times a second and the canvas redraws
- * sixty; without this the bars would sit still and then jump, which reads as
- * lag even when the numbers are current.
+ * One step of meter ballistics, as a first-order filter towards the target.
+ *
+ * Reported levels arrive a few times a second and the canvas redraws sixty
+ * times, so what happens between two reported values decides whether the bars
+ * look alive. A rate limit does not: it reaches the target and then holds
+ * perfectly still until the next one arrives, which is a step at poll rate for
+ * every change smaller than the rate allows. Easing towards the target instead
+ * never arrives, so every frame moves. It is the same treatment the spectrum
+ * beside these bars gets from `AnalyserNode.smoothingTimeConstant`, which is
+ * why that half already looks continuous.
  */
 export function advanceLevelDb(current: number, target: number, dtMs: number): number {
-  if (target >= current) return target;
-  return Math.max(target, current - (LEVEL_DECAY_DB_PER_SEC * Math.max(dtMs, 0)) / 1000);
+  const tau = target >= current ? ATTACK_MS : RELEASE_MS;
+  const alpha = 1 - Math.exp(-Math.max(dtMs, 0) / tau);
+  return current + (target - current) * alpha;
 }
 
 /** Past this many bars the strip needs the wider half of the canvas. */
@@ -68,10 +76,11 @@ const WIDE_STRIP_CHANNELS = 8;
  * nothing about the rest of a 12-channel flow. The spectrum stays client-side
  * off the decoded stream, which is the part that is actually audible.
  *
- * Those levels arrive a few times a second and are already an envelope, so the
- * bars are driven by ballistics at frame rate rather than set to whatever the
- * last poll said: the movement between polls is the fall the reported level is
- * on, not an invented interpolation.
+ * Those levels arrive a few times a second and the canvas redraws sixty times,
+ * so the bars ease towards each reported value rather than being set to it.
+ * Anything that arrives at the target and stops -- setting it outright, or
+ * limiting the rate of change -- holds still until the next poll, which is a
+ * step at poll rate however current the number is.
  *
  * With no reported levels (an audio-preview that predates them) the bars fall
  * back to measuring the decoded stream, which is right for the stereo flows
@@ -208,13 +217,17 @@ export class AudioMeters {
     return Math.max(0, Math.min(1, (db + 60) / 60));
   }
 
-  /** One peak-hold step against a level that may not have moved since the last frame. */
-  private static advance(state: HoldState, v: number): void {
+  /**
+   * One peak-hold step. The slide is per second rather than per frame: rAF runs
+   * at whatever rate the browser is willing to, so a per-frame step makes the
+   * marker fall faster on a fast display than on a slow one.
+   */
+  private static advance(state: HoldState, v: number, dtMs: number): void {
     if (v >= state.peak) {
       state.peak = v;
       state.hold = performance.now();
     } else if (performance.now() - state.hold > PEAK_HOLD_MS) {
-      state.peak = Math.max(v, state.peak - PEAK_DECAY);
+      state.peak = Math.max(v, state.peak - (PEAK_DECAY_PER_SEC * dtMs) / 1000);
     }
   }
 
@@ -251,11 +264,13 @@ export class AudioMeters {
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
       const target = peaks.length ? peaks[c] : this.decodedDb(viz, c);
-      const db = advanceLevelDb(this.levelsDb[c] ?? -120, target, dt);
+      // Seeded with the target rather than silence, so opening a preview shows
+      // the levels instead of sweeping up to them.
+      const db = advanceLevelDb(this.levelsDb[c] ?? target, target, dt);
       this.levelsDb[c] = db;
       const v = AudioMeters.norm(db);
       this.sourceHold[c] ??= { peak: 0, hold: 0 };
-      AudioMeters.advance(this.sourceHold[c], v);
+      AudioMeters.advance(this.sourceHold[c], v, dt);
 
       const audible = selected.includes(c + 1);
       const x = pad + c * slot;
