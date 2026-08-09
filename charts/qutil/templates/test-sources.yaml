@@ -3,6 +3,19 @@
        dials one booked ingest by its claim name in the production namespace,
        so they are only useful where those claims are bound.
 
+       They run on the host network because the ingest does. A pod on the CNI
+       network cannot complete an SRT handshake with a hostNetwork listener on
+       its OWN node: flannel masquerades in POSTROUTING, which a packet
+       addressed to the local node never traverses, so it keeps its pod source
+       address; the listener's socket is bound to 0.0.0.0 and replies via a
+       route lookup that leaves by the CNI bridge, so the answer reaches the
+       caller from an address it never sent to and SRT discards it. Whether a
+       generator worked came down to whether the scheduler had placed it on the
+       same node as its ingest.
+
+       dnsPolicy is required with hostNetwork: the default resolves through the
+       node's resolv.conf, where the claim's Service name does not exist.
+
        Shell variables are written without braces. The passphrase Secret is
        rendered by ESO and may appear after this app, so the volume is optional
        and the script waits for the key rather than the pod failing to start on
@@ -33,6 +46,8 @@ spec:
         {{- include "qutil.labels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ .name }}
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: ffmpeg
           image: {{ $root.Values.testSources.image }}
