@@ -1,12 +1,12 @@
 {{- if .Values.testSources.enabled }}
 {{- /* Cluster-internal SRT generators standing in for playout sources. Each
-       dials one srt-ingest bridge, so they are only useful where srt-ingest is
-       deployed and the bridge Secret exists.
+       dials one booked ingest by its claim name in the production namespace,
+       so they are only useful where those claims are bound.
 
-       Shell variables are written without braces. The passphrase Secret
-       belongs to srt-ingest, which may appear after this app, so the volume is
-       optional and the script waits for the key rather than the pod failing to
-       start on a missing mount. */ -}}
+       Shell variables are written without braces. The passphrase Secret is
+       rendered by ESO and may appear after this app, so the volume is optional
+       and the script waits for the key rather than the pod failing to start on
+       a missing mount. */ -}}
 {{- $root := . }}
 {{- range .Values.testSources.sources }}
 ---
@@ -38,7 +38,7 @@ spec:
           image: {{ $root.Values.testSources.image }}
           env:
             - name: TARGET
-              value: {{ .target | quote }}
+              value: {{ printf "%s.%s:%v" .claim (include "qutil.productionNamespace" $root) .port | quote }}
             - name: LABEL
               value: {{ .label | quote }}
             - name: PATTERN
@@ -49,7 +49,7 @@ spec:
               set -u
               FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
               until [ -s /secrets/SRT_PASSPHRASE ]; do
-                echo "warte auf {{ $root.Values.testSources.bridgeSecretName }} (kommt mit srt-ingest)"
+                echo "warte auf {{ $root.Values.srtIngest.passphrase.secretName }} (kommt mit srt-ingest)"
                 sleep 10
               done
               SRT_PASSPHRASE=$(cat /secrets/SRT_PASSPHRASE)
@@ -73,7 +73,7 @@ spec:
       volumes:
         - name: bridge-secret
           secret:
-            secretName: {{ $root.Values.testSources.bridgeSecretName }}
+            secretName: {{ $root.Values.srtIngest.passphrase.secretName }}
             optional: true
 {{- end }}
 {{- end }}
