@@ -17,6 +17,12 @@ interface ChannelMeter {
   hold: number;
 }
 
+/** Peak-hold state for a bar whose level arrives from outside this component. */
+interface HoldState {
+  peak: number;
+  hold: number;
+}
+
 interface Visualisation {
   src: AudioNode;
   channels: ChannelMeter[];
@@ -32,11 +38,21 @@ const PEAK_DECAY = 0.012;
 const HOT_DBFS = -6;
 const MAX_CHANNELS = 8;
 const SPECTRUM_COLUMNS = 64;
+/** Past this many bars the strip needs the wider half of the canvas. */
+const WIDE_STRIP_CHANNELS = 8;
 
 /**
- * Level meters and a spectrum for an audio preview, drawn from the stream the
- * browser has already decoded — nothing extra is computed or shipped from the
- * cluster.
+ * Level meters and a spectrum for an audio preview.
+ *
+ * The bars are the flow's channels, all of them, from the levels the
+ * audio-preview reports — only two are ever delivered to the browser, so
+ * measuring the decoded stream would meter the pair being listened to and say
+ * nothing about the rest of a 12-channel flow. The spectrum stays client-side
+ * off the decoded stream, which is the part that is actually audible.
+ *
+ * With no reported levels (an audio-preview that predates them) the bars fall
+ * back to measuring the decoded stream, which is right for the stereo flows
+ * that case can still play.
  */
 @Component({
   selector: 'mv-audio-meters',
@@ -47,6 +63,10 @@ const SPECTRUM_COLUMNS = 64;
 })
 export class AudioMeters {
   readonly show = input(false);
+  /** dBFS per source channel, as /status reports it. */
+  readonly sourcePeaks = input<number[]>([]);
+  /** The 1-based source channels currently audible. */
+  readonly selected = input<number[]>([]);
 
   private readonly canvasRef = viewChild.required<ElementRef<HTMLCanvasElement>>('canvas');
 
@@ -59,6 +79,12 @@ export class AudioMeters {
 
   private viz: Visualisation | null = null;
   private frame = 0;
+  /**
+   * Kept across frames so the reported levels, which arrive once a poll rather
+   * than once a frame, still read as meters rather than as a value that jumps
+   * and freezes.
+   */
+  private sourceHold: HoldState[] = [];
 
   constructor() {
     inject(DestroyRef).onDestroy(() => this.stop());
@@ -143,6 +169,7 @@ export class AudioMeters {
       }
       this.viz = null;
     }
+    this.sourceHold = [];
     if (!wasRunning) return;
     const canvas = this.canvasRef().nativeElement;
     canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
@@ -151,6 +178,16 @@ export class AudioMeters {
   /** -60..0 dBFS -> 0..1 */
   private static norm(db: number): number {
     return Math.max(0, Math.min(1, (db + 60) / 60));
+  }
+
+  /** One peak-hold step against a level that may not have moved since the last frame. */
+  private static advance(state: HoldState, v: number): void {
+    if (v >= state.peak) {
+      state.peak = v;
+      state.hold = performance.now();
+    } else if (performance.now() - state.hold > PEAK_HOLD_MS) {
+      state.peak = Math.max(v, state.peak - PEAK_DECAY);
+    }
   }
 
   private draw(): void {
@@ -165,43 +202,42 @@ export class AudioMeters {
     const H = canvas.height;
     g.clearRect(0, 0, W, H);
 
+    const peaks = this.sourcePeaks();
+    const count = peaks.length || viz.channels.length;
     const pad = 18;
-    const barsW = Math.round(W * 0.34);
+    // A wide flow gets more of the canvas: twelve bars in a third of it leave
+    // no room for a channel number under each one.
+    const barsW = Math.round(W * (count > WIDE_STRIP_CHANNELS ? 0.5 : 0.34));
     const specX = barsW + pad * 2;
-    const barHeight = H - pad * 2 - 16;
+    // Two label lines under every bar, the channel and its level.
+    const barHeight = H - pad * 2 - 28;
 
-    // Level bars: RMS with a decaying peak-hold per channel.
-    const count = viz.channels.length;
+    const selected = this.selected();
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
-      const ch = viz.channels[c];
-      ch.analyser.getFloatTimeDomainData(ch.samples);
-      let sum = 0;
-      for (const s of ch.samples) sum += s * s;
-      const rms = Math.sqrt(sum / ch.samples.length);
-      const db = rms > 0 ? 20 * Math.log10(rms) : -120;
+      const db = peaks.length ? peaks[c] : this.decodedDb(viz, c);
       const v = AudioMeters.norm(db);
-      if (v >= ch.peak) {
-        ch.peak = v;
-        ch.hold = performance.now();
-      } else if (performance.now() - ch.hold > PEAK_HOLD_MS) {
-        ch.peak = Math.max(v, ch.peak - PEAK_DECAY);
-      }
+      this.sourceHold[c] ??= { peak: 0, hold: 0 };
+      AudioMeters.advance(this.sourceHold[c], v);
 
+      const audible = selected.includes(c + 1);
       const x = pad + c * slot;
       const w = slot * 0.62;
-      g.fillStyle = 'rgba(255,255,255,.07)';
+      g.fillStyle = audible ? 'rgba(200,241,105,.16)' : 'rgba(255,255,255,.07)';
       g.fillRect(x, pad, w, barHeight);
       const lit = Math.round(barHeight * v);
       g.fillStyle = db > HOT_DBFS ? '#F05012' : '#C8F169';
       g.fillRect(x, pad + barHeight - lit, w, lit);
-      const peakY = pad + barHeight - Math.round(barHeight * ch.peak);
+      const peakY = pad + barHeight - Math.round(barHeight * this.sourceHold[c].peak);
       g.fillStyle = '#fff';
       g.fillRect(x, Math.max(pad, peakY - 2), w, 2);
-      g.fillStyle = 'rgba(255,255,255,.55)';
+
       g.font = '11px system-ui,sans-serif';
       g.textAlign = 'left';
-      g.fillText(`ch${c + 1}  ${db <= -120 ? '-inf' : db.toFixed(1)} dB`, x, H - pad + 4);
+      g.fillStyle = audible ? '#C8F169' : 'rgba(255,255,255,.55)';
+      g.fillText(`ch${c + 1}`, x, H - pad - 4);
+      g.fillStyle = 'rgba(255,255,255,.45)';
+      g.fillText(db <= -120 ? '-inf' : db.toFixed(1), x, H - pad + 8);
     }
 
     // Spectrum: log-ish frequency buckets so the low end isn't a sliver.
@@ -216,11 +252,22 @@ export class AudioMeters {
       for (let b = lo; b < hi && b < binCount; b++) peak = Math.max(peak, viz.bins[b]);
       const h = Math.round(barHeight * (peak / 255));
       g.fillStyle = `rgba(200,241,105,${(0.35 + 0.65 * (peak / 255)).toFixed(3)})`;
-      g.fillRect(specX + k * colWidth, H - pad - 16 - h, Math.max(1, colWidth - 1), h);
+      g.fillRect(specX + k * colWidth, H - pad - 28 - h, Math.max(1, colWidth - 1), h);
     }
     g.fillStyle = 'rgba(255,255,255,.45)';
     g.font = '11px system-ui,sans-serif';
     g.textAlign = 'left';
-    g.fillText('spectrum', specX, H - pad + 4);
+    g.fillText('spectrum of the audible pair', specX, H - pad + 4);
+  }
+
+  /** RMS of one decoded channel, in dBFS. Only reached without reported levels. */
+  private decodedDb(viz: Visualisation, c: number): number {
+    const ch = viz.channels[c];
+    if (!ch) return -120;
+    ch.analyser.getFloatTimeDomainData(ch.samples);
+    let sum = 0;
+    for (const s of ch.samples) sum += s * s;
+    const rms = Math.sqrt(sum / ch.samples.length);
+    return rms > 0 ? 20 * Math.log10(rms) : -120;
   }
 }

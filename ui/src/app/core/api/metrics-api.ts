@@ -38,12 +38,30 @@ export class MetricsApi {
    * `owner` names who is asking. A tile and the operator overlay can play the
    * same flow at once and both resolve to the same path, so the aggregator
    * counts holders and only tears the path down when the last one releases it.
+   *
+   * `channels` is the 1-based source pair an audio preview should publish; a
+   * browser gets stereo however wide the flow is. Repeating the call with a
+   * different pair moves a running session instead of restarting it, which is
+   * what `selectPreviewChannels` relies on.
    */
-  startPreview(uuid: string, owner?: string): Observable<PreviewSession> {
+  startPreview(uuid: string, owner?: string, channels?: number[]): Observable<PreviewSession> {
     return this.http.post<PreviewSession>(
-      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
+      `/api/preview/${encodeURIComponent(uuid)}${this.previewQuery(owner, channels)}`,
       null,
     );
+  }
+
+  /**
+   * Move a playing audio preview onto another channel pair. Same call as
+   * starting one: the path and its publisher stay up, so the element playing it
+   * never sees the switch.
+   */
+  selectPreviewChannels(
+    uuid: string,
+    channels: number[],
+    owner?: string,
+  ): Observable<PreviewSession> {
+    return this.startPreview(uuid, owner, channels);
   }
 
   /**
@@ -66,6 +84,14 @@ export class MetricsApi {
 
   private ownerQuery(owner?: string): string {
     return owner ? `?owner=${encodeURIComponent(owner)}` : '';
+  }
+
+  private previewQuery(owner?: string, channels?: number[]): string {
+    const params = new URLSearchParams();
+    if (owner) params.set('owner', owner);
+    if (channels?.length) params.set('channels', channels.join(','));
+    const query = params.toString();
+    return query ? `?${query}` : '';
   }
 
   /** Delete flow n's writer pod, so the audience can watch Kubernetes recover it. */

@@ -803,6 +803,12 @@ def operator_flows():
 # exists, and mediamtx.yml declares just a couple, so the path is created in
 # publisher mode (empty config, no source) before the pod is asked to start.
 #
+# What it pushes is a stereo pair, whatever the flow's channel count: neither
+# transport carries more, and a wider one fails to negotiate rather than
+# degrading. Which pair is a parameter, so a 12-channel flow is audible two
+# channels at a time, and /status carries a level for every channel so the
+# caller can see the rest without listening to them.
+#
 # It pushes the same flow twice, into two paths: Opus for WHEP and AAC for HLS.
 # Neither transport carries the other's codec -- WebRTC has no AAC, and the
 # MPEG-TS HLS variant refuses Opus outright ("supports MPEG-4 Audio only") with
@@ -843,6 +849,10 @@ _CLAIMS_API = "/apis/dmf.qvest-digital.com/v1alpha1"
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Which channel pair an audio preview should publish, 1-based, as the
+# audio-preview control API takes it. Validated rather than forwarded blind:
+# the value ends up in a query string built by hand.
+_CHANNELS_RE = re.compile(r"^\d{1,3}(,\d{1,3})?$")
 
 
 def _http_json(base, path, method="GET", body=None):
@@ -983,16 +993,18 @@ def _release(uuid, owner):
         return True
 
 
-def preview_add(uuid, owner="overlay"):
+def preview_add(uuid, owner="overlay", channels=""):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
+    if channels and not _CHANNELS_RE.match(channels):
+        return 400, {"error": "channels must be one or two 1-based numbers"}
     fl = _known_flow(uuid)
     if not fl:
         return 404, {"error": "flow not known to the operator"}
     d = fl.get("spec", {}).get("definition", {}) or {}
     fmt = (d.get("format") or "").rsplit(":", 1)[-1]
     if fmt == "audio":
-        code, res = preview_add_audio(uuid)
+        code, res = preview_add_audio(uuid, channels)
         if code == 200:
             _hold(uuid, owner)
         return code, res
@@ -1040,8 +1052,15 @@ def _audio_preview_paths(uuid):
     return name, name + "-hls"
 
 
-def preview_add_audio(uuid):
-    """Create the publisher-mode paths, then ask audio-preview to push into them."""
+def preview_add_audio(uuid, channels=""):
+    """Create the publisher-mode paths, then ask audio-preview to push into them.
+
+    `channels` is the 1-based pair to publish, which is all a browser can play
+    however wide the flow is. Repeating this call with a different pair moves a
+    running session rather than restarting it, so the paths already exist and
+    the loop below is a no-op -- that is what makes switching pairs mid-listen
+    cheap enough to drive from a button.
+    """
     name, hls_name = _audio_preview_paths(uuid)
     added = []
     for path in (name, hls_name):
@@ -1059,7 +1078,10 @@ def preview_add_audio(uuid):
                 _mtx(f"/v3/config/paths/delete/{done}", "DELETE")
             return code, {"error": res.get("error") or "mediamtx add failed"}
         added.append(path)
-    code, res = _audio_preview(f"/start?flow={uuid}", "POST")
+    query = f"/start?flow={uuid}"
+    if channels:
+        query += f"&channels={channels}"
+    code, res = _audio_preview(query, "POST")
     if code != 200:
         # Don't leave orphan paths waiting for a publisher that never comes.
         for path in (name, hls_name):
@@ -1124,16 +1146,20 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _preview_args(self):
-        """(uuid, owner) from /api/preview/<uuid>[?owner=<token>].
+        """(uuid, owner, channels) from
+        /api/preview/<uuid>[?owner=<token>][&channels=<l>[,<r>]].
 
         The owner names who is asking, so the four tiles and the operator
         overlay can hold the same flow open without either one's close
-        dropping the path the other is playing.
+        dropping the path the other is playing. channels applies to audio
+        only and is empty when the caller does not care which pair it gets.
         """
         parts = urllib.parse.urlsplit(self.path)
         uuid = parts.path.rstrip("/").rsplit("/", 1)[1]
-        owner = urllib.parse.parse_qs(parts.query).get("owner", ["overlay"])[0]
-        return uuid, owner
+        query = urllib.parse.parse_qs(parts.query)
+        owner = query.get("owner", ["overlay"])[0]
+        channels = query.get("channels", [""])[0]
+        return uuid, owner, channels
 
     def log_message(self, *a):
         pass
@@ -1152,7 +1178,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/preview/"):
             # GET on the same collection POST/DELETE use: is this audio preview
             # actually producing yet, or did its reader fail to open?
-            uuid, _ = self._preview_args()
+            uuid, _, _ = self._preview_args()
             try:
                 code, res = preview_status(uuid)
             except Exception as e:
@@ -1170,16 +1196,16 @@ class H(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.path.startswith("/api/preview/"):
-            uuid, owner = self._preview_args()
+            uuid, owner, _ = self._preview_args()
             code, res = preview_del(uuid, owner)
             return self._send(code, res)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
         if self.path.startswith("/api/preview/"):
-            uuid, owner = self._preview_args()
+            uuid, owner, channels = self._preview_args()
             try:
-                code, res = preview_add(uuid, owner)
+                code, res = preview_add(uuid, owner, channels)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)
