@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-rc.18](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.17...v1.0.0-rc.18) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **qutil:** srtIngest.sources replaces the hardcoded bridge names, and testSources.sources takes claim and port instead of target. testSources.bridgeSecretName is gone; the name now comes from srtIngest.passphrase.secretName.
+
+### Features
+
+* **qutil:** book the SRT ingests instead of dialling deployments ([#112](https://github.com/qvest-digital/dmf-app-qutil/issues/112)) ([bbd311b](https://github.com/qvest-digital/dmf-app-qutil/commit/bbd311bdf613cbee211d58acd1412480462d83dc))
+
 ## [1.0.0-rc.17](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.16...v1.0.0-rc.17) (2026-08-03)
 
 
