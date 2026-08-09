@@ -23,11 +23,12 @@ const VIDEO_WARMUP_MS = 900;
 const AUDIO_TRIES = 30;
 const AUDIO_POLL_MS = 1000;
 /**
- * How often the levels refresh once audio is playing. The meters carry the
- * level between polls, so this bounds how quickly a bar can rise rather than
- * how smoothly it moves; the audio preview answers from memory.
+ * How often the levels refresh once audio is playing. The meters ease towards
+ * each value, so this bounds how soon a bar starts reacting rather than how
+ * smoothly it moves; the audio preview answers /status from memory, and only
+ * one overlay polls it at a time.
  */
-const LEVEL_POLL_MS = 200;
+const LEVEL_POLL_MS = 100;
 /** The preview tolerates more rebuffering than a tile before it gives up. */
 const HLS_RETRY_MS = 4000;
 
