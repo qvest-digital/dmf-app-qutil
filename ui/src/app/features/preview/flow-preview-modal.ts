@@ -22,8 +22,12 @@ const VIDEO_WARMUP_MS = 900;
 /** Audio readiness poll: 30 tries, one a second. */
 const AUDIO_TRIES = 30;
 const AUDIO_POLL_MS = 1000;
-/** How often the levels refresh once audio is playing. */
-const LEVEL_POLL_MS = 500;
+/**
+ * How often the levels refresh once audio is playing. The meters carry the
+ * level between polls, so this bounds how quickly a bar can rise rather than
+ * how smoothly it moves; the audio preview answers from memory.
+ */
+const LEVEL_POLL_MS = 200;
 /** The preview tolerates more rebuffering than a tile before it gives up. */
 const HLS_RETRY_MS = 4000;
 
