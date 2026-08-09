@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.19](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.18...v1.0.0-rc.19) (2026-08-09)
+
+
+### Features
+
+* **preview:** pick which channel pair of an audio flow to hear ([#115](https://github.com/qvest-digital/dmf-app-qutil/issues/115)) ([aac919d](https://github.com/qvest-digital/dmf-app-qutil/commit/aac919da66fd981100dd88c487d82272df36919d))
+
 ## [1.0.0-rc.18](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.17...v1.0.0-rc.18) (2026-08-09)
 
 
