@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.21](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.20...v1.0.0-rc.21) (2026-08-09)
+
+
+### Bug Fixes
+
+* **preview:** ease the channel meters instead of rate-limiting them ([#120](https://github.com/qvest-digital/dmf-app-qutil/issues/120)) ([bc867ba](https://github.com/qvest-digital/dmf-app-qutil/commit/bc867ba57698cf8783692ad2c408dd985302d88f))
+
 ## [1.0.0-rc.20](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.19...v1.0.0-rc.20) (2026-08-09)
 
 
