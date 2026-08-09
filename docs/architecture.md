@@ -91,6 +91,12 @@ buffers, interleaves them, encodes Opus for WebRTC and AAC for HLS, and
 publishes both into paths created for it. Neither transport carries the
 other's codec, which is why there are two.
 
+What it publishes is two channels, whatever the flow's width: neither
+transport carries more, and a wider one fails to negotiate rather than
+degrading. The pair is a parameter of `/start`, so a 12-channel flow is
+audible a pair at a time, and `/status` carries a level per channel so the
+overlay can show all of them while only two are playing.
+
 Both link `libmxl`. MXL's domain protocol requires every reader and writer
 sharing a domain to use a byte-identical `libmxl.so`, so the `go-mxl` tag a
 function image is built against and the tag the mxl-k8s gateway was built from

@@ -264,6 +264,15 @@ export interface PreviewStatus {
   flow?: string;
   running?: boolean;
   samples?: number;
+  /** The flow's channel count, which is not what is published: see `selected`. */
   channels?: number;
+  /**
+   * The 1-based source channels on their way out as stereo, after clamping to
+   * the flow's width. Absent from an audio-preview that predates the pair
+   * selection, so a caller must tolerate it missing rather than assume [1, 2].
+   */
+  selected?: number[];
+  /** dBFS per source channel, all of them, not only the published pair. */
+  channelPeakDb?: number[];
   error?: string;
 }

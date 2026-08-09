@@ -411,6 +411,28 @@ main {
 .pv-audio.show {
   display: block;
 }
+/* Channel pair picker: only two channels of a wide flow are audible at once. */
+.pv-chans {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.pv-chans-label {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-right: 2px;
+}
+.pv-chan {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.pv-chan.on {
+  background: var(--qv-lime);
+  color: var(--qv-ink);
+}
 .pv-state {
   font-size: 12px;
   opacity: 0.7;

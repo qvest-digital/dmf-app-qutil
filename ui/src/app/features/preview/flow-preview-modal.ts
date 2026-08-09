@@ -9,7 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
-import { PreviewSession } from '../../core/api/models';
+import { PreviewSession, PreviewStatus } from '../../core/api/models';
 import { HlsHandle, hlsPlay } from '../../core/player/hls-player';
 import { PlayerRegistry } from '../../core/player/player-registry';
 import { WhepHandle, whep } from '../../core/player/whep';
@@ -22,6 +22,8 @@ const VIDEO_WARMUP_MS = 900;
 /** Audio readiness poll: 30 tries, one a second. */
 const AUDIO_TRIES = 30;
 const AUDIO_POLL_MS = 1000;
+/** How often the levels refresh once audio is playing. */
+const LEVEL_POLL_MS = 500;
 /** The preview tolerates more rebuffering than a tile before it gives up. */
 const HLS_RETRY_MS = 4000;
 
@@ -32,6 +34,11 @@ const HLS_RETRY_MS = 4000;
  * Audio: mediamtx's mxlSource refuses audio, so the audio-preview pod reads the
  * flow and PUSHES Opus into a publisher-mode path instead. Either way the overlay
  * plays a normal mediamtx path, and DELETE tears it down.
+ *
+ * What arrives is a stereo pair of the flow's channels, so a wide flow is heard
+ * a pair at a time and the buttons pick which. Levels for every channel come
+ * from the polled status rather than from the decoded stream, which only ever
+ * carries the pair being listened to.
  *
  * The component is always mounted and only toggles `.show`, because the <video>
  * it owns must be stable: createMediaElementSource throws if the meters are ever
@@ -51,7 +58,22 @@ const HLS_RETRY_MS = 4000;
         <!-- Audio flows have nothing to show, so the meters take the video's place
              and the element collapses to just its transport controls (volume and
              mute still matter). -->
-        <mv-audio-meters [show]="isAudio()" />
+        <mv-audio-meters [show]="isAudio()" [sourcePeaks]="levels()" [selected]="selected()" />
+        @if (pairs().length > 1) {
+          <div class="pv-chans">
+            <span class="pv-chans-label">listen to</span>
+            @for (pair of pairs(); track pair[0]) {
+              <button
+                class="btn pv-chan"
+                type="button"
+                [class.on]="isPlaying(pair)"
+                (click)="pick(pair)"
+              >
+                {{ pairLabel(pair) }}
+              </button>
+            }
+          </div>
+        }
         <mv-video-shell
           [videoClass]="isAudio() ? 'pv-video audio-only' : 'pv-video'"
           [controls]="true"
@@ -75,6 +97,12 @@ export class FlowPreviewModal {
   protected readonly title = signal('Preview');
   protected readonly state = signal('');
   protected readonly isAudio = signal(false);
+  /** Selectable channel pairs, empty for video and for a flow no wider than one pair. */
+  protected readonly pairs = signal<number[][]>([]);
+  /** The 1-based pair on air, as reported rather than as requested. */
+  protected readonly selected = signal<number[]>([]);
+  /** dBFS per source channel, straight from the polled status. */
+  protected readonly levels = signal<number[]>([]);
 
   /**
    * The flow whose preview is current. Every async continuation checks it before
@@ -85,6 +113,7 @@ export class FlowPreviewModal {
   private hls: HlsHandle | null = null;
   private pc: WhepHandle | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private levelTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     const onKeydown = (e: KeyboardEvent) => {
@@ -115,6 +144,32 @@ export class FlowPreviewModal {
     if (event.target === event.currentTarget) this.close();
   }
 
+  protected pairLabel(pair: number[]): string {
+    return pair.join('/');
+  }
+
+  protected isPlaying(pair: number[]): boolean {
+    const on = this.selected();
+    return pair.every((c) => on.includes(c));
+  }
+
+  /**
+   * Move the publisher onto another pair. The mediamtx path and its publisher
+   * stay up, so nothing is torn down here and the element keeps playing through
+   * the switch; the reported selection follows within a poll.
+   */
+  protected pick(pair: number[]): void {
+    const id = this.sessionId;
+    if (!id) return;
+    this.selected.set(pair);
+    this.api.selectPreviewChannels(id, pair, 'overlay').subscribe({
+      error: (err: { error?: { error?: string } }) => {
+        if (this.sessionId !== id) return;
+        this.state.set(`channel switch failed: ${err.error?.error ?? ''}`);
+      },
+    });
+  }
+
   private open(request: PreviewRequest): void {
     const id = request.id;
     this.sessionId = id;
@@ -122,6 +177,9 @@ export class FlowPreviewModal {
     this.title.set(request.label || id);
     this.state.set('starting preview…');
     this.isAudio.set(request.format === 'audio');
+    this.pairs.set(request.format === 'audio' ? FlowPreviewModal.pairsOf(request.channels) : []);
+    this.selected.set([]);
+    this.levels.set([]);
     this.teardown();
 
     this.api.startPreview(id).subscribe({
@@ -140,6 +198,15 @@ export class FlowPreviewModal {
         this.state.set(`preview failed: ${err.error?.error ?? ''}`);
       },
     });
+  }
+
+  /** [1,2], [3,4], ... with a lone trailing channel kept on its own. */
+  private static pairsOf(channels: number): number[][] {
+    const out: number[][] = [];
+    for (let c = 1; c <= channels; c += 2) {
+      out.push(c + 1 <= channels ? [c, c + 1] : [c]);
+    }
+    return out;
   }
 
   /**
@@ -164,7 +231,9 @@ export class FlowPreviewModal {
         }
         if (status.running && (status.samples ?? 0) > 0) {
           this.state.set('connecting audio…');
+          this.applyStatus(status);
           this.playAudio(session, status.channels || channels);
+          this.pollLevels(id);
           return;
         }
         if (tries <= 0) {
@@ -183,6 +252,37 @@ export class FlowPreviewModal {
         again();
       },
     });
+  }
+
+  /**
+   * Keep the levels coming while the preview plays. Only the two audible
+   * channels reach the browser, so every other channel's level has to be asked
+   * for; the bars are a peak meter at this rate, not a continuous one.
+   */
+  private pollLevels(id: string): void {
+    this.api.previewStatus(id).subscribe({
+      next: (status) => {
+        if (this.sessionId !== id) return;
+        this.applyStatus(status);
+        this.levelTimer = setTimeout(() => this.pollLevels(id), LEVEL_POLL_MS);
+      },
+      error: () => {
+        if (this.sessionId !== id) return;
+        // A dropped poll is not a dropped preview: the audio keeps playing and
+        // the next poll is the recovery.
+        this.levelTimer = setTimeout(() => this.pollLevels(id), LEVEL_POLL_MS);
+      },
+    });
+  }
+
+  private applyStatus(status: PreviewStatus): void {
+    this.levels.set(status.channelPeakDb ?? []);
+    // An audio-preview without the pair selection reports neither, and guessing
+    // [1, 2] would light a button for something nobody chose.
+    if (status.selected?.length) this.selected.set(status.selected);
+    if (status.channels && this.pairs().length === 0) {
+      this.pairs.set(FlowPreviewModal.pairsOf(status.channels));
+    }
   }
 
   /**
@@ -220,6 +320,9 @@ export class FlowPreviewModal {
     this.visible.set(false);
     this.teardown();
     this.isAudio.set(false);
+    this.pairs.set([]);
+    this.selected.set([]);
+    this.levels.set([]);
     this.releasePath();
   }
 
@@ -228,6 +331,10 @@ export class FlowPreviewModal {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
+    }
+    if (this.levelTimer !== undefined) {
+      clearTimeout(this.levelTimer);
+      this.levelTimer = undefined;
     }
     this.meters().stop();
     this.hls?.stop();
