@@ -283,15 +283,33 @@ testSources:
       port: 9001
       label: ZUSPIELER 2
       pattern: "mandelbrot=size=1296x720:rate=30"
+      # mandelbrot regenerates every pixel of every frame, where smptebars
+      # repeats a static one, so this source costs several times the default
+      # envelope and states its own. Measured on sc at 2.02 cores for the whole
+      # paced pipeline -- generation, both drawtext overlays, x264 veryfast and
+      # the AES-encrypted SRT send. At the shared 1 CPU limit it was throttled
+      # in 6.5% of periods and could not hold 30fps.
+      resources:
+        requests:
+          cpu: "2"
+          memory: 256Mi
+        limits:
+          cpu: "3"
+          memory: 512Mi
     - name: srt-test-source-3
       claim: srt-ingest-3
       port: 9002
       label: ZUSPIELER 3
       pattern: "smptebars=size=1296x720:rate=30"
+  # Envelope for a source that does not state its own. Sized for a static
+  # pattern: smptebars measured 0.61 cores for the full paced pipeline on sc.
+  # A generator that cannot hold realtime starves its SRT sender, and the
+  # symptoms then surface on the ingest as negative minLead and growing
+  # late/dup, which reads as a cluster fault rather than a throttled encoder.
   resources:
     requests:
-      cpu: 500m
+      cpu: 750m
       memory: 256Mi
     limits:
-      cpu: "1"
+      cpu: "1500m"
       memory: 512Mi
