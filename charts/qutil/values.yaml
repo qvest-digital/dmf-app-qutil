@@ -285,16 +285,24 @@ testSources:
       pattern: "mandelbrot=size=1296x720:rate=30"
       # mandelbrot regenerates every pixel of every frame, where smptebars
       # repeats a static one, so this source costs several times the default
-      # envelope and states its own. Measured on sc at 2.02 cores for the whole
+      # envelope and states its own.
+      #
+      # Measured on sc over 3 minutes with the limit lifted, for the whole
       # paced pipeline -- generation, both drawtext overlays, x264 veryfast and
-      # the AES-encrypted SRT send. At the shared 1 CPU limit it was throttled
-      # in 6.5% of periods and could not hold 30fps.
+      # the AES-encrypted SRT send: mean 1.63 cores, peak 2.17. The draw swings
+      # by about 1.7x because the pattern animates and the fractal detail, and
+      # so the encode cost, changes as it zooms.
+      #
+      # The limit is well over that peak because CFS throttles per 100ms
+      # period, and x264 bursts inside one even while the ten-second average
+      # sits under the limit: measured throttling was 6.5% of periods at a
+      # limit of 1, still 4.6% at 3, and 0.2% at 4.
       resources:
         requests:
           cpu: "2"
           memory: 256Mi
         limits:
-          cpu: "3"
+          cpu: "4"
           memory: 512Mi
     - name: srt-test-source-3
       claim: srt-ingest-3
