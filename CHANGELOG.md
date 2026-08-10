@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.22](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.21...v1.0.0-rc.22) (2026-08-10)
+
+
+### Bug Fixes
+
+* **qutil:** size the SRT generators per pattern ([#122](https://github.com/qvest-digital/dmf-app-qutil/issues/122)) ([6ecc6ad](https://github.com/qvest-digital/dmf-app-qutil/commit/6ecc6adbce7ef821ad090cda7f9920a58233d1e8))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump hono from 4.12.32 to 4.13.1 in /ui ([#114](https://github.com/qvest-digital/dmf-app-qutil/issues/114)) ([0189eeb](https://github.com/qvest-digital/dmf-app-qutil/commit/0189eeb4714560bf9c07b5de41852e6a0937e463))
+* **deps:** bump fast-uri from 3.1.4 to 3.1.5 in /ui ([#111](https://github.com/qvest-digital/dmf-app-qutil/issues/111)) ([22756c9](https://github.com/qvest-digital/dmf-app-qutil/commit/22756c959aeb9116f010829f15cdd8e200dd2466))
+
 ## [1.0.0-rc.21](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.20...v1.0.0-rc.21) (2026-08-09)
 
 
