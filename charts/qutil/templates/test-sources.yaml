@@ -80,7 +80,7 @@ spec:
                 sleep 5
               done
           resources:
-            {{- toYaml $root.Values.testSources.resources | nindent 12 }}
+            {{- toYaml (.resources | default $root.Values.testSources.resources) | nindent 12 }}
           volumeMounts:
             - name: bridge-secret
               mountPath: /secrets
