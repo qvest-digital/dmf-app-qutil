@@ -47,9 +47,6 @@ mv-multiviewer-page,
 mv-tx-page,
 mv-composite-page,
 mv-booking-page,
-mv-player-tile,
-mv-flow-card,
-mv-flow-detail,
 mv-gateway-grid,
 mv-operator-flow-list,
 mv-operator-flow-row,
@@ -147,35 +144,10 @@ main {
   }
 }
 
-.stage-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-}
-/* Four per-flow players in a 2x2 grid. mediamtx encodes each flow to its
-   own rendition from the RDMA mirror (WebRTC first, HLS fallback — see
-   PlayerTile); the badge above each card names the producing node. */
-.players {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  min-width: 0;
-  align-items: start;
-}
-.playercard {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.pc-video {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  background: #000;
-  border-radius: var(--qv-radius);
-  display: block;
+/* One column: the page carries the metrics panel alone. */
+.mv-main {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1180px;
 }
 .pc-badge {
   display: flex;
@@ -276,13 +248,6 @@ main {
 .flow .name {
   font-weight: 800;
   font-size: 15px;
-}
-.flow .name .pat {
-  font-weight: 500;
-  font-size: 11px;
-  opacity: 0.6;
-  margin-left: 6px;
-  text-transform: uppercase;
 }
 .flow .quick {
   display: flex;

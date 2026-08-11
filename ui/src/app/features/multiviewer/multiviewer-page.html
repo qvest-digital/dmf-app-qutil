@@ -1,12 +1,4 @@
-<main>
-  <div class="stage-wrap">
-    <div class="players">
-      @for (tile of tileStates(); track tile.n) {
-        <mv-player-tile [n]="tile.n" [node]="tile.node" [live]="tile.live" />
-      }
-    </div>
-  </div>
-
+<main class="mv-main">
   <aside class="panel">
     <h2>RDMA delivery</h2>
     <div class="agg">
@@ -19,17 +11,11 @@
         <div class="v">{{ totals()?.fps | fmt }}</div>
       </div>
       <div class="stat">
-        <div class="k">Tiles live</div>
+        <div class="k">Flows live</div>
         <div class="v">
           {{ totals()?.live ?? '-' }}<small>/{{ totals()?.total ?? '-' }}</small>
         </div>
       </div>
-    </div>
-
-    <div class="flows">
-      @for (flow of flows(); track flow.n) {
-        <mv-flow-card [flow]="flow" />
-      }
     </div>
 
     <div class="gwbar">

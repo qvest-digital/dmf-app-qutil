@@ -18,7 +18,7 @@ import {
 export class MetricsApi {
   private readonly http = inject(HttpClient);
 
-  /** Per-flow writer + compositor + gateway metrics for the four demo tiles. */
+  /** Per-flow writer + compositor + gateway metrics for the four demo flows. */
   flows(): Observable<FlowsResponse> {
     return this.http.get<FlowsResponse>('/api/flows');
   }
@@ -35,9 +35,9 @@ export class MetricsApi {
   /**
    * Provision a mediamtx path for this flow (pull for video, push for audio).
    *
-   * `owner` names who is asking. A tile and the operator overlay can play the
-   * same flow at once and both resolve to the same path, so the aggregator
-   * counts holders and only tears the path down when the last one releases it.
+   * `owner` names who is asking. Two viewers can play the same flow at once and
+   * both resolve to the same path, so the aggregator counts holders and only
+   * tears the path down when the last one releases it.
    *
    * `channels` is the 1-based source pair an audio preview should publish; a
    * browser gets stereo however wide the flow is. Repeating the call with a
@@ -92,10 +92,5 @@ export class MetricsApi {
     if (channels?.length) params.set('channels', channels.join(','));
     const query = params.toString();
     return query ? `?${query}` : '';
-  }
-
-  /** Delete flow n's writer pod, so the audience can watch Kubernetes recover it. */
-  kill(n: number): Observable<unknown> {
-    return this.http.post(`/api/kill/${n}`, null);
   }
 }
