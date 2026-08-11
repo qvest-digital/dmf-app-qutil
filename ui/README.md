@@ -1,8 +1,8 @@
 # Qvest MXL multiviewer
 
-The demo's frontend: an Angular app showing four MXL flows delivered over RDMA,
-the operator's flow inventory, the txDarwin/SRT and composite outputs, and the
-MediaOps booking showcase.
+The demo's frontend: an Angular app showing what RDMA delivery carries, the
+health of the MXL gateways, and the operator's flow inventory with an on-demand
+preview per flow.
 
 It is built to static files and served by the `caddy` sidecar of the mediamtx
 Deployment (`k8s/mediamtx-deployment.yaml`). Caddy also reverse-proxies the APIs
@@ -61,9 +61,9 @@ docker run --rm -p 8080:8080 \
 CI (`.github/workflows/build-ui.yml`) runs the tests and pushes the image to GHCR
 on every change under `ui/`.
 
-Each tab is a route (`/`, `/tx`, `/cp`, `/bk`), which is why the Caddyfile needs
-`try_files {path} /index.html` — without it a reload on `/tx` 404s against the
-file server.
+The app is one route (`/`) and anything else redirects to it, which is why the
+Caddyfile still needs `try_files {path} /index.html` — without it a reload on any
+other path 404s against the file server before the router ever sees it.
 
 ## How it is put together
 
@@ -72,17 +72,18 @@ src/app/
   core/api/       typed calls to the aggregator + the polling helper
   core/player/    WHEP, hls.js, and the registry that tears players down
   shared/         kv-row, video shell, formatting pipes, origin-state mapping
-  features/       one folder per tab, plus the flow-preview overlay
+  features/       the multiviewer page, plus the flow-preview overlay
 ```
 
 Three things are less obvious than they look, and all three were bugs once:
 
 - **Players are registered, not just created.** Chrome does not throttle
-  background-tab WebRTC decode, so an unattended multiviewer kept pulling
+  background-tab WebRTC decode, so an unattended wall of tiles kept pulling
   ~12 Mbit/s behind a Google Meet tab and starved the call. `PlayerRegistry`
-  tracks every PeerConnection, Hls instance and scene timer; `useScene` tears the
-  set down when the tab is hidden or the route changes, and rebuilds only what
-  the visible page needs. `window.__mvDebug.counts()` reports what is live.
+  tracks every PeerConnection and Hls instance so a teardown releases the whole
+  set in one pass, mediamtx paths included. `window.__mvDebug.counts()` reports
+  what is live. Only the preview overlay opens a player now, and it owns its own
+  teardown.
 - **Origin freshness is three-state.** Green means an origin Lease is being
   renewed, orange means the claim outlived its Lease, grey means nothing claims
   Origin at all. Grey is _unknown_, not broken — most flows carry no

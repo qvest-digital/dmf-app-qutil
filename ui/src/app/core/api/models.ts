@@ -204,51 +204,6 @@ export interface OperatorFlowsResponse {
   flows: OperatorFlow[];
 }
 
-// ── GET /api/booking ────────────────────────────────────────────────────────
-
-export type BookingPhase = 'booked' | 'deploying' | 'on-air' | 'post-roll' | 'reclaimed';
-
-export interface BookingPod {
-  name: string;
-  phase?: string | null;
-  node?: string | null;
-  ageSeconds?: number | null;
-  deleting?: boolean;
-}
-
-export interface BookingInstance {
-  name: string;
-  type?: string | null;
-  instancePhase?: string | null;
-  jobRef?: string | null;
-  windowEnd?: string | null;
-  replicas?: number | null;
-  helmReady?: boolean;
-  helmMessage?: string | null;
-  /** Source count IS the template: 2 -> template-1, 3 -> template-2. */
-  sources?: string[];
-  readerFlow?: string | null;
-  /** What the reader is on right now, vs. readerFlow which is the config. */
-  liveReaderFlow?: string | null;
-  outFlow?: string | null;
-  pod?: BookingPod | null;
-  phase?: BookingPhase | null;
-}
-
-export interface StoryBeat {
-  at: string;
-  kind: 'deploy' | 'live' | 'teardown';
-  text: string;
-}
-
-export interface BookingResponse {
-  namespace: string;
-  instances: BookingInstance[];
-  events: { at: string; reason?: string; object?: string; kind?: string; message?: string }[];
-  story: StoryBeat[];
-  error?: string;
-}
-
 // ── /api/preview/<uuid> ─────────────────────────────────────────────────────
 
 export interface PreviewSession {

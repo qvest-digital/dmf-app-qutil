@@ -1,13 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import {
-  BookingResponse,
-  FlowsResponse,
-  OperatorFlowsResponse,
-  PreviewSession,
-  PreviewStatus,
-} from './models';
+import { FlowsResponse, OperatorFlowsResponse, PreviewSession, PreviewStatus } from './models';
 
 /**
  * The demo-metrics aggregator (k8s/metrics/aggregator.py), reached through
@@ -26,10 +20,6 @@ export class MetricsApi {
   /** Every MxlFlow CR the mxl-k8s operator knows about, demo-related or not. */
   operatorFlows(): Observable<OperatorFlowsResponse> {
     return this.http.get<OperatorFlowsResponse>('/api/operator-flows');
-  }
-
-  booking(): Observable<BookingResponse> {
-    return this.http.get<BookingResponse>('/api/booking');
   }
 
   /**
@@ -77,9 +67,7 @@ export class MetricsApi {
    * other owner is still holding it.
    */
   stopPreview(uuid: string, owner?: string): Observable<unknown> {
-    return this.http.delete(
-      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
-    );
+    return this.http.delete(`/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`);
   }
 
   private ownerQuery(owner?: string): string {

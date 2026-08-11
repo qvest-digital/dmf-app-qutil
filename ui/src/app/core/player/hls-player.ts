@@ -27,9 +27,10 @@ export interface HlsOptions {
 }
 
 /**
- * HLS playback of a mediamtx path, e.g. `mxl-1` -> /hls/mxl-1/index.m3u8.
+ * HLS playback of a mediamtx playlist, which Caddy exposes under
+ * `handle_path /hls/*` and the aggregator names in a preview session.
  *
- * Every tile ends up here wherever WHEP cannot complete ICE.
+ * The preview overlay ends up here wherever WHEP cannot complete ICE.
  */
 export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOptions = {}): HlsHandle {
   const {
@@ -192,9 +193,4 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
   }
 
   return { stop };
-}
-
-/** The mediamtx HLS playlist for a path, as Caddy exposes it (`handle_path /hls/*`). */
-export function hlsUrl(path: string): string {
-  return `/hls/${path}/index.m3u8`;
 }
