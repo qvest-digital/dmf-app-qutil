@@ -94,11 +94,14 @@ describe('validateGenerator', () => {
     expect(error).toBe('the video and audio flows need different ids');
   });
 
-  it('refuses an animated pattern above 1296x720, and allows it below', () => {
-    const tooBig = request({
-      video: { pattern: 'ball', frameWidth: 1920, frameHeight: 1080 },
-    });
-    expect(validateGenerator(tooBig, LIMITS)).toContain('stalls the test source');
+  /**
+   * An animated pattern costs several times a still one and the class README says
+   * the test source stalls on them at 1080p, but what a frame size costs depends
+   * on the node. The page says so beside the pattern and books it anyway.
+   */
+  it('allows an animated pattern at any offered frame size', () => {
+    const at1080 = request({ video: { pattern: 'ball', frameWidth: 1920, frameHeight: 1080 } });
+    expect(validateGenerator(at1080, LIMITS)).toBeNull();
     expect(validateGenerator(request({ video: { pattern: 'ball' } }), LIMITS)).toBeNull();
   });
 

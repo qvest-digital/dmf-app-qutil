@@ -16,7 +16,6 @@ import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
 /** 36 characters, exactly: a truncated id is a prefix glob over the MXL domain. */
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
-const ANIMATED_MAX_PIXELS = 1296 * 720;
 const MAX_OVERLAY = 32;
 const MAX_CHANNELS = 16;
 
@@ -79,12 +78,6 @@ export function validateGenerator(
       )
     ) {
       return `grain rate must be one of ${list(rates.map((r) => `${r.numerator}/${r.denominator}`))}`;
-    }
-    if (
-      (limits?.animated ?? []).includes(video.pattern) &&
-      video.frameWidth * video.frameHeight > ANIMATED_MAX_PIXELS
-    ) {
-      return `the ${video.pattern} pattern is animated and stalls the test source above 1296x720`;
     }
     const overlay = video.overlayText ?? '';
     if (overlay.length > MAX_OVERLAY || !/^[\x20-\x7e]*$/.test(overlay)) {
