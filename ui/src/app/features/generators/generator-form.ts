@@ -65,7 +65,8 @@ import { validateGenerator } from './generator-validation';
           </select>
           @if (animated(pattern())) {
             <div class="gen-hint">
-              Animated: 1296x720 at most, or the source never holds its rate.
+              Animated: every frame is regenerated, so it costs several times a still pattern and
+              may not hold its rate at the larger frame sizes.
             </div>
           }
         </div>

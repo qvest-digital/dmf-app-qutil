@@ -213,16 +213,23 @@ generators:
   # A ceiling on what one form can allocate: each generator is a writer pod with
   # a grain ring in the node's MXL domain, which is RAM.
   maxCount: 8
-  # Stamped onto every page-booked claim. These are the measured smpte figures
-  # from writers.video above; an animated pattern costs more, which is why the
-  # page caps an animated pattern's frame size rather than granting it more.
+  # Stamped onto every page-booked claim, because the class envelope is sized for
+  # 1080p50 and would reserve several times what a test pattern needs.
+  #
+  # Requests are the measured smpte figures from writers.video above, since most
+  # bookings are still patterns and a request is what a node reserves. The limit
+  # is the animated writer's, because the page books an animated pattern at any
+  # frame size it offers and a limit at the still-pattern cost would throttle one
+  # into the stall it was picked to avoid. A node under contention still gives it
+  # only its request, so an animated 1080p booking on a busy node can fall behind
+  # its grain rate whatever is written here.
   resources:
     requests:
       cpu: 700m
       memory: 256Mi
     limits:
-      cpu: "1500m"
-      memory: 512Mi
+      cpu: "2500m"
+      memory: "1Gi"
 
 booking:
   jobRef: mediaops/demo-app
