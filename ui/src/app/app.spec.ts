@@ -22,7 +22,7 @@ describe('App', () => {
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(el.querySelector('.brand .sub')?.textContent).toContain('MXL Utility');
+    expect(el.querySelector('.brand .sub')?.textContent).toContain('Qutil - the DMF/MXL Utility');
     expect(el.querySelector('.logo svg')).toBeTruthy();
     expect(el.querySelector('.pill b')?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
