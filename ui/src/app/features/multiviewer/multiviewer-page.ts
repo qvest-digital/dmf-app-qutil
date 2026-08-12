@@ -2,17 +2,25 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
 import { FmtPipe } from '../../shared/format-pipes';
+import { FlowPreview } from '../preview/flow-preview';
+import { PreviewController } from '../preview/preview-controller';
 import { GatewayGrid } from './gateway-grid';
 import { OperatorFlowList } from './operator-flow-list';
 
 @Component({
   selector: 'mv-multiviewer-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [GatewayGrid, OperatorFlowList, FmtPipe],
+  imports: [GatewayGrid, OperatorFlowList, FlowPreview, FmtPipe],
   templateUrl: './multiviewer-page.html',
 })
 export class MultiviewerPage {
   private readonly api = inject(MetricsApi);
+
+  /**
+   * What the preview column carries. Held by the controller rather than by this
+   * page so the Preview button in a polled flow row can add to it.
+   */
+  protected readonly previews = inject(PreviewController).requests;
 
   /**
    * Both polls run for as long as this page is mounted, whether or not the tab is

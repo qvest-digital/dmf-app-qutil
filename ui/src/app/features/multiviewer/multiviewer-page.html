@@ -1,4 +1,4 @@
-<main>
+<main [class.previewing]="previews().length > 0">
   <aside class="panel">
     <h2>RDMA delivery</h2>
     <div class="agg">
@@ -25,4 +25,15 @@
 
     <mv-operator-flow-list [flows]="opFlows()" />
   </aside>
+
+  <!-- Only rendered while something is open, so the panel has the width to itself
+       otherwise. Each card is keyed by flow id: the column must not rebuild a
+       card, or its player and its mediamtx path would go with it. -->
+  @if (previews().length) {
+    <aside class="previews">
+      @for (preview of previews(); track preview.id) {
+        <mv-flow-preview [request]="preview" />
+      }
+    </aside>
+  }
 </main>

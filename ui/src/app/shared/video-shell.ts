@@ -42,7 +42,7 @@ import {
 export class VideoShell {
   readonly videoClass = input('');
   readonly controls = input(false);
-  /** The preview overlay is the one player whose whole point is being audible. */
+  /** A preview card is the one player whose whole point is being audible. */
   readonly muted = input(true);
 
   private readonly videoRef = viewChild.required<ElementRef<HTMLVideoElement>>('video');

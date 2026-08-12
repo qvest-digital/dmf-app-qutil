@@ -72,7 +72,7 @@ src/app/
   core/api/       typed calls to the aggregator + the polling helper
   core/player/    WHEP, hls.js, and the registry that tears players down
   shared/         kv-row, video shell, formatting pipes, origin-state mapping
-  features/       the multiviewer page, plus the flow-preview overlay
+  features/       the multiviewer page, plus the flow-preview cards
 ```
 
 Three things are less obvious than they look, and all three were bugs once:
@@ -82,8 +82,8 @@ Three things are less obvious than they look, and all three were bugs once:
   ~12 Mbit/s behind a Google Meet tab and starved the call. `PlayerRegistry`
   tracks every PeerConnection and Hls instance so a teardown releases the whole
   set in one pass, mediamtx paths included. `window.__mvDebug.counts()` reports
-  what is live. Only the preview overlay opens a player now, and it owns its own
-  teardown.
+  what is live. Only a preview card opens a player now, and each one owns its
+  own teardown.
 - **Origin freshness is three-state.** Green means an origin Lease is being
   renewed, orange means the claim outlived its Lease, grey means nothing claims
   Origin at all. Grey is _unknown_, not broken — most flows carry no

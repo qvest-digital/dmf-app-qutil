@@ -47,7 +47,7 @@ mv-gateway-grid,
 mv-operator-flow-list,
 mv-operator-flow-row,
 mv-operator-flow-detail,
-mv-flow-preview-modal,
+mv-flow-preview,
 mv-audio-meters,
 mv-video-shell,
 mv-kv-row {
@@ -122,8 +122,9 @@ header {
   box-shadow: 0 0 0 3px rgba(240, 80, 18, 0.3);
 }
 
-/* One column: the multiviewer is the only page and carries the metrics panel
-   alone. */
+/* The metrics panel alone, until a preview is open: then it shares the width
+   with the preview column. Wide enough for the panel's own two-column stats
+   either way. */
 main {
   flex: 1;
   display: grid;
@@ -131,6 +132,15 @@ main {
   gap: 22px;
   padding: 24px 28px;
   max-width: 1180px;
+}
+main.previewing {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  max-width: none;
+}
+@media (max-width: 1100px) {
+  main.previewing {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .panel {
@@ -273,26 +283,23 @@ main {
   white-space: nowrap;
 }
 
-.pv {
-  position: fixed;
-  inset: 0;
-  background: rgba(11, 9, 13, 0.66);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  padding: 24px;
-}
-.pv.show {
+/* Open previews, newest last, beside the metrics panel. They scroll with the
+   page rather than inside the column: a card is tall, and a column that scrolled
+   on its own would hide the ones below the fold behind a scrollbar nobody looks
+   for. */
+.previews {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  align-content: start;
 }
 .pv-card {
   background: var(--qv-ink);
   color: #fff;
   border-radius: var(--qv-radius);
   padding: 16px;
-  width: min(880px, 92vw);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  min-width: 0;
 }
 .pv-head {
   display: flex;

@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { FlowPreviewModal } from './flow-preview-modal';
+import { FlowPreview } from './flow-preview';
 import { PreviewController } from './preview-controller';
 
 const FLOW = 'd4d00000-0000-0000-0000-00000000a002';
@@ -12,9 +12,8 @@ const FLOW = 'd4d00000-0000-0000-0000-00000000a002';
  * cover the asking: that the buttons span the flow and that pressing one names
  * the pair on the wire in the form the aggregator validates.
  */
-describe('FlowPreviewModal channel pairs', () => {
-  let fixture: ComponentFixture<FlowPreviewModal>;
-  let controller: PreviewController;
+describe('FlowPreview channel pairs', () => {
+  let fixture: ComponentFixture<FlowPreview>;
   let http: HttpTestingController;
 
   function buttons(): HTMLButtonElement[] {
@@ -23,28 +22,28 @@ describe('FlowPreviewModal channel pairs', () => {
 
   beforeEach(() => {
     TestBed.configureTestingModule({
-      imports: [FlowPreviewModal],
+      imports: [FlowPreview],
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
-    fixture = TestBed.createComponent(FlowPreviewModal);
-    controller = TestBed.inject(PreviewController);
     http = TestBed.inject(HttpTestingController);
-    // First change detection with no request open: resolves the view children the
-    // overlay touches before anything asks it to play.
-    fixture.detectChanges();
   });
 
   afterEach(() => {
-    controller.close();
-    fixture.detectChanges();
-    // The close issues a DELETE, and any /start left unflushed is not the
-    // assertion under test.
+    // Destroying the card releases its path, and any /start left unflushed is not
+    // the assertion under test.
+    fixture.destroy();
     http.match(() => true).forEach((req) => req.flush({}));
     http.verify();
   });
 
   function openAudio(channels: number): void {
-    controller.open({ id: FLOW, label: 'telos-upmax-out', format: 'audio', channels });
+    fixture = TestBed.createComponent(FlowPreview);
+    fixture.componentRef.setInput('request', {
+      id: FLOW,
+      label: 'telos-upmax-out',
+      format: 'audio',
+      channels,
+    });
     fixture.detectChanges();
     http.expectOne((req) => req.method === 'POST' && req.url.startsWith(`/api/preview/${FLOW}`));
   }
@@ -79,7 +78,7 @@ describe('FlowPreviewModal channel pairs', () => {
     const req = http.expectOne(
       (r) => r.method === 'POST' && decodeURIComponent(r.url).includes('channels=5,6'),
     );
-    expect(decodeURIComponent(req.request.url)).toContain('owner=overlay');
+    expect(decodeURIComponent(req.request.url)).toContain('owner=preview');
     req.flush({ path: 'p', hls: 'h', whep: 'w', format: 'audio' });
   });
 
@@ -91,5 +90,40 @@ describe('FlowPreviewModal channel pairs', () => {
     fixture.detectChanges();
     expect(buttons().filter((b) => b.classList.contains('on'))).toHaveLength(1);
     expect(buttons()[2].classList.contains('on')).toBe(true);
+  });
+});
+
+/**
+ * The column is one card per flow. A second Preview on a flow already open would
+ * resolve to the same mediamtx path, and closing either card would release it
+ * under the other.
+ */
+describe('PreviewController', () => {
+  let controller: PreviewController;
+
+  const request = (id: string) => ({ id, label: id, format: 'video' as const, channels: 0 });
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({});
+    controller = TestBed.inject(PreviewController);
+  });
+
+  it('keeps the order previews were opened in', () => {
+    controller.open(request('a'));
+    controller.open(request('b'));
+    expect(controller.requests().map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('ignores a second open of the same flow', () => {
+    controller.open(request('a'));
+    controller.open(request('a'));
+    expect(controller.requests()).toHaveLength(1);
+  });
+
+  it('closes one preview without touching the rest', () => {
+    controller.open(request('a'));
+    controller.open(request('b'));
+    controller.close('a');
+    expect(controller.requests().map((r) => r.id)).toEqual(['b']);
   });
 });

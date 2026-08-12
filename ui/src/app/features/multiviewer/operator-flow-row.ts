@@ -39,7 +39,7 @@ const DEFAULT_CHANNELS = 2;
           </button>
           <!-- Video is pulled by mediamtx, audio is pushed by the audio-preview
                pod. Anything else (data/smpte291) has no route to a browser, so the
-               button says so instead of opening an overlay that never loads. -->
+               button says so instead of opening a card that never plays. -->
           @if (previewable()) {
             <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
           } @else {
