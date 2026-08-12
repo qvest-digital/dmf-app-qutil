@@ -271,3 +271,92 @@ export interface PreviewStatus {
   channelPeakDb?: number[];
   error?: string;
 }
+
+// ── /api/generators ─────────────────────────────────────────────────────────
+
+/** What the form sends. The aggregator translates these into claim parameters:
+ *  no browser names a parameter key, because nothing validates one. */
+export interface GeneratorRequest {
+  label: string;
+  /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
+  ttl: string;
+  video: {
+    enabled: boolean;
+    id: string;
+    pattern: string;
+    overlayText: string;
+    frameWidth: number;
+    frameHeight: number;
+    grainRate: { numerator: number; denominator: number };
+  };
+  audio: {
+    enabled: boolean;
+    id: string;
+    sampleRate: number;
+    channelCount: number;
+  };
+}
+
+export interface GeneratorVideo {
+  id?: string | null;
+  pattern?: string | null;
+  overlayText?: string | null;
+  frameWidth?: number | null;
+  frameHeight?: number | null;
+  /** Already formatted as numerator/denominator: it is read, not calculated. */
+  grainRate?: string | null;
+}
+
+export interface GeneratorAudio {
+  id?: string | null;
+  sampleRate?: number | null;
+  channelCount?: number | null;
+}
+
+/** One booked generator, as the claim reports itself. */
+export interface Generator {
+  name: string;
+  namespace?: string | null;
+  className?: string | null;
+  /** Planned | Pending | Bound | Expired | Released | Failed. */
+  phase?: string | null;
+  ready?: boolean | null;
+  /** The claim has a deletionTimestamp and is on its way out. */
+  deleting?: boolean;
+  /**
+   * The binder's own condition. A writer publishes no endpoints, so this reason
+   * (WaitingForProvisioner, WorkloadProgressing, ProvisionFailed) is the only
+   * account of why a claim has not gone ready.
+   */
+  reachable?: FlowCondition | null;
+  expiresAt?: string | null;
+  created?: string | null;
+  ageSeconds?: number | null;
+  groupHint?: string | null;
+  video?: GeneratorVideo | null;
+  audio?: GeneratorAudio | null;
+}
+
+/** The page's whole state: what is booked, and what the server will accept. */
+export interface GeneratorsResponse {
+  namespace: string;
+  className: string;
+  enabled: boolean;
+  max: number;
+  ttls: string[];
+  patterns: string[];
+  /** Patterns that stall the test source above 1296x720. */
+  animated: string[];
+  frameSizes: { width: number; height: number }[];
+  grainRates: { numerator: number; denominator: number }[];
+  sampleRates: number[];
+  generators: Generator[];
+  error?: string | null;
+}
+
+/** Two flow ids nothing holds yet. Minted server-side: uniqueness can only be
+ *  judged where the index is. */
+export interface FlowIds {
+  videoFlowId: string;
+  audioFlowId: string;
+}

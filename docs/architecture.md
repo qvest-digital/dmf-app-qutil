@@ -29,8 +29,17 @@ required value. It renders no workload for any of them: the class names a
 chart in `dmf-catalog`, and the lifecycle plane provisions it.
 
 Claim parameters are provisioning inputs. They are consumed when a function is
-provisioned and do not take effect on an already-bound claim, so nothing that
-has to change while the app runs belongs in them.
+provisioned, and on a bound claim they take effect only where
+`lifecycle.reprovisionOnDrift` is set -- which re-materializes the workload, so
+the writers this chart books restart when their parameters change and the
+generators booked from the UI, which set it false, do not. Either way nothing
+that has to change while a function runs belongs in them.
+
+The chart is no longer the only thing that renders claims: the Generators page
+books writers at runtime through the aggregator, where the install has enabled
+it. Those claims carry a `managed-by` label of their own, are named with a
+reserved prefix, and expire through `booking.window.end`, because neither Helm
+nor Flux prunes an object it never rendered.
 
 ---
 
@@ -108,8 +117,11 @@ not here.
 ## 5. This app
 
 **Aggregator.** A dependency-free Python HTTP server. It merges flow state
-from the Kubernetes API and the MXL resources into the metrics panel, and
-drives the mediamtx API to open and close preview paths.
+from the Kubernetes API and the MXL resources into the metrics panel, drives the
+mediamtx API to open and close preview paths, and -- where the install enables it
+-- creates and deletes the writer claims the Generators page books. Its reads are
+cluster-wide; both of its write grants are Roles in the production namespace, and
+it refuses to delete a claim that does not carry the label it stamps on its own.
 
 It finds mediamtx and the audio preview through the endpoints their claims
 publish under `status.handle.endpoints`, gated on `handle.ready`. No Service

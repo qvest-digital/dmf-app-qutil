@@ -34,8 +34,9 @@ ui:
       memory: 64Mi
 
 # Merges writer pod state, MXL control-plane CRs and the media server's path
-# API into what the multiviewer polls. Also creates and deletes preview paths
-# on demand, which is why it needs the media server's API endpoint.
+# API into what the multiviewer polls. Also creates and deletes preview paths on
+# demand, which is why it needs the media server's API endpoint, and -- where
+# generators below are enabled -- the writer claims the UI books.
 aggregator:
   replicaCount: 1
   image:
@@ -190,6 +191,38 @@ writers:
       limits:
         cpu: "2"
         memory: 256Mi
+
+# Booking writers from the UI: the operator picks a videotestsrc pattern, the
+# aggregator creates a MediaFunctionClaim of writers.className, and the page
+# lists and deletes what it booked. The four writers above stay where they are;
+# this is for the flows a demo wants without a release.
+#
+# Off by default, and deliberately: enabling it grants the aggregator create and
+# delete on claims in the production namespace, and nothing in front of this API
+# authenticates. An install whose hostname is reachable by people who should not
+# be able to book a workload leaves this alone.
+generators:
+  enabled: false
+  # Empty follows writers.className, so a cluster that registers the class under
+  # another name says so once.
+  className: ""
+  jobRef: qutil/generators
+  # Every claim the page books starts with this, and it refuses to delete one
+  # that does not. The claims this chart renders cannot match it.
+  namePrefix: generator-
+  # A ceiling on what one form can allocate: each generator is a writer pod with
+  # a grain ring in the node's MXL domain, which is RAM.
+  maxCount: 8
+  # Stamped onto every page-booked claim. These are the measured smpte figures
+  # from writers.video above; an animated pattern costs more, which is why the
+  # page caps an animated pattern's frame size rather than granting it more.
+  resources:
+    requests:
+      cpu: 700m
+      memory: 256Mi
+    limits:
+      cpu: "1500m"
+      memory: 512Mi
 
 booking:
   jobRef: mediaops/demo-app

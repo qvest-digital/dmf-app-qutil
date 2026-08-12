@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { QvestLogo } from './shared/qvest-logo';
 
 /** Quarter-second ticks, so the clock reads as live rather than as a stamp. */
@@ -14,11 +14,11 @@ function wallClock(): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** The shell: brand header, clock, and the routed page. */
+/** The shell: brand header, clock, tab bar, and the routed page. */
 @Component({
   selector: 'mv-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, QvestLogo],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, QvestLogo],
   templateUrl: './app.html',
 })
 export class App {

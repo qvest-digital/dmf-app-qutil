@@ -1,0 +1,43 @@
+<main class="gen-main">
+  <aside class="panel">
+    @if (enabled()) {
+      <mv-generator-form [limits]="limits()" [full]="full()" (created)="onCreated($event)" />
+    } @else {
+      <div class="gwbar">
+        <h2>Book a generator</h2>
+        <div class="flow empty">
+          Booking is switched off on this install. It grants the aggregator claim create and delete
+          in the production namespace, and nothing in front of this API authenticates.
+        </div>
+      </div>
+    }
+  </aside>
+
+  <aside class="panel">
+    <div class="gwbar">
+      <h2>
+        Booked here <span class="of-count">{{ count() }}</span>
+      </h2>
+      @if (deleteError(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
+      @if (listError(); as text) {
+        <div class="gen-errors">{{ text }}</div>
+      }
+      <div class="flows">
+        @for (generator of generators(); track generator.name) {
+          <mv-generator-row
+            [generator]="generator"
+            [busy]="isDeleting(generator.name)"
+            (remove)="remove($event)"
+          />
+        } @empty {
+          <div class="flow empty">
+            Nothing booked from this page. The four demo writers come from the chart and are not
+            listed here.
+          </div>
+        }
+      </div>
+    </div>
+  </aside>
+</main>

@@ -19,6 +19,10 @@ jobs:
 
       - run: helm lint charts/qutil
 
+      # The aggregator ships as a ConfigMap literal, so a syntax error renders
+      # perfectly and only fails when the pod starts.
+      - run: python -m py_compile charts/qutil/files/aggregator.py
+
       # helm accepts a duplicated mapping key; the post-renderer Flux installs
       # through refuses the document, so a chart that lints can still fail to
       # install.

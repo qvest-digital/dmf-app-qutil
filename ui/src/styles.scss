@@ -49,6 +49,9 @@ mv-operator-flow-row,
 mv-operator-flow-detail,
 mv-flow-preview,
 mv-anc-grain,
+mv-generators-page,
+mv-generator-form,
+mv-generator-row,
 mv-audio-meters,
 mv-video-shell,
 mv-kv-row {
@@ -480,6 +483,14 @@ main.previewing {
 .btn:hover {
   border-color: #fff;
 }
+.btn.kill {
+  border-color: var(--qv-orange);
+  color: var(--qv-orange);
+}
+.btn.kill:hover {
+  background: var(--qv-orange);
+  color: #fff;
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: default;
@@ -588,6 +599,111 @@ main.previewing {
 }
 .gw .name {
   opacity: 0.6;
+}
+
+/* Tabs. They are <a routerLink> now rather than <button>, so the anchor needs
+   the button's text/box treatment reset onto it. */
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 14px 28px 0;
+}
+.tab {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--qv-ink);
+  opacity: 0.5;
+  padding: 8px 18px;
+  border-radius: var(--qv-radius-pill);
+  text-decoration: none;
+  display: inline-block;
+}
+.tab:hover {
+  opacity: 0.85;
+}
+.tab.active {
+  opacity: 1;
+  background: var(--qv-ink);
+  color: #fff;
+}
+
+/* The generators page: the form beside what it booked. Narrower first column,
+   because a form of short fields does not want the width a flow list does. */
+.gen-main {
+  grid-template-columns: minmax(320px, 30%) minmax(0, 1fr);
+  max-width: none;
+}
+@media (max-width: 900px) {
+  .gen-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The first form controls in this file. They sit on the teal panel, so they are
+   drawn as the panel's own inputs rather than the browser's. */
+.gen-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gen-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.65;
+}
+.gen-input,
+.gen-select {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
+  padding: 0.45em 0.6em;
+  font-family: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+.gen-input:focus,
+.gen-select:focus {
+  outline: none;
+  border-color: var(--qv-lime);
+}
+/* A flow id is 36 characters that have to be compared by eye. */
+.gen-input.gen-mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+.gen-select option {
+  color: var(--qv-ink);
+}
+.gen-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.gen-hint {
+  font-size: 11px;
+  opacity: 0.6;
+}
+.gen-errors {
+  font-size: 12px;
+  color: var(--qv-orange);
+  font-weight: 600;
+}
+.gen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gen-actions .gen-input {
+  flex: 1;
 }
 
 footer {

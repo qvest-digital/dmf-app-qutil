@@ -14,6 +14,8 @@ serves the result as WebRTC and HLS.
   the compositor that mosaics them are all `MediaFunctionClaim`s against the
   DMF catalog, provisioned into the namespace a `MediaProduction` owns. This
   app declares the booking and consumes the result; it implements none of it.
+  The chart books what the demo always needs, and the Generators page books a
+  test pattern on demand for what it does not.
 - **Flows are served on demand.** Nothing static describes a flow. Each tile
   asks for a path when it opens and releases it when it closes, over the
   mediamtx HTTP API.
