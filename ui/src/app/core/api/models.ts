@@ -226,6 +226,12 @@ export interface AncElement {
   description: string;
   /** User data words, low 8 bits of each 10-bit word. */
   udw: number[];
+  /**
+   * Whether every word's ANC parity bit matched its data byte. False means the
+   * words were read out of step with the packing, so the bytes are not the
+   * sender's -- worth saying rather than decoding anyway.
+   */
+  parityOk?: boolean;
 }
 
 /** The latest grain of an ANC data flow. */

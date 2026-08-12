@@ -1,8 +1,13 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { AncGrain } from '../../core/api/models';
+import { decodeAtc } from '../../shared/atc-timecode';
 
 /** How many user data words to print before eliding the rest. */
 const UDW_SHOWN = 24;
+/** A decoded timecode is only trustworthy if the words were read in step. */
+function decodable(element: { parityOk?: boolean }): boolean {
+  return element.parityOk !== false;
+}
 
 function hex(value: number): string {
   return `0x${value.toString(16).toUpperCase().padStart(2, '0')}`;
@@ -26,6 +31,20 @@ function hex(value: number): string {
       @if (g.error) {
         <div class="anc-error">{{ g.error }}</div>
       } @else {
+        <!-- A timecode is the one ANC payload worth reading as a value rather than
+             as bytes, so it gets the top of the card and the bytes stay below. -->
+        @if (timecode(); as tc) {
+          <div class="anc-tc">
+            <span class="anc-tc-v">{{ tc.text }}</span>
+            <span class="anc-tc-k">ST 12-2 timecode</span>
+            @if (tc.dropFrame) {
+              <span class="anc-flag">drop frame</span>
+            }
+            @if (tc.colorFrame) {
+              <span class="anc-flag">colour frame</span>
+            }
+          </div>
+        }
         <div class="anc-head">
           <span class="anc-k">grain</span>
           <span class="anc-v">{{ g.index }}</span>
@@ -47,7 +66,12 @@ function hex(value: number): string {
               <span class="anc-did">{{ hexOf(element.did) }}/{{ hexOf(element.sdid) }}</span>
               <span class="anc-desc">{{ element.description }}</span>
             </div>
-            <div class="anc-pkt-meta">line {{ element.line }} · DC {{ element.dataCount }}</div>
+            <div class="anc-pkt-meta">
+              line {{ element.line }} · DC {{ element.dataCount }}
+              @if (element.parityOk === false) {
+                <span class="anc-flag">parity mismatch</span>
+              }
+            </div>
             <div class="anc-udw">{{ udw(element.udw) }}</div>
           </div>
         } @empty {
@@ -61,6 +85,16 @@ function hex(value: number): string {
 })
 export class AncGrainView {
   readonly grain = input<AncGrain | null>(null);
+
+  /** The first timecode in the grain; senders repeat it per line rather than vary it. */
+  protected readonly timecode = computed(() => {
+    for (const element of this.grain()?.elements ?? []) {
+      if (!decodable(element)) continue;
+      const tc = decodeAtc(element);
+      if (tc) return tc;
+    }
+    return null;
+  });
 
   protected readonly countMismatch = computed(() => {
     const g = this.grain();

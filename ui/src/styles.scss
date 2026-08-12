@@ -359,6 +359,41 @@ main.previewing {
   background: var(--qv-lime);
   color: var(--qv-ink);
 }
+/* The timecode as a counter: tabular figures so the digits do not shift as they
+   count, which is the whole point of watching it. */
+.anc-tc {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-bottom: 10px;
+}
+.anc-tc-v {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--qv-lime);
+  line-height: 1.1;
+}
+.anc-tc-k {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+.anc-flag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(240, 80, 18, 0.16);
+  color: var(--qv-orange);
+}
+
 /* ANC preview: a decoded grain, not a picture. Monospace because every field is
    a number the audience is meant to compare between polls. */
 .anc-head {
