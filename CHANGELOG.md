@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.24](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.23...v1.0.0-rc.24) (2026-08-12)
+
+
+### Features
+
+* **ui:** book writer generators from a Generators page ([#127](https://github.com/qvest-digital/dmf-app-qutil/issues/127)) ([bdf2ea8](https://github.com/qvest-digital/dmf-app-qutil/commit/bdf2ea8d327863321409a25f2459d16c26d0271f))
+
 ## [1.0.0-rc.23](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.22...v1.0.0-rc.23) (2026-08-12)
 
 
