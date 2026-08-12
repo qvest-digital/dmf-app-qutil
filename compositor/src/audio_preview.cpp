@@ -206,8 +206,11 @@ namespace
     // extra encoder per session and keeps the fallback working on clusters where
     // ICE never completes.
     //
-    // AAC is avenc_aac rather than voaacenc: voaacenc is limited to two channels
-    // and these flows carry up to eight.
+    // AAC is avenc_aac rather than voaacenc: voaacenc is limited to two channels.
+    // That still does not make the encoders wide enough for every flow — avenc_aac
+    // stops at 6 channels and opusenc at 8, while an ST 2110-30 flow routinely
+    // carries 16 — so anything above stereo is downmixed before it gets here.
+    // See kPreviewChannels / stereo_mix_matrix below.
     // rtspclientsink picks an AAC payloader by rank, and GStreamer ships two at
     // the same rank: rtpmp4apay (MP4A-LATM) and rtpmp4gpay (mpeg4-generic).
     // LATM wins by default, and mediamtx then accepts the track but its MPEG-TS
@@ -226,18 +229,75 @@ namespace
         }
     }
 
+    // How many channels the preview publishes when the flow carries more than a
+    // stereo pair. Both encoders are narrower than the flows we have to accept —
+    // opusenc takes at most 8 channels and avenc_aac at most 6 — so a 16-channel
+    // ST 2110-30 flow cannot reach either of them intact.
+    constexpr std::uint32_t kPreviewChannels = 2;
+
+    // The stereo pair taken from a multichannel flow: channel 0 to left, 1 to right.
+    // Program audio conventionally sits on the first pair, and picking it keeps the
+    // preview useful; summing all sixteen would just produce mud.
+    constexpr std::uint32_t kPreviewLeftChannel = 0;
+    constexpr std::uint32_t kPreviewRightChannel = 1;
+
+    /// audioconvert's mix-matrix for downmixing `channels` inputs to a stereo pair.
+    ///
+    /// ROW ORDER IS OUTPUT-MAJOR: each row is one OUTPUT channel and each column one
+    /// INPUT channel, so this is 2 rows of `channels` entries — not `channels` rows
+    /// of 2. Transposed, audioconvert reads it as a 2-input element and refuses to
+    /// link a 16-channel source at all ("audioconvert can't handle caps ...
+    /// channels=(int)16"), which looks like a caps bug rather than a matrix one.
+    std::string stereo_mix_matrix(std::uint32_t channels)
+    {
+        std::ostringstream os;
+        os << '<';
+        for (std::uint32_t out = 0; out < kPreviewChannels; ++out)
+        {
+            const std::uint32_t take = (out == 0) ? kPreviewLeftChannel : kPreviewRightChannel;
+            os << (out == 0 ? "<" : ",<");
+            for (std::uint32_t in = 0; in < channels; ++in)
+            {
+                os << (in == 0 ? "" : ",") << "(float)" << (in == take ? "1.0" : "0.0");
+            }
+            os << '>';
+        }
+        os << '>';
+        return os.str();
+    }
+
     std::string pipeline_desc(std::string const& opusLocation, std::string const& aacLocation,
         std::uint32_t rate, std::uint32_t channels)
     {
+        // Anything wider than stereo is downmixed before it reaches the encoders.
+        // This also declares the input channels UNPOSITIONED (channel-mask=0):
+        // GStreamer only has a default layout for mono and stereo, so a wider caps
+        // set without a mask fails to negotiate at audioconvert with "Upstream caps
+        // contain no channel mask" -> not-negotiated (-4). The pipeline then tears
+        // down and restarts forever, and the browser shows a stream that never
+        // starts rather than an error.
+        const bool downmix = channels > kPreviewChannels;
+
         std::ostringstream os;
         // is-live + do-timestamp: the reader is paced by mxlSleepUntil against
         // the flow's own sample clock, so GStreamer timestamps arrivals rather
         // than us computing PTS from a sample counter that would drift off it.
         os << "appsrc name=src is-live=true format=time do-timestamp=true"
               " caps=audio/x-raw,format=F32LE,layout=interleaved,rate="
-           << rate << ",channels=" << channels
-           << " ! queue leaky=downstream max-size-buffers=32 max-size-bytes=0 max-size-time=0"
-              " ! audioconvert ! audioresample"
+           << rate << ",channels=" << channels;
+        if (downmix)
+        {
+            os << ",channel-mask=(bitmask)0x0";
+        }
+        os << " ! queue leaky=downstream max-size-buffers=32 max-size-bytes=0 max-size-time=0";
+        // Stereo and mono flows keep the original path byte for byte, so the
+        // existing two-channel previews are unaffected by any of this.
+        if (downmix)
+        {
+            os << " ! audioconvert mix-matrix=\"" << stereo_mix_matrix(channels) << "\""
+               << " ! audio/x-raw,channels=" << kPreviewChannels;
+        }
+        os << " ! audioconvert ! audioresample"
         // Opus needs 48k; a 48k flow passes through audioresample untouched. AAC
         // is happy at 48k too, so both branches share the one resample.
            << " ! audio/x-raw,rate=48000 ! tee name=enc"
@@ -326,8 +386,11 @@ namespace
 
         ses->channels.store(channels, std::memory_order_relaxed);
         ses->rate.store(rateHz, std::memory_order_relaxed);
-        g_print("[%s] audio flow: %u ch @ %uHz, batch=%u chunk=%u -> %s\n",
-            ses->flowId.c_str(), channels, rateHz, batch, chunk, ses->path.c_str());
+        g_print("[%s] audio flow: %u ch @ %uHz, batch=%u chunk=%u -> %s%s\n",
+            ses->flowId.c_str(), channels, rateHz, batch, chunk, ses->path.c_str(),
+            // Say so explicitly: a 16-channel flow previewed as stereo is a
+            // deliberate downmix, not a stream that lost its other channels.
+            channels > kPreviewChannels ? " (downmixed to stereo from ch 1+2)" : "");
 
         auto const opusLocation = g_rtspBase + ses->flowId;
         auto const desc = pipeline_desc(opusLocation, opusLocation + kHlsPathSuffix, rateHz, channels);
