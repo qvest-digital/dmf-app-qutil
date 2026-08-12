@@ -94,6 +94,98 @@ describe('FlowPreview channel pairs', () => {
 });
 
 /**
+ * A data card holds no player at all: ANC has no transport to a browser, so the
+ * card polls decoded grains and shows the packets. What matters is that it asks
+ * the right endpoint and renders what comes back, including the sender's
+ * ANC_Count disagreeing with the packets actually present.
+ */
+describe('FlowPreview ANC data', () => {
+  let fixture: ComponentFixture<FlowPreview>;
+  let http: HttpTestingController;
+
+  const ANC = 'a0d30000-0000-0000-0000-000000000001';
+
+  const GRAIN = {
+    flow: ANC,
+    index: 53595736482,
+    rfc8331Length: 96,
+    validSlices: 4096,
+    totalSlices: 4096,
+    declaredCount: 0,
+    ancCount: 1,
+    elements: [
+      {
+        line: 9,
+        did: 0x60,
+        sdid: 0x60,
+        dataCount: 16,
+        description: 'SMPTE ST 12-2 Ancillary Time Code',
+        udw: [1, 33, 66, 2],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [FlowPreview],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    http = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(FlowPreview);
+    fixture.componentRef.setInput('request', {
+      id: ANC,
+      label: 'ST2110 ANC 30/1',
+      format: 'data',
+      channels: 0,
+    });
+    fixture.detectChanges();
+
+    http
+      .expectOne((req) => req.method === 'POST' && req.url.startsWith(`/api/preview/${ANC}`))
+      .flush({ format: 'data', anc: `/api/anc/${ANC}` });
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    fixture.destroy();
+    http.match(() => true).forEach((req) => req.flush({}));
+    http.verify();
+  });
+
+  function flushGrain(): void {
+    http.expectOne(`/api/anc/${ANC}`).flush(GRAIN);
+    fixture.detectChanges();
+  }
+
+  function text(): string {
+    return (fixture.nativeElement as HTMLElement).textContent ?? '';
+  }
+
+  it('carries no video element', () => {
+    flushGrain();
+    expect(fixture.nativeElement.querySelector('video')).toBeNull();
+  });
+
+  it('names the packet by its DID/SDID and registration', () => {
+    flushGrain();
+    expect(text()).toContain('0x60/0x60');
+    expect(text()).toContain('SMPTE ST 12-2 Ancillary Time Code');
+    expect(text()).toContain('line 9');
+    expect(text()).toContain('DC 16');
+  });
+
+  it('shows the UDW as hex', () => {
+    flushGrain();
+    expect(text()).toContain('0x01 0x21 0x42 0x02');
+  });
+
+  it('says so when the header count disagrees with the packets', () => {
+    flushGrain();
+    expect(text()).toContain('header declares ANC_Count 0');
+  });
+});
+
+/**
  * The column is one card per flow. A second Preview on a flow already open would
  * resolve to the same mediamtx path, and closing either card would release it
  * under the other.

@@ -3,7 +3,7 @@ import { Injectable, signal } from '@angular/core';
 export interface PreviewRequest {
   id: string;
   label: string;
-  format: 'video' | 'audio';
+  format: 'video' | 'audio' | 'data';
   channels: number;
 }
 

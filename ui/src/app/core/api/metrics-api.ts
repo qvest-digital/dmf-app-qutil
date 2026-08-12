@@ -1,7 +1,13 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import { FlowsResponse, OperatorFlowsResponse, PreviewSession, PreviewStatus } from './models';
+import {
+  AncGrain,
+  FlowsResponse,
+  OperatorFlowsResponse,
+  PreviewSession,
+  PreviewStatus,
+} from './models';
 
 /**
  * The demo-metrics aggregator (k8s/metrics/aggregator.py), reached through
@@ -52,6 +58,14 @@ export class MetricsApi {
     owner?: string,
   ): Observable<PreviewSession> {
     return this.startPreview(uuid, owner, channels);
+  }
+
+  /**
+   * The latest decoded ANC grain of a data flow. Polled: there is no stream to
+   * subscribe to, only whatever the current grain carries.
+   */
+  ancGrain(uuid: string): Observable<AncGrain> {
+    return this.http.get<AncGrain>(`/api/anc/${encodeURIComponent(uuid)}`);
   }
 
   /**

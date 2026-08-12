@@ -48,6 +48,7 @@ mv-operator-flow-list,
 mv-operator-flow-row,
 mv-operator-flow-detail,
 mv-flow-preview,
+mv-anc-grain,
 mv-audio-meters,
 mv-video-shell,
 mv-kv-row {
@@ -358,6 +359,70 @@ main.previewing {
   background: var(--qv-lime);
   color: var(--qv-ink);
 }
+/* ANC preview: a decoded grain, not a picture. Monospace because every field is
+   a number the audience is meant to compare between polls. */
+.anc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  padding-bottom: 8px;
+}
+.anc-k {
+  opacity: 0.55;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.anc-v {
+  font-weight: 700;
+  margin-right: 6px;
+}
+.anc-note,
+.anc-error {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 4px 0;
+}
+.anc-error {
+  color: var(--qv-orange);
+  opacity: 1;
+}
+.anc-pkt {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+.anc-pkt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.anc-did {
+  font-weight: 800;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--qv-lime);
+}
+.anc-desc {
+  font-size: 12px;
+  font-weight: 600;
+}
+.anc-pkt-meta {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+.anc-udw {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  opacity: 0.85;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
 .pv-state {
   font-size: 12px;
   opacity: 0.7;

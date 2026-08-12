@@ -18,6 +18,12 @@ const DATA: OperatorFlow = {
   format: 'data',
 };
 
+const UNKNOWN: OperatorFlow = {
+  id: 'deadbeef-0000-0000-0000-000000000001',
+  label: 'mystery-flow',
+  format: 'mux',
+};
+
 /**
  * The Preview button is what grows the preview column, so what it hands the
  * controller has to be right: the flow's own channel count decides how many pairs
@@ -64,8 +70,15 @@ describe('OperatorFlowRow preview button', () => {
     expect(controller.requests()).toHaveLength(1);
   });
 
-  it('offers no preview for a format no browser can play', () => {
+  it('previews an ANC data flow, which is read rather than played', () => {
     mount(DATA);
+    previewButton()!.click();
+
+    expect(controller.requests()[0].format).toBe('data');
+  });
+
+  it('offers no preview for a format with no route to a browser', () => {
+    mount(UNKNOWN);
 
     expect(previewButton()).toBeNull();
     expect(controller.requests()).toHaveLength(0);

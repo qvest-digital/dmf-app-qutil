@@ -822,6 +822,9 @@ def operator_flows():
 # port-forwarded dev loop uses.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
 AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API")
+# Reader for ANC data flows. Nothing in the catalog provides one yet, so this
+# stays unset on a stock install and data previews report that rather than fail.
+ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 
 # Where the claims live, and what they are called. The names come from chart
@@ -956,6 +959,18 @@ def _audio_preview(path, method="GET"):
     return _http_json(base, path, method)
 
 
+def _anc_preview(path, method="GET"):
+    """The ANC reader, which decodes RFC-8331 grains into JSON.
+
+    Env-only for now: no class in the catalog publishes an anc-preview endpoint,
+    so there is no claim to resolve one from. Unset reads as not booked rather
+    than as a broken lookup.
+    """
+    if not ANC_PREVIEW_API:
+        return 503, {"error": "no ANC reader configured (ANC_PREVIEW_API)"}
+    return _http_json(ANC_PREVIEW_API, path, method)
+
+
 def _known_flow(uuid):
     for fl in safe_k8s(
             "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []):
@@ -1008,14 +1023,23 @@ def preview_add(uuid, owner="overlay", channels=""):
         if code == 200:
             _hold(uuid, owner)
         return code, res
+    if fmt == "data":
+        # No transport carries ANC to a browser, so a data preview is not a
+        # player: the reader decodes grains and the card reads them from
+        # /api/anc/<uuid>. Nothing is provisioned, so nothing is held either.
+        media = (d.get("media_type") or "").lower()
+        if media and media != "video/smpte291":
+            return 415, {"error": f"data preview supports video/smpte291; this "
+                                  f"one is {media}"}
+        return 200, {"format": "data", "anc": f"/api/anc/{uuid}"}
     if fmt != "video":
         # Only video can be pulled by mediamtx and only audio has a publisher to
-        # push it, so anything else (data/smpte291) has no route to a browser.
-        # Refuse before creating a path: mediamtx's mxlSource would retry the
-        # open every 5s forever, leaving a zombie path behind spamming the log
-        # while the overlay sat on "buffering...".
-        return 415, {"error": f"preview supports video and audio flows; this "
-                              f"one is {fmt or 'of unknown format'}"}
+        # push it, so anything else has no route to a browser. Refuse before
+        # creating a path: mediamtx's mxlSource would retry the open every 5s
+        # forever, leaving a zombie path behind spamming the log while the card
+        # sat on "buffering...".
+        return 415, {"error": f"preview supports video, audio and ANC data "
+                              f"flows; this one is {fmt or 'of unknown format'}"}
     name = "preview-" + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
@@ -1113,6 +1137,17 @@ def preview_status(uuid):
     return 404, {"error": "no session for this flow"}
 
 
+def anc_grain(uuid):
+    """The latest RFC-8331 grain of an ANC flow, as the reader decodes it.
+
+    Proxied rather than parsed here: reading a grain needs libmxl and the node's
+    domain, which is a media function's job and not this aggregator's.
+    """
+    if not _UUID_RE.match(uuid or ""):
+        return 400, {"error": "bad flow id"}
+    return _anc_preview(f"/grain?flow={uuid}")
+
+
 def preview_del(uuid, owner="overlay"):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1175,6 +1210,16 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, operator_flows())
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/anc/"):
+            # The latest decoded ANC grain of a data flow. Polled, because a
+            # data preview is a look at what a grain currently carries rather
+            # than a stream something plays.
+            uuid, _, _ = self._preview_args()
+            try:
+                code, res = anc_grain(uuid)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
         elif self.path.startswith("/api/preview/"):
             # GET on the same collection POST/DELETE use: is this audio preview
             # actually producing yet, or did its reader fail to open?

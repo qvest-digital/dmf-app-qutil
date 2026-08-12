@@ -10,11 +10,12 @@ import {
   viewChild,
 } from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
-import { PreviewSession, PreviewStatus } from '../../core/api/models';
+import { AncGrain, PreviewSession, PreviewStatus } from '../../core/api/models';
 import { HlsHandle, hlsPlay } from '../../core/player/hls-player';
 import { PlayerRegistry } from '../../core/player/player-registry';
 import { WhepHandle, whep } from '../../core/player/whep';
 import { VideoShell } from '../../shared/video-shell';
+import { AncGrainView } from './anc-grain';
 import { AudioMeters } from './audio-meters';
 import { PreviewController, PreviewRequest } from './preview-controller';
 
@@ -32,6 +33,12 @@ const AUDIO_POLL_MS = 1000;
 const LEVEL_POLL_MS = 100;
 /** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
 const HLS_RETRY_MS = 4000;
+/**
+ * How often a data preview asks for the current grain. Fast enough that a
+ * timecode reads as counting rather than jumping, and each poll is one decoded
+ * grain rather than a stream.
+ */
+const ANC_POLL_MS = 500;
 /** Names this card as a holder of the path, so the aggregator can count holders. */
 const OWNER = 'preview';
 
@@ -52,41 +59,48 @@ const OWNER = 'preview';
  * One card owns one <video> for as long as it is open, and closing destroys
  * both: createMediaElementSource throws if the meters are ever rebuilt against a
  * fresh element, so an element must never be handed to a second preview.
+ *
+ * Data: ANC has no transport to a browser at all, so the card holds no player
+ * and polls decoded grains instead.
  */
 @Component({
   selector: 'mv-flow-preview',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [VideoShell, AudioMeters],
+  imports: [VideoShell, AudioMeters, AncGrainView],
   template: `
     <div class="pv-card">
       <div class="pv-head">
         <span>{{ title() }}</span>
         <button class="btn" type="button" (click)="close()">✕</button>
       </div>
-      <!-- Audio flows have nothing to show, so the meters take the video's place
-           and the element collapses to just its transport controls (volume and
-           mute still matter). -->
-      <mv-audio-meters [show]="isAudio()" [sourcePeaks]="levels()" [selected]="selected()" />
-      @if (pairs().length > 1) {
-        <div class="pv-chans">
-          <span class="pv-chans-label">listen to</span>
-          @for (pair of pairs(); track pair[0]) {
-            <button
-              class="btn pv-chan"
-              type="button"
-              [class.on]="isPlaying(pair)"
-              (click)="pick(pair)"
-            >
-              {{ pairLabel(pair) }}
-            </button>
-          }
-        </div>
+      @if (isData()) {
+        <mv-anc-grain [grain]="anc()" />
+      } @else {
+        <!-- Audio flows have nothing to show, so the meters take the video's place
+             and the element collapses to just its transport controls (volume and
+             mute still matter). -->
+        <mv-audio-meters [show]="isAudio()" [sourcePeaks]="levels()" [selected]="selected()" />
+        @if (pairs().length > 1) {
+          <div class="pv-chans">
+            <span class="pv-chans-label">listen to</span>
+            @for (pair of pairs(); track pair[0]) {
+              <button
+                class="btn pv-chan"
+                type="button"
+                [class.on]="isPlaying(pair)"
+                (click)="pick(pair)"
+              >
+                {{ pairLabel(pair) }}
+              </button>
+            }
+          </div>
+        }
+        <mv-video-shell
+          [videoClass]="isAudio() ? 'pv-video audio-only' : 'pv-video'"
+          [controls]="true"
+          [muted]="false"
+        />
       }
-      <mv-video-shell
-        [videoClass]="isAudio() ? 'pv-video audio-only' : 'pv-video'"
-        [controls]="true"
-        [muted]="false"
-      />
       <div class="pv-state">{{ state() }}</div>
     </div>
   `,
@@ -98,12 +112,16 @@ export class FlowPreview {
   private readonly registry = inject(PlayerRegistry);
   private readonly controller = inject(PreviewController);
 
-  private readonly shell = viewChild.required(VideoShell);
-  private readonly meters = viewChild.required(AudioMeters);
+  // Optional: a data card renders neither, because ANC has nothing to play.
+  private readonly shell = viewChild(VideoShell);
+  private readonly meters = viewChild(AudioMeters);
 
   protected readonly title = signal('Preview');
   protected readonly state = signal('');
   protected readonly isAudio = signal(false);
+  protected readonly isData = signal(false);
+  /** The grain the last poll returned, or null before the first one lands. */
+  protected readonly anc = signal<AncGrain | null>(null);
   /** Selectable channel pairs, empty for video and for a flow no wider than one pair. */
   protected readonly pairs = signal<number[][]>([]);
   /** The 1-based pair on air, as reported rather than as requested. */
@@ -121,6 +139,7 @@ export class FlowPreview {
   private pc: WhepHandle | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private levelTimer: ReturnType<typeof setTimeout> | undefined;
+  private ancTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     inject(DestroyRef).onDestroy(() => {
@@ -175,11 +194,17 @@ export class FlowPreview {
     this.title.set(request.label || id);
     this.state.set('starting preview…');
     this.isAudio.set(request.format === 'audio');
+    this.isData.set(request.format === 'data');
     this.pairs.set(request.format === 'audio' ? FlowPreview.pairsOf(request.channels) : []);
 
     this.api.startPreview(id, OWNER).subscribe({
       next: (session) => {
         if (this.sessionId !== id) return;
+        if (session.format === 'data') {
+          this.state.set('');
+          this.pollAnc(id);
+          return;
+        }
         if (session.format === 'audio') {
           this.awaitAudio(id, session, request.channels, AUDIO_TRIES);
           return;
@@ -270,6 +295,26 @@ export class FlowPreview {
     });
   }
 
+  /**
+   * Keep asking for the current grain. A failed poll keeps the last grain on
+   * screen and says why: an ANC flow that stops being readable here is worth
+   * seeing as an error beside the last packets rather than as a blank card.
+   */
+  private pollAnc(id: string): void {
+    this.api.ancGrain(id).subscribe({
+      next: (grain) => {
+        if (this.sessionId !== id) return;
+        this.anc.set(grain);
+        this.ancTimer = setTimeout(() => this.pollAnc(id), ANC_POLL_MS);
+      },
+      error: (err: { error?: { error?: string } }) => {
+        if (this.sessionId !== id) return;
+        this.state.set(`grain read failed: ${err.error?.error ?? ''}`);
+        this.ancTimer = setTimeout(() => this.pollAnc(id), ANC_POLL_MS);
+      },
+    });
+  }
+
   private applyStatus(status: PreviewStatus): void {
     this.levels.set(status.channelPeakDb ?? []);
     // An audio-preview without the pair selection reports neither, and guessing
@@ -285,24 +330,26 @@ export class FlowPreview {
    * HLS on failure.
    */
   private playAudio(session: PreviewSession, channels: number): void {
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     this.pc = whep(this.registry, session.path, video, {
       onFail: () => this.playHls(session.hls, true, channels),
       onStream: (stream) => {
         this.state.set('');
-        this.meters().start(stream, channels, video);
+        this.meters()?.start(stream, channels, video);
       },
     });
   }
 
   private playHls(src: string, isAudio: boolean, channels: number): void {
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     this.hls = hlsPlay(src, video, {
       retryMs: HLS_RETRY_MS,
       liveMaxLatencyDurationCount: null,
       onManifest: () => {
         this.state.set('');
-        if (isAudio) this.meters().start(null, channels, video);
+        if (isAudio) this.meters()?.start(null, channels, video);
       },
       onFatal: () => this.state.set('buffering…'),
     });
@@ -318,12 +365,17 @@ export class FlowPreview {
       clearTimeout(this.levelTimer);
       this.levelTimer = undefined;
     }
-    this.meters().stop();
+    if (this.ancTimer !== undefined) {
+      clearTimeout(this.ancTimer);
+      this.ancTimer = undefined;
+    }
+    this.meters()?.stop();
     this.hls?.stop();
     this.hls = null;
     this.pc?.stop();
     this.pc = null;
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     try {
       video.pause();
       video.srcObject = null;

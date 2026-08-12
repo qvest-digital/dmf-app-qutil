@@ -52,6 +52,11 @@ aggregator:
   flowCount: 4
   # Namespace the per-booking txDarwin instances are deployed into.
   bookingNamespace: txdarwin
+  # Reader for ANC data flows, as a plain address: previewing SMPTE 291 means
+  # decoding grains, which needs libmxl and the node's MXL domain, so it is a
+  # media function's job rather than the aggregator's. No catalog class publishes
+  # one yet, so this is empty and a data preview says the reader is not booked.
+  ancPreviewApi: ""
   resources:
     requests:
       cpu: 10m
