@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.23](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.22...v1.0.0-rc.23) (2026-08-12)
+
+
+### Features
+
+* **ui:** reduce the app to the multiviewer with preview cards ([#124](https://github.com/qvest-digital/dmf-app-qutil/issues/124)) ([b999dc3](https://github.com/qvest-digital/dmf-app-qutil/commit/b999dc3a5eeb49518be7c44107c9ed29df39fa31))
+
 ## [1.0.0-rc.22](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.21...v1.0.0-rc.22) (2026-08-10)
 
 
