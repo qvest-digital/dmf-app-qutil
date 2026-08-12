@@ -1,16 +1,16 @@
-# Qvest MXL multiviewer
+# Qutil - the DMF/MXL Utility
 
 The demo's frontend: an Angular app showing what RDMA delivery carries, the
 health of the MXL gateways, and the operator's flow inventory with an on-demand
-preview per flow.
+preview per flow, plus a page that books test generators on demand.
 
-It is built to static files and served by the `caddy` sidecar of the mediamtx
-Deployment (`k8s/mediamtx-deployment.yaml`). Caddy also reverse-proxies the APIs
-the app polls, so everything is same-origin:
+It is built to static files and served by a `caddy` container (its own Deployment
+in `charts/qutil`, a sidecar of mediamtx in the KIND overlay). Caddy also
+reverse-proxies the APIs the app polls, so everything is same-origin:
 
 | Path          | Backend                                                                                |
 | ------------- | -------------------------------------------------------------------------------------- |
-| `/api/*`      | `demo-metrics` — the Python aggregator (`k8s/metrics/aggregator.py`)                    |
+| `/api/*`      | `demo-metrics` — the Python aggregator (`charts/qutil/files/aggregator.py`)              |
 | `/hls/*`      | mediamtx HLS on `:8888`                                                                 |
 | `/webrtc/*`   | mediamtx WHEP signalling on `:8889` (ICE media bypasses Caddy via the UDP LoadBalancer) |
 | `/stats.json` | the compositor's raw stats server                                                       |
@@ -49,21 +49,22 @@ docker build -t ghcr.io/qvest-digital/mxl-dmf-demo-app/ui:dev .
 
 The image is `caddy:2-alpine` with `dist/mxl-multiviewer/browser` copied to
 `/srv`. The Caddyfile is deliberately **not** baked in — it stays a
-kustomize-generated ConfigMap (`k8s/config/Caddyfile`) so the routes above remain
-editable through GitOps without rebuilding. To serve the image by hand:
+ConfigMap the chart renders from `charts/qutil/files/Caddyfile`, so the routes
+above stay editable through GitOps without rebuilding. To serve the image by
+hand:
 
 ```bash
 docker run --rm -p 8080:8080 \
-  -v "$PWD/../k8s/config/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -v "$PWD/../charts/qutil/files/Caddyfile:/etc/caddy/Caddyfile:ro" \
   ghcr.io/qvest-digital/mxl-dmf-demo-app/ui:dev
 ```
 
 CI (`.github/workflows/build-ui.yml`) runs the tests and pushes the image to GHCR
 on every change under `ui/`.
 
-The app is one route (`/`) and anything else redirects to it, which is why the
-Caddyfile still needs `try_files {path} /index.html` — without it a reload on any
-other path 404s against the file server before the router ever sees it.
+Each tab is a route (`/` and `/gen`), and anything else redirects to the first,
+which is why the Caddyfile needs `try_files {path} /index.html` — without it a
+reload on `/gen` 404s against the file server before the router ever sees it.
 
 ## How it is put together
 
@@ -72,8 +73,15 @@ src/app/
   core/api/       typed calls to the aggregator + the polling helper
   core/player/    WHEP, hls.js, and the registry that tears players down
   shared/         kv-row, video shell, formatting pipes, origin-state mapping
-  features/       the multiviewer page, plus the flow-preview cards
+  features/       the multiviewer and generators pages, plus the preview cards
 ```
+
+The generators page books writers by asking the aggregator to create a
+`MediaFunctionClaim`; the aggregator validates every field and mints the flow ids,
+because a flow id reaches a `rm -rf` glob in the writer chart and because
+uniqueness can only be judged against the cluster's own index. It lists and
+deletes only the claims it created, selected by a label the chart's claims do not
+carry.
 
 Three things are less obvious than they look, and all three were bugs once:
 

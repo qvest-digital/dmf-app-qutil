@@ -46,7 +46,9 @@ subjects:
 ---
 # Cluster-wide reads the per-flow panels need. MxlFlow is cluster-scoped, and
 # a flow's consumers can sit in any namespace, so an all-namespaces list is
-# only authorized here. Read-only throughout: pod delete stays namespaced.
+# only authorized here. Reads only: every write this app can do -- deleting a
+# writer pod, creating and deleting a generator claim -- is granted in the
+# production namespace by the Roles below instead.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -118,6 +120,44 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "qutil.fullname" . }}-aggregator
     namespace: {{ .Release.Namespace }}
+{{- if .Values.generators.enabled }}
+---
+# Claim create and delete in the production namespace only, for the Generators
+# page. Reads come from the ClusterRole above; this adds nothing but the two
+# writes, and only where the writers are booked.
+#
+# RBAC cannot scope a delete to the claims this app created, so the aggregator
+# stamps its own managed-by label on what it books and refuses to delete a claim
+# that does not carry it. The chart's own claims carry managed-by: Helm and are
+# unreachable from the page.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "qutil.fullname" . }}-generators
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [dmf.qvest-digital.com]
+    resources: [mediafunctionclaims]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "qutil.fullname" . }}-generators
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "qutil.fullname" . }}-generators
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "qutil.fullname" . }}-aggregator
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -180,6 +220,29 @@ spec:
             # previews report that no reader is booked.
             - name: ANC_PREVIEW_API
               value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.generators.enabled }}
+            # The Generators page books writers by creating claims. Off means the
+            # endpoints refuse rather than the apiserver forbidding them, so an
+            # install that has not granted the Role says why.
+            - name: GEN_ENABLED
+              value: "true"
+            - name: GEN_CLASS
+              value: {{ .Values.generators.className | default .Values.writers.className }}
+            - name: GEN_JOB_REF
+              value: {{ .Values.generators.jobRef | quote }}
+            - name: GEN_PREFIX
+              value: {{ .Values.generators.namePrefix | quote }}
+            # The marker a page-booked claim carries, and the only thing that
+            # separates one from the claims this chart renders.
+            - name: GEN_MANAGER
+              value: {{ include "qutil.fullname" . }}-aggregator
+            - name: GEN_MAX
+              value: {{ .Values.generators.maxCount | quote }}
+            # Stamped onto every page-booked claim: the class envelope is sized
+            # for 1080p50 and would reserve several times what these need.
+            - name: GEN_RESOURCES
+              value: {{ toJson .Values.generators.resources | quote }}
             {{- end }}
           ports:
             - name: http

@@ -10,6 +10,18 @@
   </div>
 </header>
 
+<nav class="tabs">
+  <a
+    class="tab"
+    routerLink="/"
+    routerLinkActive="active"
+    [routerLinkActiveOptions]="{ exact: true }"
+  >
+    Multiviewer
+  </a>
+  <a class="tab" routerLink="/gen" routerLinkActive="active">Generators</a>
+</nav>
+
 <router-outlet />
 
 <footer></footer>

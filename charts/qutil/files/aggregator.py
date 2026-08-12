@@ -12,12 +12,25 @@
 #   - gateways    : mxl-system gateway pods (node, ready, restarts)
 #
 # Endpoints:
-#   GET  /api/flows      -> combined JSON
-#   POST /api/kill/<n>   -> delete the writer-mxl-<n> pod (watch it recover)
+#   GET    /api/flows              -> the demo writer set, merged as above
+#   GET    /api/operator-flows     -> every MxlFlow the operator knows
+#   GET    /api/booking            -> the per-booking instances and their story
+#   POST   /api/preview/<uuid>     -> provision a mediamtx path for a flow
+#   GET    /api/preview/<uuid>     -> whether an audio preview is producing yet
+#   DELETE /api/preview/<uuid>     -> release this owner's hold on the path
+#   GET    /api/anc/<uuid>         -> the latest decoded ANC grain of a data flow
+#   GET    /api/generators         -> the writer claims the UI booked
+#   GET    /api/generators/flow-ids-> two unused MXL flow ids
+#   POST   /api/generators         -> book a writer claim
+#   DELETE /api/generators/<name>  -> release one
+#   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
-# Runs in-cluster with a scoped ServiceAccount; talks to the API server with
-# the mounted SA token + CA. No pip deps so it runs on stock python:3-slim.
-import base64, json, os, re, ssl, threading, time, urllib.parse, urllib.request, urllib.error
+# Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
+# mounted SA token + CA. Reads are cluster-wide; the writes it can do -- deleting
+# a writer pod and creating or deleting a generator claim -- are granted in the
+# production namespace only. No pip deps so it runs on stock python:3-slim.
+import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
+import uuid as uuid_mod
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -57,9 +70,15 @@ COMPOSITOR = os.environ.get("COMPOSITOR_STATS")
 
 API = "https://kubernetes.default.svc"
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-with open(SA + "/token") as f:
-    TOKEN = f.read().strip()
-CTX = ssl.create_default_context(cafile=SA + "/ca.crt")
+# Guarded so the pure helpers below import outside a cluster, the same reason
+# _own_namespace tolerates a missing namespace file. In-cluster both exist.
+try:
+    with open(SA + "/token") as f:
+        TOKEN = f.read().strip()
+    CTX = ssl.create_default_context(cafile=SA + "/ca.crt")
+except OSError:
+    TOKEN = ""
+    CTX = None
 
 
 def k8s(path, method="GET"):
@@ -75,6 +94,38 @@ def safe_k8s(path):
         return k8s(path)
     except Exception as e:
         return {"_error": str(e)}
+
+
+def k8s_json(path, method="GET", body=None):
+    """Like k8s(), but carries a request body and reports what came back.
+
+    k8s() throws its response away for anything but a GET, so an AlreadyExists
+    or an Invalid would reach the operator as "HTTP Error 409: Conflict" with the
+    API server's own sentence discarded. Creating a claim is the first call here
+    whose failure is worth reading, hence a second function rather than a change
+    to the one every read path uses.
+    """
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + TOKEN)
+    req.add_header("Accept", "application/json")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, context=CTX, timeout=8) as r:
+            raw = r.read().decode().strip()
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        try:
+            status = json.loads(e.read().decode())
+        except Exception:
+            status = {}
+        # A k8s Status carries the readable part in message; reason is the
+        # machine-readable half (AlreadyExists, Forbidden, Invalid).
+        return e.code, {"error": status.get("message") or f"apiserver said {e.code}",
+                        "reason": status.get("reason")}
+    except Exception as e:
+        return 503, {"error": f"apiserver unreachable: {e}"}
 
 
 def compositor_stats():
@@ -857,6 +908,60 @@ _UUID_RE = re.compile(
 # the value ends up in a query string built by hand.
 _CHANNELS_RE = re.compile(r"^\d{1,3}(,\d{1,3})?$")
 
+# ── Generators ──────────────────────────────────────────────────────────────
+#
+# The UI books writers by creating MediaFunctionClaims of GEN_CLASS. Off unless
+# the chart says otherwise: nothing in front of this API authenticates, so the
+# grant that makes it work is opt-in per install.
+#
+# Everything an operator submits is validated here rather than forwarded. The
+# writer chart's prepareDomain init container runs
+#     rm -rf "<domain>/<flow.video_output.id>"*
+# as root, with the glob outside the quotes, so a flow id is a prefix pattern
+# over the shared MXL domain: a truncated id matches several production flows
+# and a borrowed one deletes that flow's grains. _UUID_RE's anchors stop the
+# first, _flow_ids_in_use stops the second.
+GEN_ENABLED = os.environ.get("GEN_ENABLED", "") == "true"
+# From the environment, never from a request: create on claims means "install any
+# chart in the catalog here", and the class is the only thing that decides which.
+GEN_CLASS = os.environ.get("GEN_CLASS", "mxl-writer")
+GEN_JOB_REF = os.environ.get("GEN_JOB_REF", "qutil/generators")
+# Both halves of the ownership guard: page-created claims carry the label and the
+# prefix, and delete refuses anything missing either.
+GEN_PREFIX = os.environ.get("GEN_PREFIX", "generator-")
+GEN_MANAGER = os.environ.get("GEN_MANAGER", "qutil-aggregator")
+GEN_MAX = int(os.environ.get("GEN_MAX") or "8")
+try:
+    GEN_RESOURCES = json.loads(os.environ.get("GEN_RESOURCES") or "{}")
+except ValueError:
+    GEN_RESOURCES = {}
+
+_GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
+_GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
+_GEN_COMPONENT = "generator"
+_GEN_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_GEN_MAX_BODY = 8192
+# videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
+# pod Ready and producing nothing, so the set is closed here.
+_GEN_PATTERNS = ("smpte", "ball", "gamut", "checkers-8", "snow", "zone-plate")
+# The class README: these regenerate every frame and stall the test source at
+# 1080p. A booking that wants one has to ask for a smaller frame.
+_GEN_ANIMATED = ("ball", "snow", "zone-plate")
+_GEN_ANIMATED_MAX_PIXELS = 1296 * 720
+# Fixed sets rather than free numbers: v210 packs two pixels per group, so an odd
+# width fails the function chart's own render, and a rate the source cannot hold
+# is a writer that never reaches its grain rate.
+_GEN_FRAME_SIZES = ((640, 360), (1296, 720), (1920, 1080))
+_GEN_GRAIN_RATES = ((30000, 1001), (25, 1), (50, 1), (60000, 1001))
+_GEN_SAMPLE_RATES = (44100, 48000, 96000)
+_GEN_MAX_CHANNELS = 16
+_GEN_MAX_OVERLAY = 32
+# How long a booking may last. Nothing else prunes a claim created at runtime:
+# helm prunes what its release owns and Flux what its source declares, so a
+# closed browser tab would otherwise leave a writer running for good.
+_GEN_TTLS = {"1h": 3600, "8h": 28800, "24h": 86400, "none": 0}
+_GEN_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
 
 def _http_json(base, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
@@ -1169,6 +1274,394 @@ def preview_del(uuid, owner="overlay"):
     return 200, {"stopped": uuid}
 
 
+# ── Generators: booking writers from the UI ─────────────────────────────────
+
+
+def _gen_slug(label):
+    """A DNS-1123 fragment from whatever the operator typed, or "" if nothing
+    usable is left. Only the claim's name is built from this, so dropping a
+    character is better than rejecting a label."""
+    out = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
+    return out[:20].strip("-")
+
+
+def _gen_name(label, pattern):
+    """generator-<slug>-<4 hex>. The suffix is what makes a second booking of the
+    same label a different claim; the prefix is half the delete guard."""
+    stem = _gen_slug(label) or _gen_slug(pattern) or "flow"
+    return f"{GEN_PREFIX}{stem}-{secrets.token_hex(2)}"
+
+
+def _claim_flow_ids(claim):
+    """Every flow id a claim's parameters carry.
+
+    A walk rather than the two keys this app writes: the writer takes
+    video_output and audio_output, the SRT ingest adds anc_output, and a class
+    this app has never heard of can name a fourth. Anything whose key ends
+    _output and carries an id counts.
+    """
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key.endswith("_output") and isinstance(value, dict):
+                    flow_id = value.get("id")
+                    if isinstance(flow_id, str) and flow_id:
+                        found.append(flow_id.lower())
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk((claim.get("spec") or {}).get("parameters") or {})
+    return found
+
+
+def _flow_ids_in_use():
+    """{flow id: what holds it}, or ("", error) when the index cannot be read.
+
+    Two sources, because a flow exists at two different times: an MxlFlow CR is
+    a flow that exists now, whoever wrote it, and a claim's parameters are a flow
+    that will exist once it provisions. Only the second catches writer-mxl-1..4
+    and the SRT ingests before their pods have written anything.
+    """
+    used = {}
+    flows = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows")
+    if "_error" in flows:
+        return None, f"cannot list MxlFlows: {flows['_error']}"
+    for fl in flows.get("items", []) or []:
+        name = (fl.get("metadata", {}) or {}).get("name")
+        if name:
+            used.setdefault(name.lower(), "a flow the operator already knows")
+
+    claims = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims")
+    if "_error" in claims:
+        return None, f"cannot list claims in {CLAIM_NS}: {claims['_error']}"
+    for claim in claims.get("items", []) or []:
+        name = (claim.get("metadata", {}) or {}).get("name", "?")
+        for flow_id in _claim_flow_ids(claim):
+            used.setdefault(flow_id, f"claim {name}")
+    return used, None
+
+
+def _gen_new_ids(used):
+    """Two ids no flow and no claim holds. Minted here rather than in the browser:
+    uniqueness can only be judged where the index is, and crypto.randomUUID is
+    undefined outside a secure context, which this demo often is not."""
+    out = []
+    while len(out) < 2:
+        candidate = str(uuid_mod.uuid4())
+        if candidate in used or candidate in out or candidate == _GEN_NIL_UUID:
+            continue
+        out.append(candidate)
+    return out
+
+
+def _gen_int(node, key, default=None):
+    value = node.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _validate_generator(req):
+    """The first thing wrong with a submission, or None.
+
+    Every message here is mirrored word for word in the UI's
+    generator-validation.ts. This side is the authority; that side only spares
+    the operator a round trip.
+    """
+    if not isinstance(req, dict):
+        return "body must be a JSON object of at most 8 KiB"
+
+    video = req.get("video") or {}
+    audio = req.get("audio") or {}
+    video_on = bool(video.get("enabled"))
+    audio_on = bool(audio.get("enabled"))
+    if not video_on and not audio_on:
+        return "enable at least one of video or audio"
+
+    if req.get("ttl", "1h") not in _GEN_TTLS:
+        return "expiry must be one of " + ", ".join(_GEN_TTLS)
+
+    for on, block, what in ((video_on, video, "video"), (audio_on, audio, "audio")):
+        if not on:
+            continue
+        flow_id = (block.get("id") or "").strip()
+        if not flow_id:
+            return (f"a {what} flow id is required: a writer without one runs on the "
+                    f"class default id, and two writers on one flow delete each "
+                    f"other's grains")
+        if not _UUID_RE.match(flow_id):
+            return f"{what} flow id must be a full UUID, all 36 characters of it"
+        if flow_id.lower() == _GEN_NIL_UUID:
+            return f"{what} flow id must not be the nil UUID"
+    if video_on and audio_on:
+        if (video.get("id") or "").lower() == (audio.get("id") or "").lower():
+            return "the video and audio flows need different ids"
+
+    if video_on:
+        if video.get("pattern") not in _GEN_PATTERNS:
+            return "pattern must be one of " + ", ".join(_GEN_PATTERNS)
+        width = _gen_int(video, "frameWidth")
+        height = _gen_int(video, "frameHeight")
+        if (width, height) not in _GEN_FRAME_SIZES:
+            return "frame size must be one of " + ", ".join(
+                f"{w}x{h}" for w, h in _GEN_FRAME_SIZES)
+        rate = video.get("grainRate") or {}
+        num = _gen_int(rate, "numerator")
+        den = _gen_int(rate, "denominator")
+        if (num, den) not in _GEN_GRAIN_RATES:
+            return "grain rate must be one of " + ", ".join(
+                f"{n}/{d}" for n, d in _GEN_GRAIN_RATES)
+        if video["pattern"] in _GEN_ANIMATED and width * height > _GEN_ANIMATED_MAX_PIXELS:
+            return (f"the {video['pattern']} pattern is animated and stalls the test "
+                    f"source above 1296x720")
+        overlay = video.get("overlayText") or ""
+        if len(overlay) > _GEN_MAX_OVERLAY or not all(0x20 <= ord(c) < 0x7f for c in overlay):
+            return f"overlay text must be at most {_GEN_MAX_OVERLAY} printable ASCII characters"
+
+    if audio_on:
+        if _gen_int(audio, "sampleRate") not in _GEN_SAMPLE_RATES:
+            return "sample rate must be one of " + ", ".join(
+                str(r) for r in _GEN_SAMPLE_RATES)
+        channels = _gen_int(audio, "channelCount")
+        if channels is None or not 1 <= channels <= _GEN_MAX_CHANNELS:
+            return f"channel count must be between 1 and {_GEN_MAX_CHANNELS}"
+    return None
+
+
+def _gen_claim(name, req):
+    """The claim to POST. Deliberately shaped like the blocks
+    charts/qutil/templates/claims-writers.yaml renders, so the two can be read
+    side by side -- spec.parameters is validated by nothing, and a mistyped key
+    is accepted in silence."""
+    video = req.get("video") or {}
+    audio = req.get("audio") or {}
+    flow = {"group_hint": name}
+
+    if video.get("enabled"):
+        rate = video.get("grainRate") or {}
+        flow["video_output"] = {
+            "enabled": True,
+            "id": (video.get("id") or "").lower(),
+            "flow_pattern": video["pattern"],
+            "frame_width": video["frameWidth"],
+            "frame_height": video["frameHeight"],
+            "grain_rate": {"numerator": rate["numerator"], "denominator": rate["denominator"]},
+        }
+        if video.get("overlayText"):
+            flow["video_output"]["overlay_text"] = video["overlayText"]
+    else:
+        # Written out rather than omitted: the class defaults video on, with an id
+        # of its own, so an audio-only claim that leaves this out books a second
+        # writer onto that shared id.
+        flow["video_output"] = {"enabled": False}
+
+    if audio.get("enabled"):
+        flow["audio_output"] = {
+            "enabled": True,
+            "id": (audio.get("id") or "").lower(),
+            "sample_rate": audio["sampleRate"],
+            "channel_count": audio["channelCount"],
+        }
+
+    parameters = {"flow": flow}
+    # The class envelope is sized for 1080p50, which reserves several times what a
+    # test pattern at these sizes needs.
+    if GEN_RESOURCES:
+        parameters["resources"] = GEN_RESOURCES
+
+    spec = {
+        "className": GEN_CLASS,
+        # Nothing re-applies a claim this page created, so there is no drift to
+        # reprovision on -- and with it on, an edit would restart a writer while
+        # something is reading its grains.
+        "lifecycle": {"reprovisionOnDrift": False},
+        "booking": {"jobRef": GEN_JOB_REF},
+        "parameters": parameters,
+    }
+    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
+    if seconds:
+        end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        spec["booking"]["window"] = {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    return {
+        "apiVersion": "dmf.qvest-digital.com/v1alpha1",
+        "kind": "MediaFunctionClaim",
+        "metadata": {
+            "name": name,
+            "namespace": CLAIM_NS,
+            # The chart's claims carry managed-by: Helm from qutil.labels, so
+            # they can never match this selector. Reusing that helper here would
+            # make a page claim look chart-owned and hand it to the delete path.
+            "labels": {_GEN_LABEL_MANAGED: GEN_MANAGER, _GEN_LABEL_COMPONENT: _GEN_COMPONENT},
+        },
+        "spec": spec,
+    }
+    # No ownerReferences: the claim lives in the production namespace and this
+    # Deployment does not, and the collector treats an owner in another namespace
+    # as gone -- which would delete every generator behind our back.
+
+
+def _is_generator(claim):
+    labels = (claim.get("metadata", {}) or {}).get("labels") or {}
+    return (labels.get(_GEN_LABEL_MANAGED) == GEN_MANAGER
+            and labels.get(_GEN_LABEL_COMPONENT) == _GEN_COMPONENT)
+
+
+def _gen_row(claim):
+    meta = claim.get("metadata", {}) or {}
+    status = claim.get("status", {}) or {}
+    handle = status.get("handle") or {}
+    flow = ((claim.get("spec") or {}).get("parameters") or {}).get("flow") or {}
+    video = flow.get("video_output") or {}
+    audio = flow.get("audio_output") or {}
+    reachable = _cond(claim, "Reachable")
+
+    def rate(block):
+        gr = block.get("grain_rate") or {}
+        num, den = gr.get("numerator"), gr.get("denominator")
+        return f"{num}/{den}" if num and den else None
+
+    return {
+        "name": meta.get("name"),
+        "namespace": meta.get("namespace"),
+        "className": (claim.get("spec") or {}).get("className"),
+        "phase": status.get("phase"),
+        "ready": handle.get("ready"),
+        # A claim being deleted keeps answering GETs until its finalizers run.
+        "deleting": bool(meta.get("deletionTimestamp")),
+        "reachable": {"status": reachable.get("status"), "reason": reachable.get("reason"),
+                      "message": reachable.get("message")} if reachable else None,
+        "expiresAt": ((claim.get("spec") or {}).get("booking") or {})
+                     .get("window", {}).get("end"),
+        "created": meta.get("creationTimestamp"),
+        "ageSeconds": _age_secs(meta.get("creationTimestamp")),
+        "groupHint": flow.get("group_hint"),
+        "video": {"id": video.get("id"), "pattern": video.get("flow_pattern"),
+                  "overlayText": video.get("overlay_text"),
+                  "frameWidth": video.get("frame_width"),
+                  "frameHeight": video.get("frame_height"),
+                  "grainRate": rate(video)} if video.get("enabled") else None,
+        "audio": {"id": audio.get("id"), "sampleRate": audio.get("sample_rate"),
+                  "channelCount": audio.get("channel_count")} if audio.get("enabled") else None,
+    }
+
+
+def _gen_list():
+    """Only the claims this page created. A label selector rather than a filter in
+    here, so the chart's claims are never in this process's hands at all."""
+    selector = urllib.parse.quote(
+        f"{_GEN_LABEL_MANAGED}={GEN_MANAGER},{_GEN_LABEL_COMPONENT}={_GEN_COMPONENT}",
+        safe="=,")
+    res = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims"
+                   f"?labelSelector={selector}")
+    if "_error" in res:
+        return None, res["_error"]
+    rows = [_gen_row(c) for c in res.get("items", []) or []]
+    # Newest first, so a just-booked generator is at the top of the list it
+    # appears in.
+    rows.sort(key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
+    return rows, None
+
+
+def generators():
+    rows, err = _gen_list() if GEN_ENABLED else ([], None)
+    return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
+            "max": GEN_MAX, "ttls": [t for t in _GEN_TTLS],
+            "patterns": list(_GEN_PATTERNS), "animated": list(_GEN_ANIMATED),
+            "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
+            "grainRates": [{"numerator": n, "denominator": d} for n, d in _GEN_GRAIN_RATES],
+            "sampleRates": list(_GEN_SAMPLE_RATES),
+            "generators": rows or [], "error": err}
+
+
+def generator_flow_ids():
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
+    video_id, audio_id = _gen_new_ids(used)
+    return 200, {"videoFlowId": video_id, "audioFlowId": audio_id}
+
+
+def generator_create(req):
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    bad = _validate_generator(req)
+    if bad:
+        return 400, {"error": bad}
+
+    rows, err = _gen_list()
+    if err:
+        return 503, {"error": f"cannot list generators in {CLAIM_NS}: {err}"}
+    if len(rows) >= GEN_MAX:
+        return 409, {"error": f"at most {GEN_MAX} generators at once; delete one first"}
+
+    # Fail closed: booking a writer whose id might already be written is the one
+    # mistake here that destroys somebody else's grains.
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
+    for block in (req.get("video") or {}, req.get("audio") or {}):
+        if not block.get("enabled"):
+            continue
+        flow_id = (block.get("id") or "").lower()
+        if flow_id in used:
+            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
+
+    label = req.get("label") or ""
+    pattern = (req.get("video") or {}).get("pattern") or ""
+    for attempt in (1, 2):
+        name = _gen_name(label, pattern)
+        if not _GEN_NAME_RE.match(name) or len(name) > 63:
+            return 400, {"error": "that label does not make a usable claim name"}
+        code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
+                             "POST", _gen_claim(name, req))
+        if code in (200, 201):
+            return 201, _gen_row(res)
+        # A fresh suffix is the whole fix for a name that is taken; anything else
+        # is the operator's to see.
+        if res.get("reason") != "AlreadyExists" or attempt == 2:
+            if code == 403:
+                return 403, {"error": f"not allowed to create claims in {CLAIM_NS}"}
+            return code, {"error": res.get("error") or "claim create failed"}
+    return 409, {"error": "could not find a free claim name"}
+
+
+def generator_delete(name):
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    if not name or not _GEN_NAME_RE.match(name) or not name.startswith(GEN_PREFIX):
+        return 400, {"error": "not a generator name"}
+
+    # Read before deleting: a label selector bounds a list, it does not bound a
+    # delete by name. This is what keeps writer-mxl-1 and mediamtx out of reach.
+    claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}")
+    if "_error" in claim:
+        return 404, {"error": f"no generator named {name}"}
+    if not _is_generator(claim):
+        return 403, {"error": f"{name} was not booked from this page"}
+
+    code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}",
+                         "DELETE")
+    if code not in (200, 202):
+        return code, {"error": res.get("error") or "claim delete failed"}
+
+    # A mediamtx path left pointing at a flow that is going away retries the open
+    # every 5s for as long as the server lives.
+    for flow_id in _claim_flow_ids(claim):
+        with _holders_lock:
+            _holders.pop(flow_id, None)
+        for path in _audio_preview_paths(flow_id):
+            _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
+        _mtx(f"/v3/config/paths/delete/preview-{flow_id}", "DELETE")
+    return 200, {"deleted": name}
+
+
 class H(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         body = json.dumps(obj).encode()
@@ -1196,6 +1689,25 @@ class H(BaseHTTPRequestHandler):
         channels = query.get("channels", [""])[0]
         return uuid, owner, channels
 
+    def _json_body(self):
+        """The request's JSON object, or None.
+
+        The first body this handler has ever read: the preview endpoints carry
+        their input in the query string, which a form of a dozen fields cannot.
+        Bounded, because an unbounded read is a way to spend the pod's memory.
+        """
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        if length <= 0 or length > _GEN_MAX_BODY:
+            return None
+        try:
+            obj = json.loads(self.rfile.read(length).decode())
+        except Exception:
+            return None
+        return obj if isinstance(obj, dict) else None
+
     def log_message(self, *a):
         pass
 
@@ -1208,6 +1720,18 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/operator-flows"):
             try:
                 self._send(200, operator_flows())
+            except Exception as e:
+                self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/generators/flow-ids"):
+            # Before the collection branch: the collection prefix would swallow it.
+            try:
+                code, res = generator_flow_ids()
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
+        elif self.path.startswith("/api/generators"):
+            try:
+                self._send(200, generators())
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/anc/"):
@@ -1244,9 +1768,28 @@ class H(BaseHTTPRequestHandler):
             uuid, owner, _ = self._preview_args()
             code, res = preview_del(uuid, owner)
             return self._send(code, res)
+        if self.path.startswith("/api/generators/"):
+            name = urllib.parse.unquote(
+                urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+            try:
+                code, res = generator_delete(name)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/generators":
+            # Only the collection: a POST to a named generator is not an edit,
+            # and a claim's parameters are consumed at provision time anyway.
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+            try:
+                code, res = generator_create(body)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
         if self.path.startswith("/api/preview/"):
             uuid, owner, channels = self._preview_args()
             try:

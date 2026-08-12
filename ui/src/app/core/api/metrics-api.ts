@@ -3,7 +3,11 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
   AncGrain,
+  FlowIds,
   FlowsResponse,
+  Generator,
+  GeneratorRequest,
+  GeneratorsResponse,
   OperatorFlowsResponse,
   PreviewSession,
   PreviewStatus,
@@ -58,6 +62,35 @@ export class MetricsApi {
     owner?: string,
   ): Observable<PreviewSession> {
     return this.startPreview(uuid, owner, channels);
+  }
+
+  /**
+   * The generators booked from the UI, plus what the server will accept: the
+   * pattern, frame size, grain rate and expiry lists come from there so the form
+   * cannot offer a value the aggregator would refuse.
+   */
+  generators(): Observable<GeneratorsResponse> {
+    return this.http.get<GeneratorsResponse>('/api/generators');
+  }
+
+  /**
+   * Two flow ids nothing holds. Server-side because uniqueness can only be
+   * judged against the cluster's index, and because crypto.randomUUID is
+   * undefined outside a secure context, which this demo often is not.
+   */
+  newFlowIds(): Observable<FlowIds> {
+    return this.http.get<FlowIds>('/api/generators/flow-ids');
+  }
+
+  /** Book a writer. The response is the created generator, so the list does not
+   *  have to wait for the next poll. */
+  createGenerator(request: GeneratorRequest): Observable<Generator> {
+    return this.http.post<Generator>('/api/generators', request);
+  }
+
+  /** Release one. The aggregator refuses any name it did not book. */
+  deleteGenerator(name: string): Observable<unknown> {
+    return this.http.delete(`/api/generators/${encodeURIComponent(name)}`);
   }
 
   /**
