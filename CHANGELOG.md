@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.25](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.24...v1.0.0-rc.25) (2026-08-12)
+
+
+### Features
+
+* **ui:** allow an animated pattern at any frame size ([#129](https://github.com/qvest-digital/dmf-app-qutil/issues/129)) ([d6bde89](https://github.com/qvest-digital/dmf-app-qutil/commit/d6bde8946ea8d75c5af2a8e709377eaf4d5c7d50))
+
 ## [1.0.0-rc.24](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.23...v1.0.0-rc.24) (2026-08-12)
 
 
