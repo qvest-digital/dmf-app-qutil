@@ -944,10 +944,12 @@ _GEN_MAX_BODY = 8192
 # videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
 # pod Ready and producing nothing, so the set is closed here.
 _GEN_PATTERNS = ("smpte", "ball", "gamut", "checkers-8", "snow", "zone-plate")
-# The class README: these regenerate every frame and stall the test source at
-# 1080p. A booking that wants one has to ask for a smaller frame.
+# These regenerate every pixel of every frame where a still pattern repeats one,
+# so they cost several times as much and the class README says the test source
+# stalls on them at 1080p. Reported rather than refused: what a frame size costs
+# depends on the node, and a booking that wants a moving picture at 1080p is the
+# operator's call. The page says so beside the pattern.
 _GEN_ANIMATED = ("ball", "snow", "zone-plate")
-_GEN_ANIMATED_MAX_PIXELS = 1296 * 720
 # Fixed sets rather than free numbers: v210 packs two pixels per group, so an odd
 # width fails the function chart's own render, and a rate the source cannot hold
 # is a writer that never reaches its grain rate.
@@ -1415,9 +1417,6 @@ def _validate_generator(req):
         if (num, den) not in _GEN_GRAIN_RATES:
             return "grain rate must be one of " + ", ".join(
                 f"{n}/{d}" for n, d in _GEN_GRAIN_RATES)
-        if video["pattern"] in _GEN_ANIMATED and width * height > _GEN_ANIMATED_MAX_PIXELS:
-            return (f"the {video['pattern']} pattern is animated and stalls the test "
-                    f"source above 1296x720")
         overlay = video.get("overlayText") or ""
         if len(overlay) > _GEN_MAX_OVERLAY or not all(0x20 <= ord(c) < 0x7f for c in overlay):
             return f"overlay text must be at most {_GEN_MAX_OVERLAY} printable ASCII characters"

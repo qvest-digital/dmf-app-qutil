@@ -240,7 +240,8 @@ spec:
             - name: GEN_MAX
               value: {{ .Values.generators.maxCount | quote }}
             # Stamped onto every page-booked claim: the class envelope is sized
-            # for 1080p50 and would reserve several times what these need.
+            # for 1080p50, and an animated pattern needs a limit a still one
+            # does not. See the generators.resources comment in values.yaml.
             - name: GEN_RESOURCES
               value: {{ toJson .Values.generators.resources | quote }}
             {{- end }}
