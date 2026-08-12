@@ -204,58 +204,53 @@ export interface OperatorFlowsResponse {
   flows: OperatorFlow[];
 }
 
-// ── GET /api/booking ────────────────────────────────────────────────────────
-
-export type BookingPhase = 'booked' | 'deploying' | 'on-air' | 'post-roll' | 'reclaimed';
-
-export interface BookingPod {
-  name: string;
-  phase?: string | null;
-  node?: string | null;
-  ageSeconds?: number | null;
-  deleting?: boolean;
-}
-
-export interface BookingInstance {
-  name: string;
-  type?: string | null;
-  instancePhase?: string | null;
-  jobRef?: string | null;
-  windowEnd?: string | null;
-  replicas?: number | null;
-  helmReady?: boolean;
-  helmMessage?: string | null;
-  /** Source count IS the template: 2 -> template-1, 3 -> template-2. */
-  sources?: string[];
-  readerFlow?: string | null;
-  /** What the reader is on right now, vs. readerFlow which is the config. */
-  liveReaderFlow?: string | null;
-  outFlow?: string | null;
-  pod?: BookingPod | null;
-  phase?: BookingPhase | null;
-}
-
-export interface StoryBeat {
-  at: string;
-  kind: 'deploy' | 'live' | 'teardown';
-  text: string;
-}
-
-export interface BookingResponse {
-  namespace: string;
-  instances: BookingInstance[];
-  events: { at: string; reason?: string; object?: string; kind?: string; message?: string }[];
-  story: StoryBeat[];
-  error?: string;
-}
-
 // ── /api/preview/<uuid> ─────────────────────────────────────────────────────
 
 export interface PreviewSession {
   path: string;
   hls: string;
   whep: string;
-  format: 'video' | 'audio';
+  format: 'video' | 'audio' | 'data';
+  /** Where to poll decoded grains. Data flows only: nothing plays them. */
+  anc?: string;
+  error?: string;
+}
+
+/** One RFC-8331 packet of an ANC grain, as the reader decodes it. */
+export interface AncElement {
+  line: number;
+  did: number;
+  sdid: number;
+  dataCount: number;
+  /** What the DID/SDID pair is registered as, or that it is not. */
+  description: string;
+  /** User data words, low 8 bits of each 10-bit word. */
+  udw: number[];
+  /**
+   * Whether every word's ANC parity bit matched its data byte. False means the
+   * words were read out of step with the packing, so the bytes are not the
+   * sender's -- worth saying rather than decoding anyway.
+   */
+  parityOk?: boolean;
+}
+
+/** The latest grain of an ANC data flow. */
+export interface AncGrain {
+  flow: string;
+  index?: number;
+  flags?: number;
+  grainSize?: number;
+  validSlices?: number;
+  totalSlices?: number;
+  rfc8331Length?: number;
+  /**
+   * ANC_Count as the grain header declares it, which the ST 2110-40 senders on
+   * this fabric leave at zero even while sending packets. `ancCount` is what the
+   * payload actually held, so the two disagreeing is worth showing.
+   */
+  declaredCount?: number;
+  ancCount?: number;
+  elements?: AncElement[];
   error?: string;
 }
 

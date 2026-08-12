@@ -38,28 +38,17 @@ mv-root {
 }
 /* Splitting one page into components inserts a custom element between every
    parent and child the CSS below was written against — and several of those
-   relationships are load-bearing. `.bk-log` only scrolls while it is the 1fr row
-   of `.bk-log-panel`'s grid; `.k`/`.v` only line up while they are direct
+   relationships are load-bearing. `.k`/`.v` only line up while they are direct
    children of the `.kv` grid; `main` only fills the viewport while it is a flex
    item of the shell. display:contents removes the wrapper from layout entirely,
    so each component's markup lands exactly where the original's did. */
 mv-multiviewer-page,
-mv-tx-page,
-mv-composite-page,
-mv-booking-page,
-mv-player-tile,
-mv-flow-card,
-mv-flow-detail,
 mv-gateway-grid,
 mv-operator-flow-list,
 mv-operator-flow-row,
 mv-operator-flow-detail,
-mv-booking-tile,
-mv-phase-band,
-mv-signal-chain,
-mv-state-block,
-mv-event-log,
-mv-flow-preview-modal,
+mv-flow-preview,
+mv-anc-grain,
 mv-audio-meters,
 mv-video-shell,
 mv-kv-row {
@@ -134,78 +123,25 @@ header {
   box-shadow: 0 0 0 3px rgba(240, 80, 18, 0.3);
 }
 
+/* The metrics panel alone, until a preview is open: then it shares the width
+   with the preview column. Wide enough for the panel's own two-column stats
+   either way. */
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(460px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 22px;
   padding: 24px 28px;
+  max-width: 1180px;
+}
+main.previewing {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  max-width: none;
 }
 @media (max-width: 1100px) {
-  main {
-    grid-template-columns: 1fr;
+  main.previewing {
+    grid-template-columns: minmax(0, 1fr);
   }
-}
-
-.stage-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-}
-/* Four per-flow players in a 2x2 grid. mediamtx encodes each flow to its
-   own rendition from the RDMA mirror (WebRTC first, HLS fallback — see
-   PlayerTile); the badge above each card names the producing node. */
-.players {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  min-width: 0;
-  align-items: start;
-}
-.playercard {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.pc-video {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  background: #000;
-  border-radius: var(--qv-radius);
-  display: block;
-}
-.pc-badge {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  background: var(--qv-lime);
-  color: var(--qv-ink);
-  border-radius: 12px;
-  padding: 9px 14px;
-}
-.pc-badge.down {
-  background: var(--qv-orange);
-  color: #fff;
-}
-.pc-badge .pc-mxl {
-  font-weight: 800;
-  font-size: 16px;
-  letter-spacing: -0.01em;
-}
-.pc-badge .pc-origin {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.65;
-}
-.pc-badge .pc-node {
-  font-weight: 800;
-  font-size: 16px;
 }
 
 .panel {
@@ -276,13 +212,6 @@ main {
 .flow .name {
   font-weight: 800;
   font-size: 15px;
-}
-.flow .name .pat {
-  font-weight: 500;
-  font-size: 11px;
-  opacity: 0.6;
-  margin-left: 6px;
-  text-transform: uppercase;
 }
 .flow .quick {
   display: flex;
@@ -355,26 +284,23 @@ main {
   white-space: nowrap;
 }
 
-.pv {
-  position: fixed;
-  inset: 0;
-  background: rgba(11, 9, 13, 0.66);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  padding: 24px;
-}
-.pv.show {
+/* Open previews, newest last, beside the metrics panel. They scroll with the
+   page rather than inside the column: a card is tall, and a column that scrolled
+   on its own would hide the ones below the fold behind a scrollbar nobody looks
+   for. */
+.previews {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  align-content: start;
 }
 .pv-card {
   background: var(--qv-ink);
   color: #fff;
   border-radius: var(--qv-radius);
   padding: 16px;
-  width: min(880px, 92vw);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  min-width: 0;
 }
 .pv-head {
   display: flex;
@@ -433,6 +359,105 @@ main {
   background: var(--qv-lime);
   color: var(--qv-ink);
 }
+/* The timecode as a counter: tabular figures so the digits do not shift as they
+   count, which is the whole point of watching it. */
+.anc-tc {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-bottom: 10px;
+}
+.anc-tc-v {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--qv-lime);
+  line-height: 1.1;
+}
+.anc-tc-k {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+.anc-flag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(240, 80, 18, 0.16);
+  color: var(--qv-orange);
+}
+
+/* ANC preview: a decoded grain, not a picture. Monospace because every field is
+   a number the audience is meant to compare between polls. */
+.anc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  padding-bottom: 8px;
+}
+.anc-k {
+  opacity: 0.55;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.anc-v {
+  font-weight: 700;
+  margin-right: 6px;
+}
+.anc-note,
+.anc-error {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 4px 0;
+}
+.anc-error {
+  color: var(--qv-orange);
+  opacity: 1;
+}
+.anc-pkt {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+.anc-pkt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.anc-did {
+  font-weight: 800;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--qv-lime);
+}
+.anc-desc {
+  font-size: 12px;
+  font-weight: 600;
+}
+.anc-pkt-meta {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+.anc-udw {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  opacity: 0.85;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
 .pv-state {
   font-size: 12px;
   opacity: 0.7;
@@ -454,14 +479,6 @@ main {
 }
 .btn:hover {
   border-color: #fff;
-}
-.btn.kill {
-  border-color: var(--qv-orange);
-  color: var(--qv-orange);
-}
-.btn.kill:hover {
-  background: var(--qv-orange);
-  color: #fff;
 }
 .btn:disabled {
   opacity: 0.5;
@@ -578,254 +595,6 @@ footer {
   border-top: 1px solid #eee;
   font-size: 12px;
   opacity: 0.55;
-}
-
-/* Tabs. They are <a routerLink> now rather than <button>, so the anchor needs
-   the button's text/box treatment reset onto it. */
-.tabs {
-  display: flex;
-  gap: 8px;
-  padding: 14px 28px 0;
-}
-.tab {
-  border: none;
-  background: transparent;
-  font-family: inherit;
-  cursor: pointer;
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--qv-ink);
-  opacity: 0.5;
-  padding: 8px 18px;
-  border-radius: var(--qv-radius-pill);
-  text-decoration: none;
-  display: inline-block;
-}
-.tab:hover {
-  opacity: 0.85;
-}
-.tab.active {
-  opacity: 1;
-  background: var(--qv-ink);
-  color: #fff;
-}
-
-/* Single-player pages: the SRT ingest and the composite mosaic. */
-.tx-main {
-  padding: 20px 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 1180px;
-}
-.tx-video {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: var(--qv-radius);
-  display: block;
-}
-
-/* Booking showcase. Two instances on the left, the schedule's effect on the
-   cluster on the right — and both instances must fit one screen without
-   scrolling, because the whole point is watching one hand over to the other. */
-.bk-main {
-  padding: 14px 24px 18px;
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1.5fr) minmax(330px, 1fr);
-  height: calc(100vh - 132px);
-  min-height: 0;
-}
-@media (max-width: 1100px) {
-  .bk-main {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-}
-.bk-left {
-  display: grid;
-  grid-template-rows: 1fr 1fr;
-  gap: 12px;
-  min-height: 0;
-  min-width: 0;
-}
-.bk-right {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 12px;
-  min-height: 0;
-  min-width: 0;
-}
-.bk-tile {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 6px;
-  min-height: 0;
-  opacity: 0.5;
-  transition: opacity 0.3s;
-}
-.bk-tile.on {
-  opacity: 1;
-}
-.bk-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.bk-title {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.bk-sub {
-  font-size: 11.5px;
-  opacity: 0.55;
-}
-.bk-badge {
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 0.3em 0.8em;
-  border-radius: var(--qv-radius-pill);
-  background: #ddd;
-  color: #555;
-  white-space: nowrap;
-}
-.bk-badge.live {
-  background: var(--qv-lime);
-  color: var(--qv-ink);
-}
-.bk-badge.pending {
-  background: var(--qv-orange);
-  color: #fff;
-}
-/* The video shrinks with the row instead of forcing an aspect ratio on it. */
-.bk-video {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-  border-radius: var(--qv-radius);
-  display: block;
-  object-fit: contain;
-}
-.bk-chips {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.bk-chip {
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 0.28em 0.7em;
-  border-radius: var(--qv-radius-pill);
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  color: #666;
-}
-.bk-chip.active {
-  border-color: var(--qv-orange);
-  color: var(--qv-orange);
-}
-
-/* Phase band: what the schedule is doing, in its own vocabulary. */
-.bk-phases {
-  display: flex;
-  gap: 4px;
-}
-.bk-phase {
-  flex: 1;
-  text-align: center;
-  font-size: 9.5px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.5em 0.2em;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.4);
-}
-.bk-phase.done {
-  color: rgba(255, 255, 255, 0.75);
-}
-.bk-phase.now {
-  background: var(--qv-orange);
-  color: #fff;
-}
-/* Signal path, so a stalled source is visible where it stalls. */
-.bk-chain {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-size: 10.5px;
-}
-.bk-node {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  opacity: 0.8;
-}
-.bk-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #888;
-}
-.bk-dot.ok {
-  background: var(--qv-lime);
-}
-.bk-dot.warn {
-  background: var(--qv-orange);
-}
-.bk-arrow {
-  opacity: 0.35;
-}
-.bk-log-panel {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto 1fr;
-}
-.bk-log {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  font-size: 12px;
-  overflow-y: auto;
-  min-height: 0;
-}
-.bk-log li {
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  display: grid;
-  grid-template-columns: 58px 14px 1fr;
-  gap: 8px;
-  align-items: baseline;
-}
-.bk-log .t {
-  opacity: 0.5;
-  font-variant-numeric: tabular-nums;
-}
-.bk-log .i {
-  font-size: 11px;
-}
-.bk-state {
-  font-size: 12px;
-  line-height: 1.65;
-}
-.bk-state .kvline {
-  display: grid;
-  grid-template-columns: 104px 1fr;
-  gap: 3px 10px;
-}
-/* Was an inline style on the separator between instance blocks. */
-.bk-state hr {
-  border: none;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
-  margin: 6px 0;
 }
 
 /* Loading overlay: shown over each video until it starts playing (WebRTC ICE

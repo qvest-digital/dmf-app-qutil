@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { FlowPreviewModal } from './features/preview/flow-preview-modal';
+import { RouterOutlet } from '@angular/router';
 import { QvestLogo } from './shared/qvest-logo';
 
 /** Quarter-second ticks, so the clock reads as live rather than as a stamp. */
@@ -15,16 +14,11 @@ function wallClock(): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/**
- * The shell: brand header, the tab bar, and the preview overlay.
- *
- * The overlay lives here rather than on the multiviewer page so a preview keeps
- * playing when the audience switches tabs, as it did on the page this replaces.
- */
+/** The shell: brand header, clock, and the routed page. */
 @Component({
   selector: 'mv-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, QvestLogo, FlowPreviewModal],
+  imports: [RouterOutlet, QvestLogo],
   templateUrl: './app.html',
 })
 export class App {

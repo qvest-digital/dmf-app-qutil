@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
-  BookingResponse,
+  AncGrain,
   FlowsResponse,
   OperatorFlowsResponse,
   PreviewSession,
@@ -18,7 +18,7 @@ import {
 export class MetricsApi {
   private readonly http = inject(HttpClient);
 
-  /** Per-flow writer + compositor + gateway metrics for the four demo tiles. */
+  /** Per-flow writer + compositor + gateway metrics for the four demo flows. */
   flows(): Observable<FlowsResponse> {
     return this.http.get<FlowsResponse>('/api/flows');
   }
@@ -28,16 +28,12 @@ export class MetricsApi {
     return this.http.get<OperatorFlowsResponse>('/api/operator-flows');
   }
 
-  booking(): Observable<BookingResponse> {
-    return this.http.get<BookingResponse>('/api/booking');
-  }
-
   /**
    * Provision a mediamtx path for this flow (pull for video, push for audio).
    *
-   * `owner` names who is asking. A tile and the operator overlay can play the
-   * same flow at once and both resolve to the same path, so the aggregator
-   * counts holders and only tears the path down when the last one releases it.
+   * `owner` names who is asking. Two viewers can play the same flow at once and
+   * both resolve to the same path, so the aggregator counts holders and only
+   * tears the path down when the last one releases it.
    *
    * `channels` is the 1-based source pair an audio preview should publish; a
    * browser gets stereo however wide the flow is. Repeating the call with a
@@ -65,6 +61,14 @@ export class MetricsApi {
   }
 
   /**
+   * The latest decoded ANC grain of a data flow. Polled: there is no stream to
+   * subscribe to, only whatever the current grain carries.
+   */
+  ancGrain(uuid: string): Observable<AncGrain> {
+    return this.http.get<AncGrain>(`/api/anc/${encodeURIComponent(uuid)}`);
+  }
+
+  /**
    * Whether an audio preview is actually producing yet. /start only spawns the
    * reader; opening the flow can take seconds or fail outright.
    */
@@ -77,9 +81,7 @@ export class MetricsApi {
    * other owner is still holding it.
    */
   stopPreview(uuid: string, owner?: string): Observable<unknown> {
-    return this.http.delete(
-      `/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`,
-    );
+    return this.http.delete(`/api/preview/${encodeURIComponent(uuid)}${this.ownerQuery(owner)}`);
   }
 
   private ownerQuery(owner?: string): string {
@@ -92,10 +94,5 @@ export class MetricsApi {
     if (channels?.length) params.set('channels', channels.join(','));
     const query = params.toString();
     return query ? `?${query}` : '';
-  }
-
-  /** Delete flow n's writer pod, so the audience can watch Kubernetes recover it. */
-  kill(n: number): Observable<unknown> {
-    return this.http.post(`/api/kill/${n}`, null);
   }
 }

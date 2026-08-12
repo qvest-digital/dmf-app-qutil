@@ -1,19 +1,21 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DOCUMENT,
   DestroyRef,
   effect,
   inject,
+  input,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
-import { PreviewSession, PreviewStatus } from '../../core/api/models';
+import { AncGrain, PreviewSession, PreviewStatus } from '../../core/api/models';
 import { HlsHandle, hlsPlay } from '../../core/player/hls-player';
 import { PlayerRegistry } from '../../core/player/player-registry';
 import { WhepHandle, whep } from '../../core/player/whep';
 import { VideoShell } from '../../shared/video-shell';
+import { AncGrainView } from './anc-grain';
 import { AudioMeters } from './audio-meters';
 import { PreviewController, PreviewRequest } from './preview-controller';
 
@@ -25,19 +27,28 @@ const AUDIO_POLL_MS = 1000;
 /**
  * How often the levels refresh once audio is playing. The meters ease towards
  * each value, so this bounds how soon a bar starts reacting rather than how
- * smoothly it moves; the audio preview answers /status from memory, and only
- * one overlay polls it at a time.
+ * smoothly it moves; the audio preview answers /status from memory, and one card
+ * polls only the flow it plays.
  */
 const LEVEL_POLL_MS = 100;
-/** The preview tolerates more rebuffering than a tile before it gives up. */
+/** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
 const HLS_RETRY_MS = 4000;
+/**
+ * How often a data preview asks for the current grain. Fast enough that a
+ * timecode reads as counting rather than jumping, and each poll is one decoded
+ * grain rather than a stream.
+ */
+const ANC_POLL_MS = 500;
+/** Names this card as a holder of the path, so the aggregator can count holders. */
+const OWNER = 'preview';
 
 /**
- * Live preview of any flow in the operator's inventory.
+ * Live preview of one flow in the operator's inventory, as a card in the preview
+ * column beside the metrics panel.
  *
  * Video: demo-metrics adds a mediamtx path that PULLS the flow (mxl://).
  * Audio: mediamtx's mxlSource refuses audio, so the audio-preview pod reads the
- * flow and PUSHES Opus into a publisher-mode path instead. Either way the overlay
+ * flow and PUSHES Opus into a publisher-mode path instead. Either way the card
  * plays a normal mediamtx path, and DELETE tears it down.
  *
  * What arrives is a stereo pair of the flow's channels, so a wide flow is heard
@@ -45,21 +56,26 @@ const HLS_RETRY_MS = 4000;
  * from the polled status rather than from the decoded stream, which only ever
  * carries the pair being listened to.
  *
- * The component is always mounted and only toggles `.show`, because the <video>
- * it owns must be stable: createMediaElementSource throws if the meters are ever
- * rebuilt against a fresh element.
+ * One card owns one <video> for as long as it is open, and closing destroys
+ * both: createMediaElementSource throws if the meters are ever rebuilt against a
+ * fresh element, so an element must never be handed to a second preview.
+ *
+ * Data: ANC has no transport to a browser at all, so the card holds no player
+ * and polls decoded grains instead.
  */
 @Component({
-  selector: 'mv-flow-preview-modal',
+  selector: 'mv-flow-preview',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [VideoShell, AudioMeters],
+  imports: [VideoShell, AudioMeters, AncGrainView],
   template: `
-    <div class="pv" [class.show]="visible()" (click)="onBackdrop($event)">
-      <div class="pv-card">
-        <div class="pv-head">
-          <span>{{ title() }}</span>
-          <button class="btn" type="button" (click)="close()">✕</button>
-        </div>
+    <div class="pv-card">
+      <div class="pv-head">
+        <span>{{ title() }}</span>
+        <button class="btn" type="button" (click)="close()">✕</button>
+      </div>
+      @if (isData()) {
+        <mv-anc-grain [grain]="anc()" />
+      } @else {
         <!-- Audio flows have nothing to show, so the meters take the video's place
              and the element collapses to just its transport controls (volume and
              mute still matter). -->
@@ -84,24 +100,28 @@ const HLS_RETRY_MS = 4000;
           [controls]="true"
           [muted]="false"
         />
-        <div class="pv-state">{{ state() }}</div>
-      </div>
+      }
+      <div class="pv-state">{{ state() }}</div>
     </div>
   `,
 })
-export class FlowPreviewModal {
+export class FlowPreview {
+  readonly request = input.required<PreviewRequest>();
+
   private readonly api = inject(MetricsApi);
   private readonly registry = inject(PlayerRegistry);
   private readonly controller = inject(PreviewController);
-  private readonly doc = inject(DOCUMENT);
 
-  private readonly shell = viewChild.required(VideoShell);
-  private readonly meters = viewChild.required(AudioMeters);
+  // Optional: a data card renders neither, because ANC has nothing to play.
+  private readonly shell = viewChild(VideoShell);
+  private readonly meters = viewChild(AudioMeters);
 
-  protected readonly visible = signal(false);
   protected readonly title = signal('Preview');
   protected readonly state = signal('');
   protected readonly isAudio = signal(false);
+  protected readonly isData = signal(false);
+  /** The grain the last poll returned, or null before the first one lands. */
+  protected readonly anc = signal<AncGrain | null>(null);
   /** Selectable channel pairs, empty for video and for a flow no wider than one pair. */
   protected readonly pairs = signal<number[][]>([]);
   /** The 1-based pair on air, as reported rather than as requested. */
@@ -110,43 +130,36 @@ export class FlowPreviewModal {
   protected readonly levels = signal<number[]>([]);
 
   /**
-   * The flow whose preview is current. Every async continuation checks it before
-   * touching the player, so a preview closed or replaced mid-handshake cannot
-   * take over the overlay a moment later.
+   * The flow this card provisioned a path for. Every async continuation checks it
+   * before touching the player, so a card closed mid-handshake cannot start
+   * playing a moment later.
    */
   private sessionId: string | null = null;
   private hls: HlsHandle | null = null;
   private pc: WhepHandle | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private levelTimer: ReturnType<typeof setTimeout> | undefined;
+  private ancTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
-    const onKeydown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && this.visible()) this.close();
-    };
-    this.doc.addEventListener('keydown', onKeydown);
     inject(DestroyRef).onDestroy(() => {
-      this.doc.removeEventListener('keydown', onKeydown);
-      // Same guarded path as closing: an overlay that never opened has no player
-      // to stop and no mediamtx path to release.
-      this.doClose();
+      this.teardown();
+      this.releasePath();
     });
 
+    // Runs once per card: the request is fixed for as long as the card is open.
+    // untracked keeps the signals start() writes out of the dependency set.
     effect(() => {
-      const request = this.controller.request();
-      if (request) this.open(request);
-      else this.doClose();
+      const request = this.request();
+      untracked(() => this.start(request));
     });
   }
 
   protected close(): void {
-    // Routed through the controller so the request signal and the overlay cannot
-    // disagree about whether a preview is open.
-    this.controller.close();
-  }
-
-  protected onBackdrop(event: MouseEvent): void {
-    if (event.target === event.currentTarget) this.close();
+    // Routed through the controller so the column and the cards it renders cannot
+    // disagree about what is open; the card's own teardown follows from being
+    // destroyed.
+    this.controller.close(this.request().id);
   }
 
   protected pairLabel(pair: number[]): string {
@@ -167,7 +180,7 @@ export class FlowPreviewModal {
     const id = this.sessionId;
     if (!id) return;
     this.selected.set(pair);
-    this.api.selectPreviewChannels(id, pair, 'overlay').subscribe({
+    this.api.selectPreviewChannels(id, pair, OWNER).subscribe({
       error: (err: { error?: { error?: string } }) => {
         if (this.sessionId !== id) return;
         this.state.set(`channel switch failed: ${err.error?.error ?? ''}`);
@@ -175,21 +188,23 @@ export class FlowPreviewModal {
     });
   }
 
-  private open(request: PreviewRequest): void {
+  private start(request: PreviewRequest): void {
     const id = request.id;
     this.sessionId = id;
-    this.visible.set(true);
     this.title.set(request.label || id);
     this.state.set('starting preview…');
     this.isAudio.set(request.format === 'audio');
-    this.pairs.set(request.format === 'audio' ? FlowPreviewModal.pairsOf(request.channels) : []);
-    this.selected.set([]);
-    this.levels.set([]);
-    this.teardown();
+    this.isData.set(request.format === 'data');
+    this.pairs.set(request.format === 'audio' ? FlowPreview.pairsOf(request.channels) : []);
 
-    this.api.startPreview(id).subscribe({
+    this.api.startPreview(id, OWNER).subscribe({
       next: (session) => {
         if (this.sessionId !== id) return;
+        if (session.format === 'data') {
+          this.state.set('');
+          this.pollAnc(id);
+          return;
+        }
         if (session.format === 'audio') {
           this.awaitAudio(id, session, request.channels, AUDIO_TRIES);
           return;
@@ -280,55 +295,64 @@ export class FlowPreviewModal {
     });
   }
 
+  /**
+   * Keep asking for the current grain. A failed poll keeps the last grain on
+   * screen and says why: an ANC flow that stops being readable here is worth
+   * seeing as an error beside the last packets rather than as a blank card.
+   */
+  private pollAnc(id: string): void {
+    this.api.ancGrain(id).subscribe({
+      next: (grain) => {
+        if (this.sessionId !== id) return;
+        this.anc.set(grain);
+        this.ancTimer = setTimeout(() => this.pollAnc(id), ANC_POLL_MS);
+      },
+      error: (err: { error?: { error?: string } }) => {
+        if (this.sessionId !== id) return;
+        this.state.set(`grain read failed: ${err.error?.error ?? ''}`);
+        this.ancTimer = setTimeout(() => this.pollAnc(id), ANC_POLL_MS);
+      },
+    });
+  }
+
   private applyStatus(status: PreviewStatus): void {
     this.levels.set(status.channelPeakDb ?? []);
     // An audio-preview without the pair selection reports neither, and guessing
     // [1, 2] would light a button for something nobody chose.
     if (status.selected?.length) this.selected.set(status.selected);
     if (status.channels && this.pairs().length === 0) {
-      this.pairs.set(FlowPreviewModal.pairsOf(status.channels));
+      this.pairs.set(FlowPreview.pairsOf(status.channels));
     }
   }
 
   /**
    * WHEP first for audio — sub-second, and the meters get the raw stream — with
-   * HLS on failure, the same order the per-flow tiles use.
+   * HLS on failure.
    */
   private playAudio(session: PreviewSession, channels: number): void {
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     this.pc = whep(this.registry, session.path, video, {
       onFail: () => this.playHls(session.hls, true, channels),
       onStream: (stream) => {
         this.state.set('');
-        this.meters().start(stream, channels, video);
+        this.meters()?.start(stream, channels, video);
       },
     });
   }
 
   private playHls(src: string, isAudio: boolean, channels: number): void {
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     this.hls = hlsPlay(src, video, {
       retryMs: HLS_RETRY_MS,
       liveMaxLatencyDurationCount: null,
       onManifest: () => {
         this.state.set('');
-        if (isAudio) this.meters().start(null, channels, video);
+        if (isAudio) this.meters()?.start(null, channels, video);
       },
       onFatal: () => this.state.set('buffering…'),
     });
-  }
-
-  private doClose(): void {
-    // The effect's first run sees no request; there is nothing open to close, and
-    // the view children it would touch may not be resolved yet.
-    if (!this.visible() && !this.sessionId) return;
-    this.visible.set(false);
-    this.teardown();
-    this.isAudio.set(false);
-    this.pairs.set([]);
-    this.selected.set([]);
-    this.levels.set([]);
-    this.releasePath();
   }
 
   /** Stop playing, without touching the mediamtx path. */
@@ -341,12 +365,17 @@ export class FlowPreviewModal {
       clearTimeout(this.levelTimer);
       this.levelTimer = undefined;
     }
-    this.meters().stop();
+    if (this.ancTimer !== undefined) {
+      clearTimeout(this.ancTimer);
+      this.ancTimer = undefined;
+    }
+    this.meters()?.stop();
     this.hls?.stop();
     this.hls = null;
     this.pc?.stop();
     this.pc = null;
-    const video = this.shell().video;
+    const video = this.shell()?.video;
+    if (!video) return;
     try {
       video.pause();
       video.srcObject = null;
@@ -357,12 +386,12 @@ export class FlowPreviewModal {
     }
   }
 
-  /** Drop the mediamtx path (and any audio publisher) the preview provisioned. */
+  /** Drop the mediamtx path (and any audio publisher) this card provisioned. */
   private releasePath(): void {
     const id = this.sessionId;
     this.sessionId = null;
     if (!id) return;
-    this.api.stopPreview(id).subscribe({
+    this.api.stopPreview(id, OWNER).subscribe({
       error: () => {
         // The path may already be gone; nothing to report to the audience.
       },

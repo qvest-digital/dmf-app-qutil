@@ -38,8 +38,9 @@ const DEFAULT_CHANNELS = 2;
             Details {{ open() ? '▴' : '▾' }}
           </button>
           <!-- Video is pulled by mediamtx, audio is pushed by the audio-preview
-               pod. Anything else (data/smpte291) has no route to a browser, so the
-               button says so instead of opening an overlay that never loads. -->
+               pod, and ANC data is read grain by grain. Anything else has no route
+               to a browser, so the button says so instead of opening a card that
+               never fills. -->
           @if (previewable()) {
             <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
           } @else {
@@ -79,8 +80,13 @@ export class OperatorFlowRow {
   protected readonly origin = computed(() => originState(this.flow().originFresh));
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
 
+  /**
+   * Video is pulled by mediamtx, audio is pushed by the audio-preview pod, and a
+   * data flow is read as decoded ANC packets. Anything else has no route to a
+   * browser at all.
+   */
   protected readonly previewable = computed(
-    () => this.format() === 'video' || this.format() === 'audio',
+    () => this.format() === 'video' || this.format() === 'audio' || this.format() === 'data',
   );
 
   protected readonly media = computed(() => {
@@ -102,7 +108,7 @@ export class OperatorFlowRow {
     this.preview$.open({
       id: f.id,
       label: f.label,
-      format: this.format() as 'video' | 'audio',
+      format: this.format() as 'video' | 'audio' | 'data',
       channels: f.detail?.media?.channels ?? DEFAULT_CHANNELS,
     });
   }

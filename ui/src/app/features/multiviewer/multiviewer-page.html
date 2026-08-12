@@ -1,12 +1,4 @@
-<main>
-  <div class="stage-wrap">
-    <div class="players">
-      @for (tile of tileStates(); track tile.n) {
-        <mv-player-tile [n]="tile.n" [node]="tile.node" [live]="tile.live" />
-      }
-    </div>
-  </div>
-
+<main [class.previewing]="previews().length > 0">
   <aside class="panel">
     <h2>RDMA delivery</h2>
     <div class="agg">
@@ -19,17 +11,11 @@
         <div class="v">{{ totals()?.fps | fmt }}</div>
       </div>
       <div class="stat">
-        <div class="k">Tiles live</div>
+        <div class="k">Flows live</div>
         <div class="v">
           {{ totals()?.live ?? '-' }}<small>/{{ totals()?.total ?? '-' }}</small>
         </div>
       </div>
-    </div>
-
-    <div class="flows">
-      @for (flow of flows(); track flow.n) {
-        <mv-flow-card [flow]="flow" />
-      }
     </div>
 
     <div class="gwbar">
@@ -39,4 +25,15 @@
 
     <mv-operator-flow-list [flows]="opFlows()" />
   </aside>
+
+  <!-- Only rendered while something is open, so the panel has the width to itself
+       otherwise. Each card is keyed by flow id: the column must not rebuild a
+       card, or its player and its mediamtx path would go with it. -->
+  @if (previews().length) {
+    <aside class="previews">
+      @for (preview of previews(); track preview.id) {
+        <mv-flow-preview [request]="preview" />
+      }
+    </aside>
+  }
 </main>

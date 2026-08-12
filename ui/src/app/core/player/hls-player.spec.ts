@@ -52,7 +52,7 @@ class FakeHls {
 
 vi.mock('hls.js', () => ({ default: FakeHls }));
 
-const { hlsPlay, hlsUrl } = await import('./hls-player');
+const { hlsPlay } = await import('./hls-player');
 
 function videoStub(): HTMLVideoElement {
   return {
@@ -79,7 +79,7 @@ describe('hlsPlay fatal error recovery', () => {
   });
 
   it('leaves a non-fatal error to hls.js', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry });
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR, false);
 
     expect(built[0].recoverCount).toBe(0);
@@ -91,7 +91,7 @@ describe('hlsPlay fatal error recovery', () => {
   // HLS session per attempt: the playlist is re-fetched, the MediaSource is not
   // reset. The media path has its own reset, and that is what has to run.
   it('resets the MediaSource on a fatal media error instead of reloading', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry });
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR);
 
     expect(built[0].recoverCount).toBe(1);
@@ -100,7 +100,7 @@ describe('hlsPlay fatal error recovery', () => {
   });
 
   it('does not reset again inside the retry window', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, retryMs: 5000 });
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR);
     vi.advanceTimersByTime(1000);
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR);
@@ -118,15 +118,12 @@ describe('hlsPlay fatal error recovery', () => {
   // not, because it takes effect only once a manifest has been parsed -- which
   // is the whole failure being recovered from.
   it('loads the source again on a fatal network error, after a delay', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, retryMs: 5000 });
     built[0].raise(FakeHls.ErrorTypes.NETWORK_ERROR);
 
     expect(built[0].sources).toEqual(['/hls/preview-a/index.m3u8']);
     vi.advanceTimersByTime(5000);
-    expect(built[0].sources).toEqual([
-      '/hls/preview-a/index.m3u8',
-      '/hls/preview-a/index.m3u8',
-    ]);
+    expect(built[0].sources).toEqual(['/hls/preview-a/index.m3u8', '/hls/preview-a/index.m3u8']);
     expect(built[0].startLoadCount).toBe(0);
     expect(built).toHaveLength(1);
   });
@@ -134,7 +131,7 @@ describe('hlsPlay fatal error recovery', () => {
   // The path appearing late is what the retry exists for, so recovery has to
   // keep working across repeated failures rather than give up after one.
   it('keeps re-requesting a manifest that is not served yet', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, retryMs: 5000 });
     for (let i = 0; i < 3; i++) {
       built[0].raise(FakeHls.ErrorTypes.NETWORK_ERROR);
       vi.advanceTimersByTime(5000);
@@ -143,7 +140,7 @@ describe('hlsPlay fatal error recovery', () => {
   });
 
   it('replaces the instance when the error type cannot be recovered', () => {
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, retryMs: 5000 });
     built[0].raise(FakeHls.ErrorTypes.MUX_ERROR);
 
     expect(built[0].destroyed).toBe(true);
@@ -155,7 +152,7 @@ describe('hlsPlay fatal error recovery', () => {
   // A hidden tab tears every player down. A recovery already scheduled must not
   // bring one back, or the tab decodes while it is not on screen.
   it('abandons a scheduled recovery once stopped', () => {
-    const handle = hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, retryMs: 5000 });
+    const handle = hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, retryMs: 5000 });
     built[0].raise(FakeHls.ErrorTypes.NETWORK_ERROR);
     handle.stop();
     vi.advanceTimersByTime(5000);
@@ -168,7 +165,7 @@ describe('hlsPlay fatal error recovery', () => {
 
   it('reports a fatal error once per occurrence', () => {
     let fatals = 0;
-    hlsPlay(hlsUrl('preview-a'), videoStub(), { registry, onFatal: () => fatals++ });
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry, onFatal: () => fatals++ });
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR, false);
     expect(fatals).toBe(0);
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR);

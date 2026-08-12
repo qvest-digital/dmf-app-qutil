@@ -42,10 +42,10 @@
     }
   }
 
-  # The multiviewer is a single-page app with a route per tab. Those paths are
-  # not files, so a reload or a shared link would 404 against the file_server;
-  # try_files hands anything that is not a real asset to index.html and lets
-  # the router resolve it.
+  # The multiviewer is a single-page app, and a route path is not a file: a
+  # reload or a shared link would 404 against the file_server. try_files hands
+  # anything that is not a real asset to index.html and lets the router
+  # resolve it.
   handle {
     root * /srv
     try_files {path} /index.html

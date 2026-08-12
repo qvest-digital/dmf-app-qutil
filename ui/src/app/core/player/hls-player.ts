@@ -8,8 +8,8 @@ export interface HlsHandle {
 export interface HlsOptions {
   /**
    * Scene registry to register with, so a route change or a hidden tab destroys
-   * this instance. The preview overlay passes nothing -- it owns its own
-   * teardown and must survive the operator-flows list refreshing underneath it.
+   * this instance. A preview card passes nothing -- it owns its own teardown
+   * and must survive the operator-flows list refreshing beside it.
    */
   registry?: PlayerRegistry;
   /** Playback has started. The audio preview starts its meters here. */
@@ -20,16 +20,17 @@ export interface HlsOptions {
   retryMs?: number;
   /**
    * Latency ceiling before hls.js seeks forward to live. `null` leaves it to
-   * hls.js, which is what the preview overlay wants -- it is a look at one flow,
-   * not a wall of tiles that have to stay in step.
+   * hls.js, which is what a preview card wants -- it is a look at one flow, not
+   * a wall of tiles that have to stay in step.
    */
   liveMaxLatencyDurationCount?: number | null;
 }
 
 /**
- * HLS playback of a mediamtx path, e.g. `mxl-1` -> /hls/mxl-1/index.m3u8.
+ * HLS playback of a mediamtx playlist, which Caddy exposes under
+ * `handle_path /hls/*` and the aggregator names in a preview session.
  *
- * Every tile ends up here wherever WHEP cannot complete ICE.
+ * A preview card ends up here wherever WHEP cannot complete ICE.
  */
 export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOptions = {}): HlsHandle {
   const {
@@ -192,9 +193,4 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
   }
 
   return { stop };
-}
-
-/** The mediamtx HLS playlist for a path, as Caddy exposes it (`handle_path /hls/*`). */
-export function hlsUrl(path: string): string {
-  return `/hls/${path}/index.m3u8`;
 }
