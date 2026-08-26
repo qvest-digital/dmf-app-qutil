@@ -44,3 +44,15 @@ app.kubernetes.io/part-of: qutil
 {{- define "qutil.aggregator.image" -}}
 {{- printf "%s:%s" .Values.aggregator.image.repository .Values.aggregator.image.tag -}}
 {{- end -}}
+
+{{/*
+The media server address a browser reads from.
+
+Used when there is one instance. With read replicas the upstreams come from
+the media server chart's headless Service instead, resolved by the proxy so it
+can hold a client to one pod; Caddy refuses a static upstream and a dynamic
+source together, so only one of the two is ever emitted.
+*/}}
+{{- define "qutil.mediamtxRead" -}}
+{{- printf "http://%s.%s" .Values.mediamtx.claimName (include "qutil.productionNamespace" .) -}}
+{{- end }}

@@ -70,6 +70,11 @@ aggregator:
 # production.namespace. A claim names a class and carries only what makes this
 # booking different; the class supplies everything cluster-shaped.
 mediamtx:
+  # Whether the media server in front of this release is running read replicas.
+  # When it is, HLS and WHEP have to reach the same replica for the life of a
+  # session, so the proxy resolves the pods itself rather than addressing one
+  # ClusterIP that kube-proxy would balance per connection.
+  sticky: false
   enabled: true
   claimName: mediamtx
   className: mediamtx

@@ -31,13 +31,27 @@
   # (ICE media does NOT go through here -- that is the UDP LoadBalancer the
   # mediamtx class publishes.)
   handle_path /hls/* {
-    reverse_proxy http://{{ .Values.mediamtx.claimName }}.{{ include "qutil.productionNamespace" . }}:8888 {
+    reverse_proxy {{ if not .Values.mediamtx.sticky }}{{ include "qutil.mediamtxRead" . }}:8888 {{ end }}{
+      {{- if .Values.mediamtx.sticky }}
+      {{- /* An HLS playlist names segments the muxer that wrote it holds, so
+             a reader that lands on another replica asks it for files it has
+             never heard of. */}}
+      dynamic a {{ .Values.mediamtx.claimName }}-endpoints.{{ include "qutil.productionNamespace" . }} 8888
+      lb_policy cookie mtx_hls
+      {{- end }}
       header_down Location "^/(.*)$" "/hls/$1"
     }
   }
 
   handle_path /webrtc/* {
-    reverse_proxy http://{{ .Values.mediamtx.claimName }}.{{ include "qutil.productionNamespace" . }}:8889 {
+    reverse_proxy {{ if not .Values.mediamtx.sticky }}{{ include "qutil.mediamtxRead" . }}:8889 {{ end }}{
+      {{- if .Values.mediamtx.sticky }}
+      {{- /* A WHEP session resource belongs to the pod that answered the
+             offer, and the PATCH and DELETE that follow carry its address.
+             Sent to another replica they address a session it does not have. */}}
+      dynamic a {{ .Values.mediamtx.claimName }}-endpoints.{{ include "qutil.productionNamespace" . }} 8889
+      lb_policy cookie mtx_whep
+      {{- end }}
       header_down Location "^/(.*)$" "/webrtc/$1"
     }
   }
