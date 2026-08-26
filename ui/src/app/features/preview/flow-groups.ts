@@ -7,6 +7,14 @@ import { OperatorFlow } from '../../core/api/models';
  * carrying `<source>:<role>`. An SRT ingest writing picture, sound and
  * ancillary data tags all three with the same source, which is the only thing
  * in the system that says those flows belong together.
+ *
+ * The tag is a list, and the aggregator forwards its first entry only. A flow
+ * tagged into several sources therefore groups under whichever the producer
+ * wrote first and is invisible to the rest. Nothing here can recover the
+ * others: pairing has to be deterministic, because the pair decides the media
+ * server path name and two viewers computing different names would run two
+ * encoders for one picture. Widening this means carrying the whole list from
+ * the aggregator and choosing between sources on something better than order.
  */
 export interface FlowGroup {
   source: string;

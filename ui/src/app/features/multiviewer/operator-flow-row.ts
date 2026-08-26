@@ -42,20 +42,9 @@ const DEFAULT_CHANNELS = 2;
                to a browser, so the button says so instead of opening a card that
                never fills. -->
           @if (previewable()) {
-            <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
-            <!-- Picture and sound are separate flows. Where the producer said
-                 they belong together, offer them as one card rather than
-                 making the operator find the other half by hand. -->
-            @if (audioSibling(); as audio) {
-              <button
-                class="btn of-prev-av"
-                type="button"
-                [title]="'With ' + audio.label"
-                (click)="previewWithAudio(audio)"
-              >
-                Preview A/V
-              </button>
-            }
+            <button class="btn of-prev" type="button" [title]="previewTitle()" (click)="preview()">
+              Preview
+            </button>
           } @else {
             <button
               class="btn"
@@ -104,6 +93,12 @@ export class OperatorFlowRow {
    * data flow is read as decoded ANC packets. Anything else has no route to a
    * browser at all.
    */
+  /** Names the sound that comes with the picture, where there is any. */
+  protected readonly previewTitle = computed(() => {
+    const audio = this.audioSibling();
+    return audio ? `Picture and sound, with ${audio.label}` : '';
+  });
+
   protected readonly previewable = computed(
     () => this.format() === 'video' || this.format() === 'audio' || this.format() === 'data',
   );
@@ -122,24 +117,25 @@ export class OperatorFlowRow {
       (this.flow().locations ?? []).map((l) => `${l.node}:${l.phase}`).join(', ') || 'no locations',
   );
 
+  /**
+   * Open this flow's canonical preview.
+   *
+   * Where the producer tagged a video flow and an audio flow with one source,
+   * the canonical preview is the pair. It is not an alternative offered beside
+   * a picture-only one: two affordances would be two paths on the media
+   * server, so the same picture would be decoded and encoded twice, at about
+   * 1.4 cores each against roughly one percent for the sound. A viewer who
+   * does not want to hear it mutes the element.
+   */
   protected preview(): void {
     const f = this.flow();
+    const audio = this.audioSibling();
     this.preview$.open({
       id: f.id,
-      label: f.label,
+      label: audio ? `${f.label} + ${audio.label}` : f.label,
       format: this.format() as 'video' | 'audio' | 'data',
-      channels: f.detail?.media?.channels ?? DEFAULT_CHANNELS,
-    });
-  }
-
-  protected previewWithAudio(audio: OperatorFlow): void {
-    const f = this.flow();
-    this.preview$.open({
-      id: f.id,
-      label: `${f.label} + ${audio.label}`,
-      format: 'video',
-      channels: audio.detail?.media?.channels ?? DEFAULT_CHANNELS,
-      audioId: audio.id,
+      channels: (audio ?? f).detail?.media?.channels ?? DEFAULT_CHANNELS,
+      audioId: audio?.id,
     });
   }
 }
