@@ -23,6 +23,12 @@ jobs:
       # perfectly and only fails when the pod starts.
       - run: python -m py_compile charts/qutil/files/aggregator.py
 
+      # DEMO_NS short-circuits the one module-level call that reads the service
+      # account namespace, which is what makes the script importable here.
+      - run: python -m unittest discover -s hack -p 'test_*.py'
+        env:
+          DEMO_NS: test
+
       # helm accepts a duplicated mapping key; the post-renderer Flux installs
       # through refuses the document, so a chart that lints can still fail to
       # install.

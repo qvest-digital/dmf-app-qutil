@@ -1151,16 +1151,14 @@ def preview_add(uuid, owner="overlay", channels=""):
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
+        # No IDR period: the media server derives one from the rate the flow
+        # declares. A frame count stated here is right for one rate and wrong
+        # for every other, and a GOP the length of hlsSegmentDuration lands on
+        # the HLS muxer's own cut comparison, which is what makes segment
+        # durations alternate between one and two of them.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000,
-                # Force a keyframe every second so the HLS segmenter always has
-                # a cut point. High-complexity content (noise, gamut sweeps,
-                # dense checkerboards) otherwise defers IDRs far enough that the
-                # muxer cannot form a segment and index.m3u8 answers HTTP 500.
-                # Low-motion patterns emit IDRs often enough to hide it, which
-                # is why this only shows on some flows.
-                "mxlH264IDRPeriod": 30}
+                "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
