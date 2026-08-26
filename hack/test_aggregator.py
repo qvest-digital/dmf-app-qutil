@@ -89,6 +89,19 @@ class PreviewPathConfig(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def test_leaves_the_idr_period_to_the_media_server(self):
+        """The rate is the flow's, so the GOP that follows from it is too.
+
+        A fixed frame count is right for one rate and wrong for every other,
+        and a GOP the length of hlsSegmentDuration lands on the HLS muxer's cut
+        comparison, which makes segment durations alternate.
+        """
+        code, _ = agg.preview_add(self.uuid)
+        self.assertEqual(code, 200)
+        conf = self.mtx.added()
+        self.assertIsNotNone(conf, "no path was created")
+        self.assertNotIn("mxlH264IDRPeriod", conf)
+
     def test_still_pins_the_encoder_settings_that_are_not_rate_derived(self):
         """Dropping the IDR period must not take the rest of the config with it."""
         agg.preview_add(self.uuid)
