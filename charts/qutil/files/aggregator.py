@@ -1086,33 +1086,98 @@ def _known_flow(uuid):
     return None
 
 
-# Who is holding a preview open. The multiviewer's four tiles and the operator
-# overlay can ask for the same flow at once, and both derive the same path name
-# from the uuid, so an unconditional delete on close would drop the path out
-# from under whoever else is still playing it. Holders are counted per flow and
-# the path only goes when the last one lets go.
-_holders = {}
-_holders_lock = threading.Lock()
+_PREVIEW_PREFIX = "preview-"
+_AUDIO_PREFIX = _PREVIEW_PREFIX + "audio-"
+_HLS_SUFFIX = "-hls"
+
+# When each preview path was last seen with nobody reading it.
+#
+# The multiviewer's tiles and the operator overlay can ask for the same flow at
+# once and derive the same path name from the uuid, so a close must not drop
+# the path out from under whoever else is still playing it. Counting holders
+# here answered that but only while this process lived: a restart lost the
+# counts, and the next close then tore down a path someone was watching, while
+# a card that never closed (tab killed, pod evicted) held its path forever.
+#
+# mediamtx already knows who is reading. The one thing it cannot know is that a
+# path was created moments ago for a browser that has not finished connecting,
+# so a path goes only after it has had no readers for REAP_GRACE. That covers
+# both windows with one rule: the ICE gathering and connect budget before the
+# first reader attaches, and a reconnect after the last one leaves.
+#
+# The grace has to clear the client's own budget, which is 2.5 s of ICE
+# gathering plus an 8 s connect timeout for WHEP, and a 4 s retry for HLS.
+REAP_GRACE = 30.0
+REAP_INTERVAL = 10.0
+
+_idle_since = {}
+_idle_lock = threading.Lock()
 
 
-def _hold(uuid, owner):
-    with _holders_lock:
-        _holders.setdefault(uuid, set()).add(owner)
+def _preview_track(*names):
+    """Start the idle clock for paths just created, before anyone can read them."""
+    now = time.monotonic()
+    with _idle_lock:
+        for name in names:
+            _idle_since[name] = now
 
 
-def _release(uuid, owner):
-    """Drop one holder. True when that was the last one."""
-    with _holders_lock:
-        owners = _holders.get(uuid)
-        if owners is None:
-            # Nothing recorded: a delete for a preview this process did not
-            # start, which is what a restarted aggregator sees. Tear it down.
-            return True
-        owners.discard(owner)
-        if owners:
-            return False
-        _holders.pop(uuid, None)
-        return True
+def _preview_delete(name):
+    """Drop one preview path, stopping its publisher first where it has one."""
+    if name.startswith(_AUDIO_PREFIX):
+        # Audio is pushed in by a separate process. Stopping it before the path
+        # goes lets its pipeline send EOS into a path that still exists.
+        flow = name[len(_AUDIO_PREFIX):]
+        if flow.endswith(_HLS_SUFFIX):
+            flow = flow[:-len(_HLS_SUFFIX)]
+        _audio_preview(f"/stop?flow={flow}", "DELETE")
+    _mtx(f"/v3/config/paths/delete/{name}", "DELETE")
+
+
+def _preview_reap_pass(now=None):
+    """Delete preview paths that have had no readers for REAP_GRACE.
+
+    Returns the names deleted. A path this process did not create starts its
+    clock at the first pass that sees it idle rather than being reaped at once,
+    so a restart costs a delay and never a live preview.
+    """
+    now = time.monotonic() if now is None else now
+    code, res = _mtx("/v3/paths/list")
+    if code != 200:
+        return []
+
+    reap = []
+    for item in (res.get("items") or []):
+        name = item.get("name") or ""
+        if not name.startswith(_PREVIEW_PREFIX):
+            continue
+        if item.get("readers"):
+            with _idle_lock:
+                _idle_since[name] = None
+            continue
+        with _idle_lock:
+            since = _idle_since.get(name)
+            if since is None:
+                _idle_since[name] = now
+                continue
+            if now - since <= REAP_GRACE:
+                continue
+        reap.append(name)
+
+    for name in reap:
+        _preview_delete(name)
+        with _idle_lock:
+            _idle_since.pop(name, None)
+    return reap
+
+
+def _preview_reaper():
+    while True:
+        time.sleep(REAP_INTERVAL)
+        try:
+            _preview_reap_pass()
+        except Exception as e:
+            print(f"preview reaper: {e}", flush=True)
 
 
 def preview_add(uuid, owner="overlay", channels=""):
@@ -1128,7 +1193,7 @@ def preview_add(uuid, owner="overlay", channels=""):
     if fmt == "audio":
         code, res = preview_add_audio(uuid, channels)
         if code == 200:
-            _hold(uuid, owner)
+            _preview_track(*_audio_preview_paths(uuid))
         return code, res
     if fmt == "data":
         # No transport carries ANC to a browser, so a data preview is not a
@@ -1147,7 +1212,7 @@ def preview_add(uuid, owner="overlay", channels=""):
         # sat on "buffering...".
         return 415, {"error": f"preview supports video, audio and ANC data "
                               f"flows; this one is {fmt or 'of unknown format'}"}
-    name = "preview-" + uuid
+    name = _PREVIEW_PREFIX + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
@@ -1169,7 +1234,7 @@ def preview_add(uuid, owner="overlay", channels=""):
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
-    _hold(uuid, owner)
+    _preview_track(name)
     return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
                  "whep": f"/webrtc/{name}/whep", "format": "video"}
 
@@ -1184,8 +1249,8 @@ def _audio_preview_paths(uuid):
     compositor/src/audio_preview.cpp; both sides derive the names rather than
     exchange them, because these paths have to exist before /start is called.
     """
-    name = "preview-audio-" + uuid
-    return name, name + "-hls"
+    name = _AUDIO_PREFIX + uuid
+    return name, name + _HLS_SUFFIX
 
 
 def preview_add_audio(uuid, channels=""):
@@ -1261,24 +1326,20 @@ def anc_grain(uuid):
 
 
 def preview_del(uuid, owner="overlay"):
+    """Advisory: a card saying it has stopped playing.
+
+    Nothing is torn down here. Whether a path is still wanted is answered by
+    whether anything is reading it, which mediamtx knows and this process does
+    not; the reaper drops it once it has been idle for REAP_GRACE. Deleting on
+    this call is what used to drop a path out from under a second card on the
+    same flow.
+
+    `owner` is kept so the route's contract does not change. It no longer
+    identifies anything, because holders are no longer counted.
+    """
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
-    if not _release(uuid, owner):
-        # Somebody else is still playing this flow. Reporting the release as
-        # done is honest: this holder is gone, and the path staying up is the
-        # point of counting them.
-        return 200, {"released": uuid}
-    # Stop the publisher before dropping its path, so the pipeline sends EOS into
-    # a path that still exists. Both variants are attempted rather than looking
-    # the flow's format up again: the flow may have been deleted while the
-    # overlay was open, and whichever call does not apply is a harmless 404.
-    _audio_preview(f"/stop?flow={uuid}", "DELETE")
-    # Audio leaves two paths behind (Opus for WHEP, AAC for HLS); missing one
-    # would leave a publisher-mode path lingering with no publisher.
-    for path in _audio_preview_paths(uuid):
-        _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
-    _mtx(f"/v3/config/paths/delete/preview-{uuid}", "DELETE")
-    return 200, {"stopped": uuid}
+    return 200, {"released": uuid}
 
 
 # ── Generators: booking writers from the UI ─────────────────────────────────
@@ -1658,11 +1719,13 @@ def generator_delete(name):
     # A mediamtx path left pointing at a flow that is going away retries the open
     # every 5s for as long as the server lives.
     for flow_id in _claim_flow_ids(claim):
-        with _holders_lock:
-            _holders.pop(flow_id, None)
         for path in _audio_preview_paths(flow_id):
-            _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
-        _mtx(f"/v3/config/paths/delete/preview-{flow_id}", "DELETE")
+            _preview_delete(path)
+        _preview_delete(_PREVIEW_PREFIX + flow_id)
+        with _idle_lock:
+            for path in _audio_preview_paths(flow_id):
+                _idle_since.pop(path, None)
+            _idle_since.pop(_PREVIEW_PREFIX + flow_id, None)
     return 200, {"deleted": name}
 
 
@@ -1827,4 +1890,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=_preview_reaper, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", 8088), H).serve_forever()
