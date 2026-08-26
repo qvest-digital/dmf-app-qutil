@@ -19,8 +19,6 @@ import { AncGrainView } from './anc-grain';
 import { AudioMeters } from './audio-meters';
 import { PreviewController, PreviewRequest } from './preview-controller';
 
-/** Give mediamtx a moment to open the reader and cut the first segment. */
-const VIDEO_WARMUP_MS = 900;
 /** Audio readiness poll: 30 tries, one a second. */
 const AUDIO_TRIES = 30;
 const AUDIO_POLL_MS = 1000;
@@ -209,9 +207,7 @@ export class FlowPreview {
           this.awaitAudio(id, session, request.channels, AUDIO_TRIES);
           return;
         }
-        this.timer = setTimeout(() => {
-          if (this.sessionId === id) this.playHls(session.hls, false, 0);
-        }, VIDEO_WARMUP_MS);
+        this.playVideo(session);
       },
       error: (err: { error?: { error?: string } }) => {
         if (this.sessionId !== id) return;
@@ -326,6 +322,31 @@ export class FlowPreview {
   }
 
   /**
+   * WHEP first for video, HLS on failure.
+   *
+   * HLS costs the playlist window: seven segments of a second, of which hls.js
+   * sits three behind the live edge, so several seconds before the picture is
+   * even reached. WHEP has no playlist and is the transport this is for.
+   *
+   * No warmup delay. The path is created on demand, so a reader arriving
+   * before the first frame is held until the source is ready rather than
+   * refused, and whep() carries its own connect timeout.
+   */
+  private playVideo(session: PreviewSession): void {
+    const video = this.shell()?.video;
+    if (!video) return;
+    // whep() builds /webrtc/<path>/whep itself, so it takes the path and not
+    // the address the session carries.
+    this.pc = whep(this.registry, session.path, video, {
+      onFail: () => {
+        this.pc = null;
+        this.playHls(session.hls, false, 0);
+      },
+      onStream: () => this.state.set(''),
+    });
+  }
+
+  /**
    * WHEP first for audio — sub-second, and the meters get the raw stream — with
    * HLS on failure.
    */
@@ -333,7 +354,10 @@ export class FlowPreview {
     const video = this.shell()?.video;
     if (!video) return;
     this.pc = whep(this.registry, session.path, video, {
-      onFail: () => this.playHls(session.hls, true, channels),
+      onFail: () => {
+        this.pc = null;
+        this.playHls(session.hls, true, channels);
+      },
       onStream: (stream) => {
         this.state.set('');
         this.meters()?.start(stream, channels, video);
@@ -345,6 +369,10 @@ export class FlowPreview {
     const video = this.shell()?.video;
     if (!video) return;
     this.hls = hlsPlay(src, video, {
+      // Without this the card's fallback player is the one decoder the
+      // registry does not know about, so a hidden tab tears down every other
+      // player and leaves this one running.
+      registry: this.registry,
       retryMs: HLS_RETRY_MS,
       liveMaxLatencyDurationCount: null,
       onManifest: () => {
