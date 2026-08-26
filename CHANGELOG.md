@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-rc.26](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.25...v1.0.0-rc.26) (2026-08-26)
+
+
+### Features
+
+* **preview:** play a video flow together with its audio ([#134](https://github.com/qvest-digital/dmf-app-qutil/issues/134)) ([8a3ef8a](https://github.com/qvest-digital/dmf-app-qutil/commit/8a3ef8a4e6496bc5d688b957ab79b6032da5f98b))
+* **preview:** play video over WHEP, with HLS as the fallback ([#133](https://github.com/qvest-digital/dmf-app-qutil/issues/133)) ([bf5bc70](https://github.com/qvest-digital/dmf-app-qutil/commit/bf5bc705220b56886674ede1686e379fa5ee80dd))
+
+
+### Bug Fixes
+
+* **aggregator:** leave the IDR period to the media server ([#131](https://github.com/qvest-digital/dmf-app-qutil/issues/131)) ([3f3ec8f](https://github.com/qvest-digital/dmf-app-qutil/commit/3f3ec8f00de0080417e05fe5dcba5211ea767a95))
+* **aggregator:** stop preview paths encoding for nobody ([#132](https://github.com/qvest-digital/dmf-app-qutil/issues/132)) ([76ddf19](https://github.com/qvest-digital/dmf-app-qutil/commit/76ddf19072987901320ce142f7a8db72cf1c6e31))
+* **compositor:** publish to the media server's origin service ([#135](https://github.com/qvest-digital/dmf-app-qutil/issues/135)) ([b3a78e9](https://github.com/qvest-digital/dmf-app-qutil/commit/b3a78e9d0cc0c8e67256b430c424e6215410e1e7))
+* **ui:** hold a preview session to one media server replica ([#136](https://github.com/qvest-digital/dmf-app-qutil/issues/136)) ([f0b0b86](https://github.com/qvest-digital/dmf-app-qutil/commit/f0b0b86d72c03245557655d2b42b7bb29c2fca8b))
+
 ## [1.0.0-rc.25](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.24...v1.0.0-rc.25) (2026-08-12)
 
 
