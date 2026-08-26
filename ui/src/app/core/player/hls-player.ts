@@ -160,7 +160,11 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
       liveSyncDurationCount: 3,
       ...(liveMaxLatencyDurationCount == null ? {} : { liveMaxLatencyDurationCount }),
       enableWorker: true,
-      lowLatencyMode: false,
+      // The media server publishes the low-latency HLS variant, which carries
+      // EXT-X-PART. Left off, hls.js ignores the parts and syncs on whole
+      // segments, so the playlist window is paid in full and nothing says so:
+      // the server half looks like it did not help.
+      lowLatencyMode: true,
     });
     hls.loadSource(src);
     hls.attachMedia(video);

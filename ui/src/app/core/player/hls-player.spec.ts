@@ -20,11 +20,13 @@ class FakeHls {
 
   readonly handlers = new Map<string, Handler>();
   readonly sources: string[] = [];
+  readonly config: Record<string, unknown>;
   startLoadCount = 0;
   recoverCount = 0;
   destroyed = false;
 
-  constructor() {
+  constructor(config: Record<string, unknown> = {}) {
+    this.config = config;
     built.push(this);
   }
 
@@ -76,6 +78,16 @@ describe('hlsPlay fatal error recovery', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // The media server publishes the low-latency variant. With this off, hls.js
+  // ignores EXT-X-PART and syncs on whole segments, which costs the playlist
+  // window and reports nothing: the server half reads as having made no
+  // difference.
+  it('enables low-latency mode so EXT-X-PART is used', () => {
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry });
+
+    expect(built[0].config['lowLatencyMode']).toBe(true);
   });
 
   it('leaves a non-fatal error to hls.js', () => {
