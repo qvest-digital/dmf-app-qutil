@@ -4,8 +4,8 @@ description: >-
   Qvest DMF and MXL utility app. Serves the multiviewer and books the media
   functions it observes.
 type: application
-version: 1.0.0-rc.25 # x-release-please-version
-appVersion: 1.0.0-rc.25 # x-release-please-version
+version: 1.0.0-rc.26 # x-release-please-version
+appVersion: 1.0.0-rc.26 # x-release-please-version
 kubeVersion: '>=1.28.0-0'
 home: https://github.com/qvest-digital/dmf-app-qutil
 sources:
