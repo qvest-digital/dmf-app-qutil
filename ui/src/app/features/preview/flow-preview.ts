@@ -17,7 +17,7 @@ import { WhepHandle, whep } from '../../core/player/whep';
 import { VideoShell } from '../../shared/video-shell';
 import { AncGrainView } from './anc-grain';
 import { AudioMeters } from './audio-meters';
-import { PreviewController, PreviewRequest } from './preview-controller';
+import { key, PreviewController, PreviewRequest } from './preview-controller';
 
 /** Audio readiness poll: 30 tries, one a second. */
 const AUDIO_TRIES = 30;
@@ -157,7 +157,7 @@ export class FlowPreview {
     // Routed through the controller so the column and the cards it renders cannot
     // disagree about what is open; the card's own teardown follows from being
     // destroyed.
-    this.controller.close(this.request().id);
+    this.controller.close(key(this.request()));
   }
 
   protected pairLabel(pair: number[]): string {
@@ -195,7 +195,7 @@ export class FlowPreview {
     this.isData.set(request.format === 'data');
     this.pairs.set(request.format === 'audio' ? FlowPreview.pairsOf(request.channels) : []);
 
-    this.api.startPreview(id, OWNER).subscribe({
+    this.api.startPreview(id, OWNER, undefined, request.audioId).subscribe({
       next: (session) => {
         if (this.sessionId !== id) return;
         if (session.format === 'data') {

@@ -48,6 +48,20 @@ def video_flow(uuid, rate_num=30, rate_den=1):
     }
 
 
+def audio_flow(uuid, channels=2):
+    return {
+        "metadata": {"name": uuid},
+        "spec": {
+            "definition": {
+                "format": "urn:x-nmos:format:audio",
+                "media_type": "audio/float32",
+                "channel_count": channels,
+                "sample_rate": {"numerator": 48000},
+            }
+        },
+    }
+
+
 class MtxRecorder:
     """Stands in for _mtx, recording calls and answering from a script.
 
@@ -64,6 +78,12 @@ class MtxRecorder:
         if path.startswith("/v3/config/paths/get/"):
             name = path.rsplit("/", 1)[-1]
             return (200, {}) if name in self.existing else (404, {})
+        if path == "/v3/paths/list":
+            # One source of truth: a path the recorder says exists is a path a
+            # listing has to report, or a test can pass against a server that
+            # contradicts itself.
+            return 200, {"items": [{"name": n, "readers": []}
+                                   for n in sorted(self.existing)]}
         return 200, {}
 
     def added(self):
@@ -179,6 +199,116 @@ class PathList:
             return 200, {}
         return 200, {}
 
+
+class JoinedPreview(unittest.TestCase):
+    """One path carrying a video flow and an audio flow together.
+
+    Picture and sound are separate flows and nothing downstream rejoins them,
+    so a card that wants both names both.
+    """
+
+    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.mtx = MtxRecorder()
+        self.flows = {self.VIDEO: video_flow(self.VIDEO), self.AUDIO: audio_flow(self.AUDIO)}
+        patches = [
+            mock.patch.object(agg, "_mtx", self.mtx),
+            mock.patch.object(agg, "_known_flow", lambda u: self.flows.get(u)),
+            mock.patch.object(agg, "_idle_since", {}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_names_both_flows_on_one_source(self):
+        code, res = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200)
+        conf = self.mtx.added()
+        self.assertEqual(
+            conf["source"], f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}?audio={self.AUDIO}"
+        )
+        self.assertEqual(res["audio"], self.AUDIO)
+
+    def test_path_name_carries_no_character_the_media_server_refuses(self):
+        """Its path names accept only [0-9a-zA-Z_-/.], so a "+" would be rejected."""
+        code, res = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200)
+        self.assertRegex(res["path"], r"^[0-9a-zA-Z_\-/.]+$")
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}-{self.AUDIO}")
+
+    def test_is_created_on_demand_like_any_other_preview(self):
+        agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertIs(self.mtx.added()["sourceOnDemand"], True)
+
+    def test_rejects_a_malformed_audio_flow_id(self):
+        code, _ = agg.preview_add(self.VIDEO, audio="not-a-uuid")
+        self.assertEqual(code, 400)
+        self.assertIsNone(self.mtx.added())
+
+    def test_rejects_an_audio_flow_the_operator_does_not_know(self):
+        code, _ = agg.preview_add(self.VIDEO, audio="aea7b9e9-0000-0000-0000-000000000000")
+        self.assertEqual(code, 404)
+        self.assertIsNone(self.mtx.added())
+
+    def test_refuses_a_second_flow_that_is_not_audio(self):
+        """Two video flows would give the media server two pictures and no sound."""
+        other = "b2000000-0000-0000-0000-000000000002"
+        self.flows[other] = video_flow(other)
+        code, _ = agg.preview_add(self.VIDEO, audio=other)
+        self.assertEqual(code, 415)
+        self.assertIsNone(self.mtx.added())
+
+    def test_refuses_to_join_a_flow_to_itself(self):
+        code, _ = agg.preview_add(self.AUDIO, audio=self.AUDIO)
+        self.assertEqual(code, 400)
+        self.assertIsNone(self.mtx.added())
+
+    def test_refuses_when_the_first_flow_is_not_video(self):
+        code, _ = agg.preview_add(self.AUDIO, audio=self.VIDEO)
+        self.assertEqual(code, 415)
+        self.assertIsNone(self.mtx.added())
+
+    def test_reuses_a_joined_path_that_already_exists(self):
+        self.mtx.existing.add(f"preview-{self.VIDEO}-{self.AUDIO}")
+        code, _ = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200)
+        self.assertIsNone(self.mtx.added())
+
+
+    def test_a_bare_request_reuses_the_joined_path(self):
+        """One encoder per video flow, whatever the caller asked for.
+
+        A card opening picture-only on a flow already previewed with its sound
+        must not start a second reader and a second encoder over the same
+        video. The joined path is the one that exists, so it is the one served.
+        """
+        joined = f"preview-{self.VIDEO}-{self.AUDIO}"
+        self.mtx.existing.add(joined)
+        code, res = agg.preview_add(self.VIDEO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], joined)
+        self.assertEqual(res["audio"], self.AUDIO)
+        self.assertIsNone(self.mtx.added())
+
+    def test_a_joined_request_does_not_settle_for_a_silent_path(self):
+        """The reverse does not hold: sound asked for is sound delivered."""
+        self.mtx.existing.add(f"preview-{self.VIDEO}")
+        code, res = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}-{self.AUDIO}")
+        self.assertEqual(self.mtx.added()["source"],
+                         f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}?audio={self.AUDIO}")
+
+    def test_another_flows_joined_path_is_not_mistaken_for_this_ones(self):
+        """A hyphen also separates a UUID's own fields, so the id matches whole."""
+        other = "b2000000-0000-0000-0000-000000000002"
+        self.mtx.existing.add(f"preview-{other}-{self.AUDIO}")
+        code, res = agg.preview_add(self.VIDEO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}")
+        self.assertNotIn("audio", res)
 
 class PreviewReaper(unittest.TestCase):
     """When an idle preview path is dropped, and when it is not.

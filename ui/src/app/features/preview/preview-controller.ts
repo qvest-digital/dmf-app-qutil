@@ -5,6 +5,12 @@ export interface PreviewRequest {
   label: string;
   format: 'video' | 'audio' | 'data';
   channels: number;
+  /**
+   * The audio flow to carry alongside a video one. Picture and sound are
+   * separate flows and nothing downstream rejoins them, so a card that wants
+   * both names both and the media server publishes one path with two tracks.
+   */
+  audioId?: string;
 }
 
 /**
@@ -17,6 +23,15 @@ export interface PreviewRequest {
  * One entry per flow: two cards on one flow would resolve to the same mediamtx
  * path, and closing either would release it under the other.
  */
+/**
+ * What makes two requests the same card. A flow previewed on its own and the
+ * same flow previewed with its sound are different paths on the media server,
+ * so they are different cards here.
+ */
+export function key(request: PreviewRequest): string {
+  return request.audioId ? `${request.id}+${request.audioId}` : request.id;
+}
+
 @Injectable({ providedIn: 'root' })
 export class PreviewController {
   private readonly _requests = signal<PreviewRequest[]>([]);
@@ -24,11 +39,11 @@ export class PreviewController {
 
   open(request: PreviewRequest): void {
     this._requests.update((open) =>
-      open.some((r) => r.id === request.id) ? open : [...open, request],
+      open.some((r) => key(r) === key(request)) ? open : [...open, request],
     );
   }
 
   close(id: string): void {
-    this._requests.update((open) => open.filter((r) => r.id !== id));
+    this._requests.update((open) => open.filter((r) => key(r) !== id && r.id !== id));
   }
 }

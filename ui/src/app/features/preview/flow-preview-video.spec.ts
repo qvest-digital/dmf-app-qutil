@@ -131,4 +131,24 @@ describe('FlowPreview video transport', () => {
 
     expect(registry.counts().pc).toBe(1);
   });
+
+  /**
+   * Picture and sound are separate flows, so a card that wants both names both
+   * and the media server publishes one path with two tracks.
+   */
+  it('names the audio flow on the wire when one was asked for', () => {
+    const audio = 'aea7b9e9-1e5b-4333-9ac4-8689053a77de';
+    fixture = TestBed.createComponent(FlowPreview);
+    fixture.componentRef.setInput('request', {
+      id: FLOW,
+      label: 'writer-1 + writer-1 audio',
+      format: 'video',
+      audioId: audio,
+    });
+    fixture.detectChanges();
+
+    const req = http.expectOne((r) => r.method === 'POST' && r.url.startsWith('/api/preview/'));
+    expect(req.request.url).toContain(`audio=${audio}`);
+    req.flush({ path: 'p', hls: 'h', whep: 'w', format: 'video', audio });
+  });
 });

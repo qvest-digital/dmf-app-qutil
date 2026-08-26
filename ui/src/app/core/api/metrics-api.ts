@@ -44,9 +44,14 @@ export class MetricsApi {
    * different pair moves a running session instead of restarting it, which is
    * what `selectPreviewChannels` relies on.
    */
-  startPreview(uuid: string, owner?: string, channels?: number[]): Observable<PreviewSession> {
+  startPreview(
+    uuid: string,
+    owner?: string,
+    channels?: number[],
+    audio?: string,
+  ): Observable<PreviewSession> {
     return this.http.post<PreviewSession>(
-      `/api/preview/${encodeURIComponent(uuid)}${this.previewQuery(owner, channels)}`,
+      `/api/preview/${encodeURIComponent(uuid)}${this.previewQuery(owner, channels, audio)}`,
       null,
     );
   }
@@ -121,10 +126,11 @@ export class MetricsApi {
     return owner ? `?owner=${encodeURIComponent(owner)}` : '';
   }
 
-  private previewQuery(owner?: string, channels?: number[]): string {
+  private previewQuery(owner?: string, channels?: number[], audio?: string): string {
     const params = new URLSearchParams();
     if (owner) params.set('owner', owner);
     if (channels?.length) params.set('channels', channels.join(','));
+    if (audio) params.set('audio', audio);
     const query = params.toString();
     return query ? `?${query}` : '';
   }

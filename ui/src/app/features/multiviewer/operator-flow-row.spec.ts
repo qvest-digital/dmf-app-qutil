@@ -18,6 +18,21 @@ const DATA: OperatorFlow = {
   format: 'data',
 };
 
+const VIDEO: OperatorFlow = {
+  id: 'b2000000-0000-0000-0000-000000000001',
+  label: 'writer-mxl-1',
+  format: 'video',
+  grouphint: 'srt-ingest-1:Video',
+};
+
+const PARTNER_AUDIO: OperatorFlow = {
+  id: 'aea7b9e9-1e5b-4333-9ac4-8689053a77de',
+  label: 'srt-ingest-1-audio',
+  format: 'audio',
+  grouphint: 'srt-ingest-1:Audio',
+  detail: { media: { channels: 2 } },
+};
+
 const UNKNOWN: OperatorFlow = {
   id: 'deadbeef-0000-0000-0000-000000000001',
   label: 'mystery-flow',
@@ -34,9 +49,10 @@ describe('OperatorFlowRow preview button', () => {
   let fixture: ComponentFixture<OperatorFlowRow>;
   let controller: PreviewController;
 
-  function mount(flow: OperatorFlow): void {
+  function mount(flow: OperatorFlow, audioSibling: OperatorFlow | null = null): void {
     fixture = TestBed.createComponent(OperatorFlowRow);
     fixture.componentRef.setInput('flow', flow);
+    fixture.componentRef.setInput('audioSibling', audioSibling);
     fixture.detectChanges();
   }
 
@@ -75,6 +91,43 @@ describe('OperatorFlowRow preview button', () => {
     previewButton()!.click();
 
     expect(controller.requests()[0].format).toBe('data');
+  });
+
+  /**
+   * One canonical preview per video flow.
+   *
+   * Offering "with sound" beside "without" would be two paths on the media
+   * server for one picture, so the same frames would be decoded and encoded
+   * twice at about 1.4 cores each, against roughly one percent for the sound.
+   * That is the duplication the preview path exists to avoid.
+   */
+  it('previews a video flow together with the audio its producer tagged', () => {
+    mount(VIDEO, PARTNER_AUDIO);
+    previewButton()!.click();
+
+    expect(controller.requests()).toEqual([
+      {
+        id: VIDEO.id,
+        label: 'writer-mxl-1 + srt-ingest-1-audio',
+        format: 'video',
+        channels: 2,
+        audioId: PARTNER_AUDIO.id,
+      },
+    ]);
+  });
+
+  it('offers only one preview button, never a second for the pair', () => {
+    mount(VIDEO, PARTNER_AUDIO);
+
+    expect(fixture.nativeElement.querySelectorAll('button.of-prev')).toHaveLength(1);
+  });
+
+  it('previews a video flow alone when its producer tagged no audio', () => {
+    mount(VIDEO, null);
+    previewButton()!.click();
+
+    expect(controller.requests()[0].audioId).toBeUndefined();
+    expect(controller.requests()[0].label).toBe('writer-mxl-1');
   });
 
   it('offers no preview for a format with no route to a browser', () => {
