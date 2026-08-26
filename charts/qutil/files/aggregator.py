@@ -1180,6 +1180,30 @@ def _preview_reaper():
             print(f"preview reaper: {e}", flush=True)
 
 
+def _joined_path_for(video_uuid):
+    """The joined path already carrying this video flow, if one exists.
+
+    A bare request for a flow that is already being previewed with its sound
+    must not create a second path. Both would open their own reader on the same
+    video flow and run their own encoder over it, and the video encode is the
+    expensive half: about 1.4 cores measured live, against a percent of one for
+    the audio. Handing back what exists keeps it at one encoder per video flow,
+    and a caller that did not ask for sound can mute it.
+
+    The name is matched whole rather than split on the separator, because a
+    hyphen also appears inside a UUID and splitting would pair the wrong ids.
+    """
+    prefix = f"{_PREVIEW_PREFIX}{video_uuid}-"
+    code, res = _mtx("/v3/paths/list")
+    if code != 200:
+        return None
+    for item in (res.get("items") or []):
+        name = item.get("name") or ""
+        if name.startswith(prefix) and _UUID_RE.match(name[len(prefix):]):
+            return name
+    return None
+
+
 def preview_add(uuid, owner="overlay", channels="", audio=""):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1214,6 +1238,21 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # sat on "buffering...".
         return 415, {"error": f"preview supports video, audio and ANC data "
                               f"flows; this one is {fmt or 'of unknown format'}"}
+    # A joined path already serving this flow is the one to use: see
+    # _joined_path_for. The reverse does not hold -- a request that names an
+    # audio flow is not satisfied by a path carrying no sound -- so
+    # preview_add_joined builds its own name and never consults this. That
+    # leaves a picture-only path redundant once a joined one is created for the
+    # same flow; the reaper collects it when its last reader leaves, which is
+    # the only safe moment to, and until then it is one idle path rather than a
+    # second encoder.
+    joined = _joined_path_for(uuid)
+    if joined:
+        _preview_track(joined)
+        return 200, {"path": joined, "hls": f"/hls/{joined}/index.m3u8",
+                     "whep": f"/webrtc/{joined}/whep", "format": "video",
+                     "audio": joined[len(_PREVIEW_PREFIX) + len(uuid) + 1:]}
+
     name = _PREVIEW_PREFIX + uuid
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
