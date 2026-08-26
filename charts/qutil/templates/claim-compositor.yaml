@@ -3,14 +3,20 @@
 
        compositeOut and audioPreview.rtspBase are peer addresses: they name the
        media server booked beside this one, so they can only be filled in once
-       both are in the same production namespace. They match the rtsp endpoint
-       the mediamtx class publishes, rtsp://<claim>.<namespace>:8554.
+       both are in the same production namespace.
+
+       Both publish, so both address the media server's origin Service rather
+       than its read Service. The read Service fronts replicas, which proxy a
+       stream rather than receive one, and a publisher landing on one would be
+       writing into the instance meant to be proxying it. The origin Service is
+       rendered whether or not replicas are enabled, so this needs no condition
+       and resolves to the single instance where there is only one.
 
        flowIds is what the mosaic tiles, which is the whole point of the
        booking, so it is derived from the same writer list the claims above
        are rendered from rather than restated. */ -}}
 {{- $ns := include "qutil.productionNamespace" . -}}
-{{- $rtsp := printf "rtsp://%s.%s:8554" .Values.mediamtx.claimName $ns -}}
+{{- $rtsp := printf "rtsp://%s-origin.%s:8554" .Values.mediamtx.claimName $ns -}}
 {{- $flows := list -}}
 {{- range .Values.writers.video -}}
 {{- $flows = append $flows .flowId -}}
