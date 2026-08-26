@@ -78,6 +78,12 @@ class MtxRecorder:
         if path.startswith("/v3/config/paths/get/"):
             name = path.rsplit("/", 1)[-1]
             return (200, {}) if name in self.existing else (404, {})
+        if path == "/v3/paths/list":
+            # One source of truth: a path the recorder says exists is a path a
+            # listing has to report, or a test can pass against a server that
+            # contradicts itself.
+            return 200, {"items": [{"name": n, "readers": []}
+                                   for n in sorted(self.existing)]}
         return 200, {}
 
     def added(self):
@@ -270,6 +276,39 @@ class JoinedPreview(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIsNone(self.mtx.added())
 
+
+    def test_a_bare_request_reuses_the_joined_path(self):
+        """One encoder per video flow, whatever the caller asked for.
+
+        A card opening picture-only on a flow already previewed with its sound
+        must not start a second reader and a second encoder over the same
+        video. The joined path is the one that exists, so it is the one served.
+        """
+        joined = f"preview-{self.VIDEO}-{self.AUDIO}"
+        self.mtx.existing.add(joined)
+        code, res = agg.preview_add(self.VIDEO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], joined)
+        self.assertEqual(res["audio"], self.AUDIO)
+        self.assertIsNone(self.mtx.added())
+
+    def test_a_joined_request_does_not_settle_for_a_silent_path(self):
+        """The reverse does not hold: sound asked for is sound delivered."""
+        self.mtx.existing.add(f"preview-{self.VIDEO}")
+        code, res = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}-{self.AUDIO}")
+        self.assertEqual(self.mtx.added()["source"],
+                         f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}?audio={self.AUDIO}")
+
+    def test_another_flows_joined_path_is_not_mistaken_for_this_ones(self):
+        """A hyphen also separates a UUID's own fields, so the id matches whole."""
+        other = "b2000000-0000-0000-0000-000000000002"
+        self.mtx.existing.add(f"preview-{other}-{self.AUDIO}")
+        code, res = agg.preview_add(self.VIDEO)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}")
+        self.assertNotIn("audio", res)
 
 class PreviewReaper(unittest.TestCase):
     """When an idle preview path is dropped, and when it is not.
