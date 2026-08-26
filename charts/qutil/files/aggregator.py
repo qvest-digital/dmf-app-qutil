@@ -1156,7 +1156,14 @@ def preview_add(uuid, owner="overlay", channels=""):
         # for every other, and a GOP the length of hlsSegmentDuration lands on
         # the HLS muxer's own cut comparison, which is what makes segment
         # durations alternate between one and two of them.
-        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": False,
+        # On demand: the reader is what the encode is for, so a path with
+        # nobody on it should not be running ffmpeg. Measured live, four of
+        # seven preview paths were encoding for zero readers at about 1.4
+        # cores each. It also removes the wait the card used to guess at, as
+        # mediamtx holds a reader that arrives before the first frame instead
+        # of refusing it.
+        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
+                "sourceOnDemandCloseAfter": "10s",
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
                 "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)

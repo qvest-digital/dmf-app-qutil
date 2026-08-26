@@ -111,6 +111,18 @@ class PreviewPathConfig(unittest.TestCase):
         self.assertEqual(conf["mxlH264Profile"], "high")
         self.assertEqual(conf["mxlH264Bitrate"], 5000000)
 
+    def test_creates_the_path_on_demand(self):
+        """An encode with no reader on it is an encode nobody asked for.
+
+        mediamtx also holds a reader that arrives before the first frame when
+        the path is on demand, and refuses it outright when it is not, so this
+        is what lets the card stop guessing at a warmup delay.
+        """
+        agg.preview_add(self.uuid)
+        conf = self.mtx.added()
+        self.assertIs(conf["sourceOnDemand"], True)
+        self.assertEqual(conf["sourceOnDemandCloseAfter"], "10s")
+
     def test_reuses_an_existing_path(self):
         """Two cards on one flow share the path rather than racing to create it."""
         self.mtx.existing.add("preview-" + self.uuid)
