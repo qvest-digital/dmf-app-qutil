@@ -43,6 +43,19 @@ const DEFAULT_CHANNELS = 2;
                never fills. -->
           @if (previewable()) {
             <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
+            <!-- Picture and sound are separate flows. Where the producer said
+                 they belong together, offer them as one card rather than
+                 making the operator find the other half by hand. -->
+            @if (audioSibling(); as audio) {
+              <button
+                class="btn of-prev-av"
+                type="button"
+                [title]="'With ' + audio.label"
+                (click)="previewWithAudio(audio)"
+              >
+                Preview A/V
+              </button>
+            }
           } @else {
             <button
               class="btn"
@@ -71,6 +84,12 @@ const DEFAULT_CHANNELS = 2;
 })
 export class OperatorFlowRow {
   readonly flow = input.required<OperatorFlow>();
+  /**
+   * The audio flow tagged with the same NMOS source as this one, when the
+   * producer published both. Supplied by the list, which is the only place
+   * that can see a flow's siblings.
+   */
+  readonly audioSibling = input<OperatorFlow | null>(null);
 
   private readonly preview$ = inject(PreviewController);
 
@@ -110,6 +129,17 @@ export class OperatorFlowRow {
       label: f.label,
       format: this.format() as 'video' | 'audio' | 'data',
       channels: f.detail?.media?.channels ?? DEFAULT_CHANNELS,
+    });
+  }
+
+  protected previewWithAudio(audio: OperatorFlow): void {
+    const f = this.flow();
+    this.preview$.open({
+      id: f.id,
+      label: `${f.label} + ${audio.label}`,
+      format: 'video',
+      channels: audio.detail?.media?.channels ?? DEFAULT_CHANNELS,
+      audioId: audio.id,
     });
   }
 }

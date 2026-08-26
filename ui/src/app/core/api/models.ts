@@ -211,6 +211,8 @@ export interface PreviewSession {
   hls: string;
   whep: string;
   format: 'video' | 'audio' | 'data';
+  /** The audio flow carried alongside the video, on a joined path only. */
+  audio?: string;
   /** Where to poll decoded grains. Data flows only: nothing plays them. */
   anc?: string;
   error?: string;

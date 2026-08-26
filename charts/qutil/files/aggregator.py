@@ -1180,7 +1180,7 @@ def _preview_reaper():
             print(f"preview reaper: {e}", flush=True)
 
 
-def preview_add(uuid, owner="overlay", channels=""):
+def preview_add(uuid, owner="overlay", channels="", audio=""):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
     if channels and not _CHANNELS_RE.match(channels):
@@ -1190,6 +1190,8 @@ def preview_add(uuid, owner="overlay", channels=""):
         return 404, {"error": "flow not known to the operator"}
     d = fl.get("spec", {}).get("definition", {}) or {}
     fmt = (d.get("format") or "").rsplit(":", 1)[-1]
+    if audio:
+        return preview_add_joined(uuid, fmt, audio)
     if fmt == "audio":
         code, res = preview_add_audio(uuid, channels)
         if code == 200:
@@ -1237,6 +1239,51 @@ def preview_add(uuid, owner="overlay", channels=""):
     _preview_track(name)
     return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
                  "whep": f"/webrtc/{name}/whep", "format": "video"}
+
+
+def preview_add_joined(video_uuid, video_fmt, audio_uuid):
+    """One path carrying a video flow and an audio flow together.
+
+    Picture and sound are separate flows and nothing downstream rejoins them,
+    so a card that wants both has to name both. The media server takes the
+    audio as a query on the video's source and publishes the two as one path
+    with two tracks, which is what lets a browser play them in step.
+
+    The path name cannot carry a "+": the media server accepts only
+    [0-9a-zA-Z_-/.] in one, so the two ids are joined with the same hyphen
+    that already separates the prefix.
+    """
+    if not _UUID_RE.match(audio_uuid or ""):
+        return 400, {"error": "bad audio flow id"}
+    if audio_uuid == video_uuid:
+        return 400, {"error": "a joined preview needs two different flows"}
+    if video_fmt != "video":
+        return 415, {"error": f"a joined preview needs a video flow; this one "
+                              f"is {video_fmt or 'of unknown format'}"}
+
+    afl = _known_flow(audio_uuid)
+    if not afl:
+        return 404, {"error": "audio flow not known to the operator"}
+    ad = afl.get("spec", {}).get("definition", {}) or {}
+    afmt = (ad.get("format") or "").rsplit(":", 1)[-1]
+    if afmt != "audio":
+        return 415, {"error": f"the second flow of a joined preview must be "
+                              f"audio; this one is {afmt or 'of unknown format'}"}
+
+    name = f"{_PREVIEW_PREFIX}{video_uuid}-{audio_uuid}"
+    code, _ = _mtx(f"/v3/config/paths/get/{name}")
+    if code != 200:
+        conf = {"source": f"mxl://{MXL_DOMAIN}/{video_uuid}?audio={audio_uuid}",
+                "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
+                "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
+                "mxlH264Bitrate": 5000000}
+        code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
+        if code != 200:
+            return code, {"error": res.get("error") or "mediamtx add failed"}
+    _preview_track(name)
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
+                 "whep": f"/webrtc/{name}/whep", "format": "video",
+                 "audio": audio_uuid}
 
 
 def _audio_preview_paths(uuid):
@@ -1741,20 +1788,23 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _preview_args(self):
-        """(uuid, owner, channels) from
-        /api/preview/<uuid>[?owner=<token>][&channels=<l>[,<r>]].
+        """(uuid, owner, channels, audio) from
+        /api/preview/<uuid>[?owner=<token>][&channels=<l>[,<r>]][&audio=<uuid>].
 
-        The owner names who is asking, so the four tiles and the operator
-        overlay can hold the same flow open without either one's close
-        dropping the path the other is playing. channels applies to audio
-        only and is empty when the caller does not care which pair it gets.
+        owner names who is asking. It no longer decides when a path goes,
+        which the media server's own reader count does, and is kept so the
+        route's contract does not change. channels applies to audio only and
+        is empty when the caller does not care which pair it gets. audio names
+        the sound to carry alongside a video flow, and turns the request into
+        one path with both tracks on it.
         """
         parts = urllib.parse.urlsplit(self.path)
         uuid = parts.path.rstrip("/").rsplit("/", 1)[1]
         query = urllib.parse.parse_qs(parts.query)
         owner = query.get("owner", ["overlay"])[0]
         channels = query.get("channels", [""])[0]
-        return uuid, owner, channels
+        audio = query.get("audio", [""])[0]
+        return uuid, owner, channels, audio
 
     def _json_body(self):
         """The request's JSON object, or None.
@@ -1805,7 +1855,7 @@ class H(BaseHTTPRequestHandler):
             # The latest decoded ANC grain of a data flow. Polled, because a
             # data preview is a look at what a grain currently carries rather
             # than a stream something plays.
-            uuid, _, _ = self._preview_args()
+            uuid, _, _, _ = self._preview_args()
             try:
                 code, res = anc_grain(uuid)
             except Exception as e:
@@ -1814,7 +1864,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/preview/"):
             # GET on the same collection POST/DELETE use: is this audio preview
             # actually producing yet, or did its reader fail to open?
-            uuid, _, _ = self._preview_args()
+            uuid, _, _, _ = self._preview_args()
             try:
                 code, res = preview_status(uuid)
             except Exception as e:
@@ -1832,7 +1882,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.path.startswith("/api/preview/"):
-            uuid, owner, _ = self._preview_args()
+            uuid, owner, _, _ = self._preview_args()
             code, res = preview_del(uuid, owner)
             return self._send(code, res)
         if self.path.startswith("/api/generators/"):
@@ -1858,9 +1908,9 @@ class H(BaseHTTPRequestHandler):
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)
         if self.path.startswith("/api/preview/"):
-            uuid, owner, channels = self._preview_args()
+            uuid, owner, channels, audio = self._preview_args()
             try:
-                code, res = preview_add(uuid, owner, channels)
+                code, res = preview_add(uuid, owner, channels, audio)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)
