@@ -108,7 +108,11 @@ describe('FlowPreview video transport', () => {
     openVideo();
     await settle();
 
-    expect(offered).toEqual([`/webrtc/preview-${FLOW}/whep`]);
+    // Two requests, both to the same endpoint: the OPTIONS preflight that
+    // asks which relay to use, then the offer. Every candidate the server
+    // returns is a pod address, so a client that skips the preflight has
+    // nothing to pair with and drops to HLS having looked like it tried.
+    expect(offered).toEqual([`/webrtc/preview-${FLOW}/whep`, `/webrtc/preview-${FLOW}/whep`]);
   });
 
   it('falls back to HLS when the offer is refused', async () => {
