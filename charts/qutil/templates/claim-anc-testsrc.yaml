@@ -1,0 +1,45 @@
+{{- if .Values.ancTestSource.enabled }}
+{{- /* An ancillary-data producer, so the multiviewer has a `video/smpte291` flow
+       to list and preview. Without one nothing exercises discrete data grains,
+       their cross-node mirroring, or the overlay's byte view -- the demo had
+       video and audio producers and no data producer at all.
+
+       Booked rather than deployed, like every other producer here: the image, the
+       MXL runtime volume, the pull secret and the node tolerations belong to the
+       MediaFunctionClass and are deliberately absent from the claim.
+
+       Off by default, because the class is not in every catalog: a cluster
+       turns it on once its catalog pin has moved to a release carrying
+       mxl-anc-testsrc. Enabled against an older one it leaves a claim that
+       never binds.
+
+       The preview half is already here and needs no producer of its own: the
+       aggregator serves a decoded grain at /api/anc/<uuid> and the overlay
+       renders it. What that needs is a booked reader, which ancPreviewApi in
+       values.yaml names and nothing currently publishes. */ -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.ancTestSource.claimName }}
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.ancTestSource.className }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+  parameters:
+    flow:
+      group_hint: {{ .Values.ancTestSource.groupHint }}
+      data_output:
+        id: {{ .Values.ancTestSource.flowId }}
+        grain_rate:
+          numerator: {{ .Values.ancTestSource.grainRate.numerator }}
+          denominator: {{ .Values.ancTestSource.grainRate.denominator }}
+        # Where ATC normally sits in HD VANC. Nothing depends on it; a plausible
+        # value just makes the overlay's packet view look like real ancillary data.
+        anc_line: {{ .Values.ancTestSource.ancLine }}
+    {{- with .Values.ancTestSource.parameters }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
