@@ -37,7 +37,7 @@ const DEFAULT_CHANNELS = 2;
           <button class="btn of-det" type="button" (click)="open.set(!open())">
             Details {{ open() ? '▴' : '▾' }}
           </button>
-          <!-- Video is pulled by mediamtx, audio is pushed by the audio-preview
+          <!-- Video and audio are both pulled by mediamtx, which reads the flow
                pod, and ANC data is read grain by grain. Anything else has no route
                to a browser, so the button says so instead of opening a card that
                never fills. -->
@@ -89,7 +89,7 @@ export class OperatorFlowRow {
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
 
   /**
-   * Video is pulled by mediamtx, audio is pushed by the audio-preview pod, and a
+   * Video and audio are both pulled by mediamtx, which reads the flow, and a
    * data flow is read as decoded ANC packets. Anything else has no route to a
    * browser at all.
    */

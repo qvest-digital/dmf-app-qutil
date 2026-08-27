@@ -72,12 +72,17 @@ class MtxRecorder:
     def __init__(self, existing=()):
         self.calls = []
         self.existing = set(existing)
+        # What a configured path reads back as, for the callers that compare
+        # against it before deciding to write.
+        self.configs = {}
 
     def __call__(self, path, method="GET", body=None):
         self.calls.append((path, method, body))
         if path.startswith("/v3/config/paths/get/"):
             name = path.rsplit("/", 1)[-1]
-            return (200, {}) if name in self.existing else (404, {})
+            if name not in self.existing:
+                return 404, {}
+            return 200, dict(self.configs.get(name, {}))
         if path == "/v3/paths/list":
             # One source of truth: a path the recorder says exists is a path a
             # listing has to report, or a test can pass against a server that
@@ -310,6 +315,124 @@ class JoinedPreview(unittest.TestCase):
         self.assertEqual(res["path"], f"preview-{self.VIDEO}")
         self.assertNotIn("audio", res)
 
+
+class NativeAudioPreview(unittest.TestCase):
+    """Audio read by the media server itself, rather than pushed into it.
+
+    What this replaces took a reader process, two mediamtx paths and an AAC
+    copy of the same audio, because the MPEG-TS muxer carries no Opus. The
+    server reads the flow now and one Opus track serves both transports.
+    """
+
+    UUID = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.mtx = MtxRecorder()
+        patches = [
+            mock.patch.object(agg, "_mtx", self.mtx),
+            mock.patch.object(agg, "_known_flow", lambda u: audio_flow(u, channels=12)),
+            mock.patch.object(agg, "_idle_since", {}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_one_path_reads_the_flow(self):
+        """Not two, and not a publisher target waiting to be pushed to."""
+        code, res = agg.preview_add(self.UUID)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.UUID}")
+        conf = self.mtx.added()
+        self.assertEqual(conf["source"], f"mxl://{agg.MXL_DOMAIN}/{self.UUID}")
+        adds = [c for c in self.mtx.calls
+                if c[1] == "POST" and c[0].startswith("/v3/config/paths/add/")]
+        self.assertEqual(len(adds), 1, "audio should create exactly one path")
+
+    def test_no_separate_hls_path_is_created(self):
+        """The AAC twin existed only because MPEG-TS refuses Opus."""
+        agg.preview_add(self.UUID)
+        names = [c[0] for c in self.mtx.calls if "/paths/add/" in c[0]]
+        self.assertFalse([n for n in names if n.endswith("-hls")])
+        self.assertFalse([n for n in names if "preview-audio-" in n])
+
+    def test_the_pair_reaches_the_server(self):
+        conf = agg.preview_add(self.UUID, channels="5,6")[1] and self.mtx.added()
+        self.assertEqual(conf["mxlAudioChannels"], "5,6")
+
+    def test_it_is_created_on_demand(self):
+        """An audio preview nobody is listening to should not be encoding."""
+        agg.preview_add(self.UUID)
+        self.assertTrue(self.mtx.added()["sourceOnDemand"])
+
+    def test_reopening_does_not_rewrite_the_path(self):
+        """Replacing it restarts the reader, which a listener hears, so an
+        unchanged pair must not touch it."""
+        self.mtx.existing.add(f"preview-{self.UUID}")
+        agg.preview_add(self.UUID)
+        writes = [c for c in self.mtx.calls
+                  if c[1] == "POST" and "/paths/" in c[0]]
+        self.assertEqual(writes, [])
+
+    def test_a_different_pair_moves_it(self):
+        self.mtx.existing.add(f"preview-{self.UUID}")
+        self.mtx.configs[f"preview-{self.UUID}"] = {"mxlAudioChannels": "1,2"}
+        agg.preview_add(self.UUID, channels="7,8")
+        replaces = [c for c in self.mtx.calls if "/paths/replace/" in c[0]]
+        self.assertEqual(len(replaces), 1)
+        self.assertEqual(replaces[0][2]["mxlAudioChannels"], "7,8")
+
+    def test_a_bad_pair_is_refused_before_anything_is_created(self):
+        code, _ = agg.preview_add(self.UUID, channels="left,right")
+        self.assertEqual(code, 400)
+        self.assertIsNone(self.mtx.added())
+
+
+class PreviewSourceStartTimeout(unittest.TestCase):
+    """How long the server waits for a preview's source to come up.
+
+    Its own default is ten seconds. That is enough for a flow already in the
+    node's domain, and not enough for one that is not: opening that flow is
+    what makes the intent shim ask the node agent to mirror it, and no read
+    succeeds until the mirror exists. Ten seconds killed the source first, so a
+    preview of a flow originating on another node never started at all - and
+    the failure reads as "flow not found", which looks like the flow is missing
+    rather than like the wait being too short.
+    """
+
+    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.mtx = MtxRecorder()
+        self.flows = {self.VIDEO: video_flow(self.VIDEO),
+                      self.AUDIO: audio_flow(self.AUDIO)}
+        for p in [mock.patch.object(agg, "_mtx", self.mtx),
+                  mock.patch.object(agg, "_known_flow", lambda u: self.flows.get(u)),
+                  mock.patch.object(agg, "_idle_since", {})]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_video_preview_waits_longer_than_the_default(self):
+        agg.preview_add(self.VIDEO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_an_audio_preview_waits_too(self):
+        agg.preview_add(self.AUDIO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_a_joined_preview_waits_too(self):
+        """Two flows, so two chances of one needing a mirror."""
+        agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_the_wait_exceeds_the_servers_own_default(self):
+        """A value at or below ten seconds would reintroduce the bug."""
+        self.assertTrue(agg.SOURCE_START_TIMEOUT.endswith("s"))
+        self.assertGreater(int(agg.SOURCE_START_TIMEOUT[:-1]), 10)
+
 class PreviewReaper(unittest.TestCase):
     """When an idle preview path is dropped, and when it is not.
 
@@ -369,27 +492,6 @@ class PreviewReaper(unittest.TestCase):
         mtx = PathList({"composite": 0, "some-other-path": 0})
         self.assertEqual(self.reap(mtx, 1e9), [])
         self.assertEqual(mtx.deleted, [])
-
-    def test_stops_the_publisher_before_dropping_an_audio_path(self):
-        """The pipeline needs a path that still exists to send EOS into."""
-        mtx = PathList({"preview-audio-a": 0})
-        self.idle["preview-audio-a"] = 100.0
-        calls = []
-        with mock.patch.object(agg, "_audio_preview",
-                               lambda q, m="GET": calls.append((q, m)) or (200, {})):
-            self.reap(mtx, 100.0 + agg.REAP_GRACE + 1)
-        self.assertEqual(calls, [("/stop?flow=a", "DELETE")])
-        self.assertEqual(mtx.deleted, ["preview-audio-a"])
-
-    def test_strips_the_hls_suffix_when_stopping_a_publisher(self):
-        """Both audio paths carry one flow; the suffix is not part of its id."""
-        mtx = PathList({"preview-audio-a-hls": 0})
-        self.idle["preview-audio-a-hls"] = 100.0
-        calls = []
-        with mock.patch.object(agg, "_audio_preview",
-                               lambda q, m="GET": calls.append((q, m)) or (200, {})):
-            self.reap(mtx, 100.0 + agg.REAP_GRACE + 1)
-        self.assertEqual(calls, [("/stop?flow=a", "DELETE")])
 
     def test_reaps_nothing_when_the_media_server_cannot_be_reached(self):
         """A failed list is not evidence that anything is idle."""

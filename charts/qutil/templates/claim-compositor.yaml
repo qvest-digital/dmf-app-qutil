@@ -1,9 +1,9 @@
 {{- if .Values.compositor.enabled }}
 {{- /* The mosaic, and the audio preview that rides in the same image.
 
-       compositeOut and audioPreview.rtspBase are peer addresses: they name the
-       media server booked beside this one, so they can only be filled in once
-       both are in the same production namespace.
+       compositeOut is a peer address: it names the media server booked beside
+       this one, so it can only be filled in once both are in the same
+       production namespace.
 
        Both publish, so both address the media server's origin Service rather
        than its read Service. The read Service fronts replicas, which proxy a
@@ -39,9 +39,6 @@ spec:
     compositeOut: {{ printf "%s/composite" $rtsp | quote }}
     frameWidth: {{ .Values.compositor.frameWidth }}
     frameHeight: {{ .Values.compositor.frameHeight }}
-    audioPreview:
-      # The flow id is appended per preview by the control API.
-      rtspBase: {{ printf "%s/preview-audio-" $rtsp | quote }}
     {{- with .Values.compositor.parameters }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

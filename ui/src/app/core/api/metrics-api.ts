@@ -58,8 +58,9 @@ export class MetricsApi {
 
   /**
    * Move a playing audio preview onto another channel pair. Same call as
-   * starting one: the path and its publisher stay up, so the element playing it
-   * never sees the switch.
+   * starting one, because the pair is a property of the path: the media server
+   * reads the flow itself now, so moving it reconfigures the path and restarts
+   * the reader, which a listener hears as a gap.
    */
   selectPreviewChannels(
     uuid: string,
