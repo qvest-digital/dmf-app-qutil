@@ -264,7 +264,7 @@ main.previewing {
 }
 .flow .badge.video {
   background: rgba(200, 241, 105, 0.18);
-  color: #4f7a00;
+  color: var(--qv-white);
 }
 .flow .badge.audio {
   background: rgba(240, 80, 18, 0.16);
