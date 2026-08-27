@@ -237,9 +237,8 @@ generators:
       memory: "1Gi"
 
 # An ancillary-data producer, so the multiviewer has a video/smpte291 flow to
-# list and preview. Off, and not yet turnable on: the class does not exist in
-# the DMF catalog and the image it would point at has cut no release. See the
-# claim template for what has to land first.
+# list and preview. Off by default: the class is not in every catalog, so a
+# cluster turns it on once its catalog pin carries mxl-anc-testsrc.
 ancTestSource:
   enabled: false
   claimName: anc-testsrc
