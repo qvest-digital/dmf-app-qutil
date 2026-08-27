@@ -1218,6 +1218,16 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
     if audio:
         return preview_add_joined(uuid, fmt, audio)
     if fmt == "audio":
+        # A pair the flow does not carry is refused here rather than
+        # configured. The media server fails the open on it and its source
+        # retries every 5s for as long as the path exists, so the card waits
+        # on sound that cannot arrive while the server log fills with the
+        # same line. Nothing downstream reports the failure back.
+        count = d.get("channel_count")
+        wanted = [int(c) for c in channels.split(",")] if channels else []
+        if count and any(c < 1 or c > count for c in wanted):
+            return 400, {"error": f"channels {channels} are outside this "
+                                  f"flow's {count}"}
         return preview_add_audio(uuid, channels)
     if fmt == "data":
         # No transport carries ANC to a browser, so a data preview is not a

@@ -387,6 +387,23 @@ class NativeAudioPreview(unittest.TestCase):
         conf = agg.preview_add(self.UUID, channels="5,6")[1] and self.mtx.added()
         self.assertEqual(conf["mxlAudioChannels"], "5,6")
 
+    def test_a_pair_the_flow_does_not_carry_is_refused(self):
+        """Configured instead, the media server fails the open and its source
+        retries every 5s for as long as the path exists. Nothing reports that
+        back, so the card waits on sound that cannot arrive."""
+        with mock.patch.object(agg, "_known_flow", lambda u: audio_flow(u, channels=2)):
+            code, res = agg.preview_add(self.UUID, channels="3,4")
+        self.assertEqual(code, 400)
+        self.assertIn("2", res["error"])
+        self.assertFalse([c for c in self.mtx.calls if "/paths/add/" in c[0]],
+                         "no path may be created for a pair that cannot open")
+
+    def test_a_pair_the_flow_does_carry_is_allowed(self):
+        """The check must read the flow's own width, not a fixed stereo."""
+        code, _ = agg.preview_add(self.UUID, channels="11,12")
+        self.assertEqual(code, 200)
+        self.assertEqual(self.mtx.added()["mxlAudioChannels"], "11,12")
+
     def test_it_is_created_on_demand(self):
         """An audio preview nobody is listening to should not be encoding."""
         agg.preview_add(self.UUID)
