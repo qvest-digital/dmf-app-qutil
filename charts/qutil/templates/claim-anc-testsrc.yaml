@@ -30,15 +30,17 @@ spec:
     jobRef: {{ .Values.booking.jobRef | quote }}
   parameters:
     flow:
-      group_hint: {{ .Values.ancTestSource.groupHint }}
+      group_hint: {{ .Values.ancTestSource.groupHint | quote }}
       data_output:
         id: {{ .Values.ancTestSource.flowId }}
         grain_rate:
           numerator: {{ .Values.ancTestSource.grainRate.numerator }}
           denominator: {{ .Values.ancTestSource.grainRate.denominator }}
-        # Where ATC normally sits in HD VANC. Nothing depends on it; a plausible
-        # value just makes the overlay's packet view look like real ancillary data.
-        anc_line: {{ .Values.ancTestSource.ancLine }}
+      # Beside data_output rather than inside it, which is where the function's
+      # chart reads it from. Where ATC normally sits in HD VANC. Nothing depends
+      # on it; a plausible value just makes the overlay's packet view look like
+      # real ancillary data.
+      anc_line: {{ .Values.ancTestSource.ancLine }}
     {{- with .Values.ancTestSource.parameters }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

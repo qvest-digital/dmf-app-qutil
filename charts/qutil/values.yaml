@@ -252,7 +252,10 @@ ancTestSource:
   enabled: false
   claimName: anc-testsrc
   className: mxl-anc-testsrc
-  groupHint: mxl-anc-testsrc
+  # libmxl parses the group hint as <group-name>:<role-in-group> and refuses
+  # to create the flow without the role. The producer's image passes this
+  # through as given, where the writer's appends :video or :audio itself.
+  groupHint: mxl-anc-testsrc:data
   # a0d2 = ancillary demo 1, next to the audio source's a0d1.
   flowId: a0d20000-0000-0000-0000-000000000001
   grainRate:
