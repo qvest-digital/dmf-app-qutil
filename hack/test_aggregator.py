@@ -69,9 +69,12 @@ class MtxRecorder:
     is what drives preview_add down the create branch.
     """
 
-    def __init__(self, existing=()):
+    def __init__(self, existing=(), running=None):
         self.calls = []
         self.existing = set(existing)
+        # Paths the server is still running. Defaults to the configured set;
+        # a test that wants the window where the two disagree names it.
+        self.running = None if running is None else set(running)
         # What a configured path reads back as, for the callers that compare
         # against it before deciding to write.
         self.configs = {}
@@ -83,12 +86,16 @@ class MtxRecorder:
             if name not in self.existing:
                 return 404, {}
             return 200, dict(self.configs.get(name, {}))
+        if path == "/v3/config/paths/list":
+            # One source of truth: a path the recorder says is configured is a
+            # path the configuration listing has to report, or a test can pass
+            # against a server that contradicts itself.
+            return 200, {"items": [{"name": n} for n in sorted(self.existing)]}
         if path == "/v3/paths/list":
-            # One source of truth: a path the recorder says exists is a path a
-            # listing has to report, or a test can pass against a server that
-            # contradicts itself.
+            # Running paths, which are not the same set: one outlives its
+            # configuration while its last reader drains.
             return 200, {"items": [{"name": n, "readers": []}
-                                   for n in sorted(self.existing)]}
+                                   for n in sorted(self.running or self.existing)]}
         return 200, {}
 
     def added(self):
@@ -305,6 +312,27 @@ class JoinedPreview(unittest.TestCase):
         self.assertEqual(res["path"], f"preview-{self.VIDEO}-{self.AUDIO}")
         self.assertEqual(self.mtx.added()["source"],
                          f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}?audio={self.AUDIO}")
+
+    def test_a_joined_path_being_torn_down_is_not_handed_out(self):
+        """A running path outlives its configuration.
+
+        The reaper deletes the configuration and the path keeps running until
+        its last reader drains. Reusing a name out of that window gives the
+        card a URL the media server answers with "path is not configured", and
+        the preview never starts -- which is worse than the second encoder the
+        reuse exists to avoid, because it never recovers.
+        """
+        joined = f"preview-{self.VIDEO}-{self.AUDIO}"
+        # Running but no longer configured: exactly the teardown window.
+        self.mtx.running = {joined}
+
+        code, res = agg.preview_add(self.VIDEO)
+
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.VIDEO}")
+        self.assertNotIn("audio", res)
+        self.assertEqual(self.mtx.added()["source"],
+                         f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}")
 
     def test_another_flows_joined_path_is_not_mistaken_for_this_ones(self):
         """A hyphen also separates a UUID's own fields, so the id matches whole."""
