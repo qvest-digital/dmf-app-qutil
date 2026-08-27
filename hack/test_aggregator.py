@@ -386,6 +386,53 @@ class NativeAudioPreview(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertIsNone(self.mtx.added())
 
+
+class PreviewSourceStartTimeout(unittest.TestCase):
+    """How long the server waits for a preview's source to come up.
+
+    Its own default is ten seconds. That is enough for a flow already in the
+    node's domain, and not enough for one that is not: opening that flow is
+    what makes the intent shim ask the node agent to mirror it, and no read
+    succeeds until the mirror exists. Ten seconds killed the source first, so a
+    preview of a flow originating on another node never started at all - and
+    the failure reads as "flow not found", which looks like the flow is missing
+    rather than like the wait being too short.
+    """
+
+    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.mtx = MtxRecorder()
+        self.flows = {self.VIDEO: video_flow(self.VIDEO),
+                      self.AUDIO: audio_flow(self.AUDIO)}
+        for p in [mock.patch.object(agg, "_mtx", self.mtx),
+                  mock.patch.object(agg, "_known_flow", lambda u: self.flows.get(u)),
+                  mock.patch.object(agg, "_idle_since", {})]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_video_preview_waits_longer_than_the_default(self):
+        agg.preview_add(self.VIDEO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_an_audio_preview_waits_too(self):
+        agg.preview_add(self.AUDIO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_a_joined_preview_waits_too(self):
+        """Two flows, so two chances of one needing a mirror."""
+        agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(self.mtx.added()["sourceOnDemandStartTimeout"],
+                         agg.SOURCE_START_TIMEOUT)
+
+    def test_the_wait_exceeds_the_servers_own_default(self):
+        """A value at or below ten seconds would reintroduce the bug."""
+        self.assertTrue(agg.SOURCE_START_TIMEOUT.endswith("s"))
+        self.assertGreater(int(agg.SOURCE_START_TIMEOUT[:-1]), 10)
+
 class PreviewReaper(unittest.TestCase):
     """When an idle preview path is dropped, and when it is not.
 

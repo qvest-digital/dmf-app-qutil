@@ -1096,6 +1096,14 @@ _PREVIEW_PREFIX = "preview-"
 #
 # The grace has to clear the client's own budget, which is 2.5 s of ICE
 # gathering plus an 8 s connect timeout for WHEP, and a 4 s retry for HLS.
+# How long a path's source may take to come up before the media server gives up
+# on it. Its own default is ten seconds, which is enough for a flow already in
+# the node's domain and not enough for one that is not: opening that flow makes
+# the intent shim ask the node agent to mirror it, and the mirror has to be
+# established before any read succeeds. Ten seconds killed the source first, so
+# a preview of a flow originating on another node never started.
+SOURCE_START_TIMEOUT = "60s"
+
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
 
@@ -1249,6 +1257,7 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # of refusing it.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
                 "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
@@ -1293,6 +1302,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
     if code != 200:
         conf = {"source": f"mxl://{MXL_DOMAIN}/{video_uuid}?audio={audio_uuid}",
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
                 "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
@@ -1323,7 +1333,8 @@ def preview_add_audio(uuid, channels=""):
 
     name = _PREVIEW_PREFIX + uuid
     conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
-            "sourceOnDemandCloseAfter": "10s"}
+            "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
     if channels:
         conf["mxlAudioChannels"] = channels
 
