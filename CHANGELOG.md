@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.28](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.27...v1.0.0-rc.28) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** present a CDN token so HLS stops answering 401 ([#141](https://github.com/qvest-digital/dmf-app-qutil/issues/141)) ([488bf2a](https://github.com/qvest-digital/dmf-app-qutil/commit/488bf2a04159271843d4b836dfc0318850eaf2e3))
+
 ## [1.0.0-rc.27](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.26...v1.0.0-rc.27) (2026-08-27)
 
 
