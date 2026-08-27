@@ -75,7 +75,26 @@ export async function discoverIceServers(path: string): Promise<RTCIceServer[]> 
     clearTimeout(timer);
   }
 }
-/** Overall budget before the attempt is declared a failure and HLS takes over. */
+/**
+ * Budget for getting an answer: the preflight, the offer, and the POST.
+ *
+ * Generous, because most of it is the server's and not the connection's. A
+ * preview path is created on demand, so the first offer for a flow is answered
+ * only once the server has opened it, started an encoder and produced a frame,
+ * and where the flow has to be mirrored to that node first it is seconds
+ * before any of that begins. None of that says anything about whether the
+ * connection will work.
+ */
+const SETUP_TIMEOUT_MS = 20000;
+/**
+ * Budget for the connection itself, once there is an answer to connect with.
+ *
+ * Counted from the answer rather than from the start of the attempt. Sharing
+ * one budget with the setup above meant a slow source spent it: measured on
+ * one cluster, a cold offer took five of eight seconds to be answered, leaving
+ * too little for the candidate exchange, so the card fell back to HLS on a
+ * connection that would have formed.
+ */
 const CONNECT_TIMEOUT_MS = 8000;
 
 /**
@@ -130,7 +149,7 @@ export function whep(
   };
 
   entry = registry.track({ kind: 'pc', stop });
-  timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
+  timer = setTimeout(fail, SETUP_TIMEOUT_MS);
 
   const gatherIce = (peer: RTCPeerConnection) =>
     new Promise<void>((resolve) => {
@@ -196,6 +215,12 @@ export function whep(
       const sdp = await res.text();
       if (done) return;
       await peer.setRemoteDescription({ type: 'answer', sdp });
+      if (done) return;
+      // The setup is over and the connection starts here, so the budget does
+      // too. Whatever the server spent answering is not the candidate
+      // exchange's to pay for.
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
     } catch {
       fail();
     }
