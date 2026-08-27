@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.33](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.32...v1.0.0-rc.33) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** stop a slow answer spending the connection's budget ([#151](https://github.com/qvest-digital/dmf-app-qutil/issues/151)) ([00cee92](https://github.com/qvest-digital/dmf-app-qutil/commit/00cee9229ba94462f48539c527dadd3708e8eeb8))
+
 ## [1.0.0-rc.32](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.31...v1.0.0-rc.32) (2026-08-27)
 
 
