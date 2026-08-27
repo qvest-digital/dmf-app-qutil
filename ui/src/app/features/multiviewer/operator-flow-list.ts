@@ -38,8 +38,8 @@ export class OperatorFlowList {
   );
 
   /**
-   * The flows one source published render as one box, so they have to be
-   * adjacent. A single flow is a group of one and keeps the box it had.
+   * The flows of one NMOS group render as one box, so they have to be
+   * adjacent. An ungrouped flow is a group of one and keeps the box it had.
    */
   protected readonly groups = computed(() => groupedFlowRows(this.flows()));
 

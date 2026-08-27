@@ -206,7 +206,7 @@ main.previewing {
   border-radius: 14px;
   padding: 12px 14px;
 }
-/* The flows one producer tagged into a single source read as one box: no gap
+/* The flows one producer tagged into a single NMOS group read as one box: no gap
    inside the group, only the outer corners of the block round, and a hairline
    where two rows meet so each stays legible. The rows themselves are the flex
    items here, their host element being display:contents, which is why the

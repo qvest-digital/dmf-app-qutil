@@ -46,7 +46,7 @@ describe('OperatorFlowList grouping', () => {
     );
   }
 
-  it('renders the flows of one source inside one group', () => {
+  it('renders the flows of one group inside one group box', () => {
     mount([AUDIO, LONE, VIDEO]);
 
     expect(groups()).toHaveLength(2);
