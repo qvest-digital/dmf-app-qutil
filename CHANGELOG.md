@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.32](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.31...v1.0.0-rc.32) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** open an audio card the way a video one is opened ([#149](https://github.com/qvest-digital/dmf-app-qutil/issues/149)) ([9885a21](https://github.com/qvest-digital/dmf-app-qutil/commit/9885a218d2e18b5d3c08f1567edd41dbbaece77b))
+
 ## [1.0.0-rc.31](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.30...v1.0.0-rc.31) (2026-08-27)
 
 
