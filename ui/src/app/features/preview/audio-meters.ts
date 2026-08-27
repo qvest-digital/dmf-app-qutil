@@ -70,21 +70,16 @@ const WIDE_STRIP_CHANNELS = 8;
 /**
  * Level meters and a spectrum for an audio preview.
  *
- * The bars are the flow's channels, all of them, from the levels the
- * audio-preview reports — only two are ever delivered to the browser, so
- * measuring the decoded stream would meter the pair being listened to and say
- * nothing about the rest of a 12-channel flow. The spectrum stays client-side
- * off the decoded stream, which is the part that is actually audible.
+ * The bars are measured from the decoded stream, so they meter the pair being
+ * listened to. A wide flow shows that pair rather than all of its channels:
+ * nothing reports the rest since the media server took over reading the flow,
+ * and drawing them from no measurement would claim they are silent. The
+ * spectrum comes from the same stream.
  *
- * Those levels arrive a few times a second and the canvas redraws sixty times,
- * so the bars ease towards each reported value rather than being set to it.
- * Anything that arrives at the target and stops -- setting it outright, or
- * limiting the rate of change -- holds still until the next poll, which is a
- * step at poll rate however current the number is.
- *
- * With no reported levels (an audio-preview that predates them) the bars fall
- * back to measuring the decoded stream, which is right for the stereo flows
- * that case can still play.
+ * sourcePeaks stays as an input for a reporter that measures every channel,
+ * should one exist again; with none the bars ease towards the measured values
+ * the same way, because the easing is what keeps a bar moving between frames
+ * rather than stepping at whatever rate a number arrives.
  */
 @Component({
   selector: 'mv-audio-meters',
