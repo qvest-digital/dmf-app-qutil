@@ -236,6 +236,23 @@ generators:
       cpu: "2500m"
       memory: "1Gi"
 
+# An ancillary-data producer, so the multiviewer has a video/smpte291 flow to
+# list and preview. Off, and not yet turnable on: the class does not exist in
+# the DMF catalog and the image it would point at has cut no release. See the
+# claim template for what has to land first.
+ancTestSource:
+  enabled: false
+  claimName: anc-testsrc
+  className: mxl-anc-testsrc
+  groupHint: mxl-anc-testsrc
+  # a0d2 = ancillary demo 1, next to the audio source's a0d1.
+  flowId: a0d20000-0000-0000-0000-000000000001
+  grainRate:
+    numerator: 30000
+    denominator: 1001
+  ancLine: 9
+  parameters: {}
+
 booking:
   jobRef: mediaops/demo-app
   # These claims are applied by this release, not raised per job, so their
