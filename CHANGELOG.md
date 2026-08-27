@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-rc.30](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.29...v1.0.0-rc.30) (2026-08-27)
+
+
+### Bug Fixes
+
+* **ui:** give a data flow its own format badge ([da762e6](https://github.com/qvest-digital/dmf-app-qutil/commit/da762e62acfe3263cfd5863cbdf844573349bc10))
+* **ui:** make the video badge label legible ([da762e6](https://github.com/qvest-digital/dmf-app-qutil/commit/da762e62acfe3263cfd5863cbdf844573349bc10))
+
 ## [1.0.0-rc.29](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.28...v1.0.0-rc.29) (2026-08-27)
 
 
