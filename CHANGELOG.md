@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.34](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.33...v1.0.0-rc.34) (2026-08-27)
+
+
+### Features
+
+* **chart:** carry the ANC producer's booking ([#139](https://github.com/qvest-digital/dmf-app-qutil/issues/139)) ([657cd5e](https://github.com/qvest-digital/dmf-app-qutil/commit/657cd5e9e0e444cf13f0c8528c609309592a92ae))
+
+
+### Bug Fixes
+
+* **aggregator:** refuse a channel pair the flow does not carry ([#154](https://github.com/qvest-digital/dmf-app-qutil/issues/154)) ([3f34f86](https://github.com/qvest-digital/dmf-app-qutil/commit/3f34f86b900df52aad87ffa7515156ea287e0b85))
+
 ## [1.0.0-rc.33](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.32...v1.0.0-rc.33) (2026-08-27)
 
 
