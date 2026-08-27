@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { OperatorFlow } from '../../core/api/models';
-import { audioSiblingOf } from '../preview/flow-groups';
+import { audioSiblingOf, groupedFlowRows } from '../preview/flow-groups';
 import { OperatorFlowRow } from './operator-flow-row';
 
 /**
@@ -17,8 +17,12 @@ import { OperatorFlowRow } from './operator-flow-row';
         Operator flows <span class="of-count">{{ count() }}</span>
       </h2>
       <div class="flows">
-        @for (flow of flows(); track flow.id) {
-          <mv-operator-flow-row [flow]="flow" [audioSibling]="siblingOf(flow)" />
+        @for (group of groups(); track group[0].id) {
+          <div class="flow-group">
+            @for (flow of group; track flow.id) {
+              <mv-operator-flow-row [flow]="flow" [audioSibling]="siblingOf(flow)" />
+            }
+          </div>
         } @empty {
           <div class="flow empty">No flows registered with the operator.</div>
         }
@@ -32,6 +36,12 @@ export class OperatorFlowList {
   protected readonly count = computed(() =>
     this.flows().length ? `(${this.flows().length})` : '',
   );
+
+  /**
+   * The flows of one NMOS group render as one box, so they have to be
+   * adjacent. An ungrouped flow is a group of one and keeps the box it had.
+   */
+  protected readonly groups = computed(() => groupedFlowRows(this.flows()));
 
   /**
    * Computed once per render rather than per row: grouping walks the whole

@@ -206,6 +206,24 @@ main.previewing {
   border-radius: 14px;
   padding: 12px 14px;
 }
+/* The flows one producer tagged into a single NMOS group read as one box: no gap
+   inside the group, only the outer corners of the block round, and a hairline
+   where two rows meet so each stays legible. The rows themselves are the flex
+   items here, their host element being display:contents, which is why the
+   position selectors have to name that host. */
+.flow-group {
+  display: flex;
+  flex-direction: column;
+}
+.flow-group > mv-operator-flow-row:not(:first-child) .flow {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.flow-group > mv-operator-flow-row:not(:last-child) .flow {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
 .flow .row {
   display: grid;
   grid-template-columns: auto 1fr auto auto;
