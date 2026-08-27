@@ -18,9 +18,7 @@ const DEFAULT_CHANNELS = 2;
         <span class="name">
           {{ flow().label }}
           @if (format()) {
-            <span class="badge" [class]="format() === 'audio' ? 'audio' : 'video'">{{
-              format()
-            }}</span>
+            <span class="badge" [class]="badgeClass()">{{ format() }}</span>
           }
         </span>
         <span class="quick">
@@ -85,6 +83,14 @@ export class OperatorFlowRow {
   protected readonly open = signal(false);
 
   protected readonly format = computed(() => (this.flow().format ?? '').toLowerCase());
+  /**
+   * One pill per format the list can show. An unrecognised format borrows the
+   * video pill rather than rendering an unstyled badge.
+   */
+  protected readonly badgeClass = computed(() => {
+    const format = this.format();
+    return format === 'audio' || format === 'data' ? format : 'video';
+  });
   protected readonly origin = computed(() => originState(this.flow().originFresh));
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
 
@@ -99,6 +105,11 @@ export class OperatorFlowRow {
     return audio ? `Picture and sound, with ${audio.label}` : '';
   });
 
+  /**
+   * Video is pulled by mediamtx, audio is pushed by the audio-preview pod, and a
+   * data flow is read as decoded ANC packets. Anything else has no route to a
+   * browser at all.
+   */
   protected readonly previewable = computed(
     () => this.format() === 'video' || this.format() === 'audio' || this.format() === 'data',
   );

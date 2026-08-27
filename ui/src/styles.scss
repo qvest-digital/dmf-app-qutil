@@ -264,11 +264,18 @@ main.previewing {
 }
 .flow .badge.video {
   background: rgba(200, 241, 105, 0.18);
-  color: #4f7a00;
+  color: var(--qv-white);
 }
 .flow .badge.audio {
   background: rgba(240, 80, 18, 0.16);
   color: var(--qv-orange);
+}
+/* The label is lighter than the tint it sits on. The pill resolves to a mid
+   green over the teal panel, where the tint's own #ffd400 reads at 4.8:1 and
+   this at 5.5:1. */
+.flow .badge.data {
+  background: rgba(255, 214, 0, 0.18);
+  color: #ffe680;
 }
 .flow .of-meta {
   font-size: 11px;
