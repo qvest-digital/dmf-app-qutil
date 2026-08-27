@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.37](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.36...v1.0.0-rc.37) (2026-08-27)
+
+
+### Features
+
+* **ui:** join a group's flow rows into one box ([8ccebf1](https://github.com/qvest-digital/dmf-app-qutil/commit/8ccebf13031e72814c43f463dc37997fefd8fafa))
+
+
+### Bug Fixes
+
+* **ui:** parse a group hint the way the register defines it ([8ccebf1](https://github.com/qvest-digital/dmf-app-qutil/commit/8ccebf13031e72814c43f463dc37997fefd8fafa))
+* **ui:** take a group member's track from its format, not its role ([8ccebf1](https://github.com/qvest-digital/dmf-app-qutil/commit/8ccebf13031e72814c43f463dc37997fefd8fafa))
+
 ## [1.0.0-rc.36](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.35...v1.0.0-rc.36) (2026-08-27)
 
 
