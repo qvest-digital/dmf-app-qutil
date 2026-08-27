@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.31](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.30...v1.0.0-rc.31) (2026-08-27)
+
+
+### Bug Fixes
+
+* **aggregator:** reuse a joined path only while it is configured ([#147](https://github.com/qvest-digital/dmf-app-qutil/issues/147)) ([1c90d4b](https://github.com/qvest-digital/dmf-app-qutil/commit/1c90d4b2e7444a64ca4a9b9aa5caeb2531f0b9a9))
+
 ## [1.0.0-rc.30](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.29...v1.0.0-rc.30) (2026-08-27)
 
 
