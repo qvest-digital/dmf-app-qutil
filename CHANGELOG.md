@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.35](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.34...v1.0.0-rc.35) (2026-08-27)
+
+
+### Bug Fixes
+
+* **chart:** make the ANC booking reach the function ([#157](https://github.com/qvest-digital/dmf-app-qutil/issues/157)) ([99751f4](https://github.com/qvest-digital/dmf-app-qutil/commit/99751f4d001a3a89a938f7c67a1e4919cba9e182))
+
 ## [1.0.0-rc.34](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.33...v1.0.0-rc.34) (2026-08-27)
 
 
