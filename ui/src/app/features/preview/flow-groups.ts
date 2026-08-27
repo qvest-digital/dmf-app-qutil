@@ -101,3 +101,40 @@ export function audioSiblingOf(
   const group = groupFlows(flows).find((g) => g.source === hint.source);
   return group?.audio ?? null;
 }
+
+/** The flows a source published, picture first, in the order a row shows them. */
+function groupMembers(group: FlowGroup): OperatorFlow[] {
+  return [group.video, group.audio, group.data].filter((f): f is OperatorFlow => !!f);
+}
+
+/**
+ * The inventory as a list renders it: every flow exactly once, with the flows
+ * one producer tagged into a single source adjacent and in track order.
+ *
+ * A group takes the position of its first member, so a poll that returns the
+ * inventory in another order does not move a group somebody is reading.
+ * Everything `groupFlows` leaves out -- no hint, a role nothing plays, the
+ * second flow of a track a source named twice -- comes back as a row of its
+ * own, because the list still has to show it.
+ */
+export function groupedFlowRows(flows: readonly OperatorFlow[]): OperatorFlow[][] {
+  const bySource = new Map(groupFlows(flows).map((g) => [g.source, groupMembers(g)]));
+  const sourceOf = new Map<string, string>();
+  for (const [source, members] of bySource) {
+    for (const member of members) sourceOf.set(member.id, source);
+  }
+
+  const rows: OperatorFlow[][] = [];
+  const taken = new Set<string>();
+  for (const flow of flows) {
+    const source = sourceOf.get(flow.id);
+    if (source === undefined) {
+      rows.push([flow]);
+      continue;
+    }
+    if (taken.has(source)) continue;
+    taken.add(source);
+    rows.push(bySource.get(source)!);
+  }
+  return rows;
+}
