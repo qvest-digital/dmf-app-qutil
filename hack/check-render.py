@@ -48,6 +48,8 @@ CASES = {
     },
     "no-ingress": {"ingress": {"enabled": False, "hostname": "demo.example"}},
     "no-audio-writer": {"writers": {"audio": {"enabled": False}}},
+    # The other branch of the CDN token: no Secret, no env, no header.
+    "no-cdn-token": {"mediamtx": {"cdn": {"enabled": False}}},
     # The default. The case that matters is the other one: with generators on,
     # the chart grows a Role that can create and delete claims.
     "generators": {"generators": {"enabled": True}},

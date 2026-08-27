@@ -39,6 +39,20 @@
       dynamic a {{ .Values.mediamtx.claimName }}-endpoints.{{ include "qutil.productionNamespace" . }} 8888
       lb_policy cookie mtx_hls
       {{- end }}
+      {{- if and .Values.mediamtx.enabled .Values.mediamtx.cdn.enabled }}
+      {{- /* Identifies the request as coming from this proxy, which makes the
+             media server skip the per-client session it would otherwise hand
+             out over cookies: a 302 to set one, a second carrying the session
+             id, and a 401 on everything after the first playlist that does
+             not carry it back. The session is per-process and pinned to the
+             client IP, which behind a proxy is this pod's, so it survives
+             neither a second replica nor a browser that declines a Secure,
+             SameSite=None, Partitioned cookie with no Path.
+
+             header_up replaces whatever Authorization arrived from outside,
+             so a client does not get to present its own. */}}
+      header_up Authorization "Bearer {$MTX_HLS_CDN_SECRET}"
+      {{- end }}
       header_down Location "^/(.*)$" "/hls/$1"
     }
   }
