@@ -22,7 +22,7 @@ app needs is a `MediaFunctionClaim` in that namespace:
 | four video writers | `mxl-writer` | one v210 test-pattern flow each |
 | one audio writer | `mxl-writer` | one audio flow, video disabled |
 | mediamtx | `mediamtx` | RTSP, HLS, WebRTC and an HTTP API |
-| compositor | `compositor` | a mosaic, plus the audio preview |
+| compositor | `compositor` | a mosaic |
 
 The chart in this repository renders those claims into a namespace named by a
 required value. It renders no workload for any of them: the class names a
@@ -68,14 +68,23 @@ Cluster-scoped `MxlFlow` records each flow's origin and freshness;
 ## 3. Serving a flow
 
 mediamtx reads a flow zero-copy from the local domain through its MXL static
-source and republishes it. Its `mxlSource` refuses any flow whose format is
-not video, which is why audio takes the path in section 4.
+source and republishes it. Video and audio both go through it, and a path can
+name one of each: the server publishes them as two tracks, which is what lets
+a browser play picture and sound in step. Nothing downstream rejoins separate
+flows, so a card that wants both has to name both.
+
+An audio path publishes one Opus track, and because the server muxes fMP4
+rather than MPEG-TS that track serves HLS as well as WebRTC. A browser plays
+two channels however wide the flow is, so the path names the 1-based pair;
+naming another pair reconfigures the path, and a listener hears the gap.
 
 **Paths are created at runtime, not declared.** The booking carries one
 publisher path for the compositor's mosaic and nothing else. Every per-flow
 path is added over the mediamtx HTTP API when something wants it and removed
-when it stops wanting it. A path added this way starts its source immediately;
-it does not need to exist at boot.
+when it stops wanting it. A path added this way does not need to exist at boot,
+and it opens its flow only once a reader attaches: an encode nobody is watching
+costs about 1.4 cores, and four of seven paths were measured running for zero
+readers before the sources were made on-demand.
 
 This is not a preference. A path declared in the booking reaches the server as
 a config file, so changing the set restarts it, and editing a bound claim's
@@ -87,26 +96,18 @@ plane defines, not to an application.
 
 ---
 
-## 4. The compositor and the audio preview
+## 4. The compositor
 
 The compositor reads flows zero-copy through libmxl, lays them out in one
 GStreamer `compositor` element at their native tile size, encodes the mosaic
 once with x264, and publishes it over RTSP. Grid geometry is derived from the
 flow count: `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)`.
 
-The same image carries a second entry point, the audio preview. Audio flows
-cannot go through `mxlSource`, so the preview reads a flow's per-channel ring
-buffers, interleaves them, encodes Opus for WebRTC and AAC for HLS, and
-publishes both into paths created for it. Neither transport carries the
-other's codec, which is why there are two.
+It publishes to the media server's origin address rather than its read one. A
+path added over the API lives in one process's memory, so a publish has to
+land on the instance the read replicas proxy.
 
-What it publishes is two channels, whatever the flow's width: neither
-transport carries more, and a wider one fails to negotiate rather than
-degrading. The pair is a parameter of `/start`, so a 12-channel flow is
-audible a pair at a time, and `/status` carries a level per channel so the
-overlay can show all of them while only two are playing.
-
-Both link `libmxl`. MXL's domain protocol requires every reader and writer
+It links `libmxl`. MXL's domain protocol requires every reader and writer
 sharing a domain to use a byte-identical `libmxl.so`, so the `go-mxl` tag a
 function image is built against and the tag the mxl-k8s gateway was built from
 must match exactly. That lock-step is enforced in the function repositories,
@@ -123,10 +124,9 @@ mediamtx API to open and close preview paths, and -- where the install enables i
 cluster-wide; both of its write grants are Roles in the production namespace, and
 it refuses to delete a claim that does not carry the label it stamps on its own.
 
-It finds mediamtx and the audio preview through the endpoints their claims
-publish under `status.handle.endpoints`, gated on `handle.ready`. No Service
-name is hardcoded: the namespace a booking lands in is not this app's to
-assume.
+It finds mediamtx through the endpoints its claim publishes under
+`status.handle.endpoints`, gated on `handle.ready`. No Service name is
+hardcoded: the namespace a booking lands in is not this app's to assume.
 
 **Frontend.** An Angular app served by Caddy. Each tile plays its own
 `<video>`, trying WHEP first and falling back to HLS. Players are tracked in a
