@@ -1,11 +1,11 @@
 {{- if .Values.compositor.enabled }}
-{{- /* The mosaic, and the audio preview that rides in the same image.
+{{- /* The mosaic.
 
        compositeOut is a peer address: it names the media server booked beside
        this one, so it can only be filled in once both are in the same
        production namespace.
 
-       Both publish, so both address the media server's origin Service rather
+       It publishes, so it addresses the media server's origin Service rather
        than its read Service. The read Service fronts replicas, which proxy a
        stream rather than receive one, and a publisher landing on one would be
        writing into the instance meant to be proxying it. The origin Service is
