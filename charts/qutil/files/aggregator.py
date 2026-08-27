@@ -1044,8 +1044,13 @@ def _resolve_base(override, cache_key, claim_name, class_name, ep_name):
         if hit and now - hit[0] < _ENDPOINT_TTL:
             return hit[1]
     url = _claim_endpoint(claim_name, class_name, ep_name)
-    with _endpoint_lock:
-        _endpoint_cache[cache_key] = (now, url)
+    # Only a hit is cached. A claim reads not-ready for as long as its pod is
+    # restarting, and remembering that for the whole TTL answers every caller
+    # "no ready claim" for ten seconds after the claim came back -- which the
+    # card shows as a preview that failed, on a media server that is fine.
+    if url:
+        with _endpoint_lock:
+            _endpoint_cache[cache_key] = (now, url)
     return url
 
 

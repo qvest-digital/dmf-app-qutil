@@ -19,9 +19,6 @@ import { AncGrainView } from './anc-grain';
 import { AudioMeters } from './audio-meters';
 import { key, PreviewController, PreviewRequest } from './preview-controller';
 
-/** Audio readiness poll: 30 tries, one a second. */
-const AUDIO_TRIES = 30;
-const AUDIO_POLL_MS = 1000;
 /** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
 const HLS_RETRY_MS = 4000;
 /**
@@ -202,7 +199,7 @@ export class FlowPreview {
           return;
         }
         if (session.format === 'audio') {
-          this.awaitAudio(id, session, request.channels, AUDIO_TRIES);
+          this.playAudio(session, request.channels);
           return;
         }
         this.playVideo(session);
@@ -221,50 +218,6 @@ export class FlowPreview {
       out.push(c + 1 <= channels ? [c, c + 1] : [c]);
     }
     return out;
-  }
-
-  /**
-   * /start only spawns the reader: opening the flow can take seconds while the
-   * intent shim waits for the gateway to mirror it, and it can fail. Poll until it
-   * is actually producing, so a dead session says so instead of spinning forever.
-   */
-  private awaitAudio(id: string, session: PreviewSession, channels: number, tries: number): void {
-    if (this.sessionId !== id) return;
-    const again = () => {
-      this.timer = setTimeout(
-        () => this.awaitAudio(id, session, channels, tries - 1),
-        AUDIO_POLL_MS,
-      );
-    };
-    this.api.previewStatus(id).subscribe({
-      next: (status) => {
-        if (this.sessionId !== id) return;
-        if (status.error) {
-          this.state.set(`preview failed: ${status.error}`);
-          return;
-        }
-        if (status.running) {
-          this.state.set('connecting audio…');
-          this.applyStatus(status);
-          this.playAudio(session, status.channels || channels);
-          return;
-        }
-        if (tries <= 0) {
-          this.state.set('preview timed out — flow produced no audio');
-          return;
-        }
-        this.state.set('waiting for the flow to be readable here…');
-        again();
-      },
-      error: () => {
-        if (this.sessionId !== id) return;
-        if (tries <= 0) {
-          this.state.set('preview status unavailable');
-          return;
-        }
-        again();
-      },
-    });
   }
 
   /**
