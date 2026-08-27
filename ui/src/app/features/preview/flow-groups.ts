@@ -8,6 +8,8 @@ import { OperatorFlow } from '../../core/api/models';
  * whose value is `<group-name>:<role-in-group>[:<group-scope>]`. An SRT ingest
  * writing picture, sound and ancillary data gives all three one group name,
  * which is the only thing in the system that says those flows belong together.
+ * The name is the whole of the relationship: what each member carries comes
+ * from its own format, and its role only tells the members of one track apart.
  *
  * The tag is an array, and the register defines its first entry as the natural
  * group: any further entry is a membership meant for something other than
@@ -53,21 +55,21 @@ export function parseGroupHint(hint: string | null | undefined): GroupHint | nul
 }
 
 /**
- * Which track a role names, or null for one this app has no use for.
+ * Which track a flow occupies, from the flow's own NMOS format, or null for a
+ * format this app cannot play.
  *
- * The register defines no standard roles, so this matches what the producers in
- * this system write and nothing else: an SRT ingest writes `Video` and `Audio`,
- * a vendor source writes them lower case, and ancillary data arrives as one
- * word or as two. A device naming its roles the way the register's own examples
- * do, `Primary` beside `Audio 1`, groups under none of them.
+ * The role is deliberately not read for this. The register defines no standard
+ * roles and its own examples are `Primary` beside `Audio 1`, so a role tells a
+ * consumer which member of a group it is looking at and nothing about what the
+ * member carries. The format does say, the aggregator already keys its preview
+ * endpoints on it, and it is the same string a flow's badge shows.
  */
-export function roleTrack(role: string): keyof Omit<FlowGroup, 'name'> | null {
-  switch (role.trim().toLowerCase()) {
+export function flowTrack(flow: OperatorFlow): keyof Omit<FlowGroup, 'name'> | null {
+  switch ((flow.format ?? '').trim().toLowerCase()) {
     case 'video':
       return 'video';
     case 'audio':
       return 'audio';
-    case 'ancillary data':
     case 'data':
       return 'data';
     default:
@@ -76,26 +78,46 @@ export function roleTrack(role: string): keyof Omit<FlowGroup, 'name'> | null {
 }
 
 /**
+ * Order two roles the way the register asks them to be read: as an index into a
+ * group, sorted alphanumerically, so `Audio 2` comes before `Audio 10`.
+ */
+function byRole(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/**
  * Group flows by the group name their hint carries.
  *
- * A flow with no hint, an unparseable one, or a role nothing plays is left out
- * entirely: a group exists to say two flows belong together, and one that
- * cannot say so is not worth offering. Where a group names the same track twice
- * the first wins, which keeps the result stable against a reordered poll.
+ * A flow with no hint, an unparseable one, or a format this app cannot play is
+ * left out entirely: a group exists to say two flows belong together, and one
+ * that cannot say so is not worth offering.
+ *
+ * A group may hold several flows of one track -- the register's own example is
+ * a camera with two audio senders -- and a track has room for one. The lowest
+ * role wins it, because that is what the register gives a role for: an index
+ * into the group that sorts. Picking on the role rather than on the order the
+ * flows arrived in also survives a reordered poll, and it is the difference
+ * between `Audio 1` reaching a preview and whichever of `Audio 1` and `Audio 2`
+ * happens to hold the lower uuid.
  */
 export function groupFlows(flows: readonly OperatorFlow[]): FlowGroup[] {
   const groups = new Map<string, FlowGroup>();
+  const roles = new Map<string, string>();
   for (const flow of flows) {
     const hint = parseGroupHint(flow.grouphint);
     if (!hint) continue;
-    const track = roleTrack(hint.role);
+    const track = flowTrack(flow);
     if (!track) continue;
     let group = groups.get(hint.group);
     if (!group) {
       group = { name: hint.group };
       groups.set(hint.group, group);
     }
-    if (!group[track]) group[track] = flow;
+    const held = group[track];
+    const key = `${hint.group}:${track}`;
+    if (held && byRole(roles.get(key)!, hint.role) <= 0) continue;
+    group[track] = flow;
+    roles.set(key, hint.role);
   }
   return [...groups.values()];
 }
@@ -103,16 +125,17 @@ export function groupFlows(flows: readonly OperatorFlow[]): FlowGroup[] {
 /**
  * The audio flow that belongs with a video flow, if the two were tagged into
  * one group. Null when the video flow carries no hint, its group published no
- * audio, or the flow is not the group's video.
+ * audio, or this is not the flow that took the group's video track.
  */
 export function audioSiblingOf(
   video: OperatorFlow,
   flows: readonly OperatorFlow[],
 ): OperatorFlow | null {
   const hint = parseGroupHint(video.grouphint);
-  if (!hint || roleTrack(hint.role) !== 'video') return null;
+  if (!hint) return null;
   const group = groupFlows(flows).find((g) => g.name === hint.group);
-  return group?.audio ?? null;
+  if (group?.video?.id !== video.id) return null;
+  return group.audio ?? null;
 }
 
 /** The flows a group published, picture first, in the order a row shows them. */

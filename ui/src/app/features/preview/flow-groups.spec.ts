@@ -1,10 +1,10 @@
 import { OperatorFlow } from '../../core/api/models';
 import {
   audioSiblingOf,
+  flowTrack,
   groupedFlowRows,
   groupFlows,
   parseGroupHint,
-  roleTrack,
 } from './flow-groups';
 
 function flow(id: string, grouphint: string | null, format = 'video'): OperatorFlow {
@@ -57,22 +57,20 @@ describe('parseGroupHint', () => {
   );
 });
 
-describe('roleTrack', () => {
-  /** Producers disagree on casing, and ancillary data is two words. */
+describe('flowTrack', () => {
+  /** The aggregator sends the format URN's last segment; producers disagree on casing. */
   it.each([
-    ['Video', 'video'],
     ['video', 'video'],
-    ['Audio', 'audio'],
+    ['Video', 'video'],
     ['audio', 'audio'],
-    ['Ancillary Data', 'data'],
-    ['ancillary data', 'data'],
-    [' Video ', 'video'],
-  ])('reads %p as %p', (role, track) => {
-    expect(roleTrack(role)).toBe(track);
+    ['data', 'data'],
+    [' Data ', 'data'],
+  ])('reads the format %p as %p', (format, track) => {
+    expect(flowTrack(flow('f1', null, format))).toBe(track);
   });
 
-  it.each(['mux', 'subtitle', ''])('has no track for %p', (role) => {
-    expect(roleTrack(role)).toBeNull();
+  it.each(['mux', 'subtitle', '', undefined, null])('has no track for the format %p', (format) => {
+    expect(flowTrack({ id: 'f1', label: 'f1', format } as OperatorFlow)).toBeNull();
   });
 });
 
@@ -107,12 +105,55 @@ describe('groupFlows', () => {
     expect(groupFlows([flow('v1', null)])).toEqual([]);
   });
 
-  it('leaves out a role with nothing to play it', () => {
-    expect(groupFlows([flow('m1', 'srt-ingest-1:mux')])).toEqual([]);
+  it('leaves out a format nothing plays', () => {
+    expect(groupFlows([flow('m1', 'srt-ingest-1:Mux', 'mux')])).toEqual([]);
   });
 
-  /** A reordered poll must not change which flow a group names. */
-  it('keeps the first of a duplicated track', () => {
+  /**
+   * The register defines no standard roles, and its own example of a camera is
+   * `Primary` beside `Audio 1`. Read as tracks those name nothing, so the role
+   * is not what says which track a flow fills.
+   */
+  it('takes the track from the format, whatever the role says', () => {
+    const groups = groupFlows([
+      flow('v1', 'Camera:Primary'),
+      flow('a1', 'Camera:Audio 1', 'audio'),
+      flow('d1', 'Camera:Ancillary Data', 'data'),
+    ]);
+
+    expect(groups[0].video?.id).toBe('v1');
+    expect(groups[0].audio?.id).toBe('a1');
+    expect(groups[0].data?.id).toBe('d1');
+  });
+
+  /**
+   * A camera publishing two audio senders fills the one audio track from the
+   * lower role, not from whichever flow the poll returned first.
+   */
+  it('gives a track to the lowest role', () => {
+    const groups = groupFlows([
+      flow('a2', 'Camera:Audio 2', 'audio'),
+      flow('a1', 'Camera:Audio 1', 'audio'),
+    ]);
+
+    expect(groups[0].audio?.id).toBe('a1');
+  });
+
+  /** A role indexes a group, so it sorts the way a reader counts. */
+  it('sorts a role numerically rather than by digit', () => {
+    const groups = groupFlows([
+      flow('a10', 'Camera:Audio 10', 'audio'),
+      flow('a2', 'Camera:Audio 2', 'audio'),
+    ]);
+
+    expect(groups[0].audio?.id).toBe('a2');
+  });
+
+  /**
+   * Roles are required to be unique inside a group, so two flows in one role is
+   * a malformed group. Keeping the first still has to be stable.
+   */
+  it('keeps the first of two flows in one role', () => {
     const groups = groupFlows([
       flow('a1', 'srt-ingest-1:Audio', 'audio'),
       flow('a2', 'srt-ingest-1:Audio', 'audio'),
@@ -144,6 +185,22 @@ describe('audioSiblingOf', () => {
   /** Asking an audio flow for its audio sibling is a caller error, not a pair. */
   it('has none when asked about a flow that is not the video track', () => {
     expect(audioSiblingOf(flows[1], flows)).toBeNull();
+  });
+
+  /**
+   * Two pictures in one group, one pair. The sound goes with the video the
+   * group's roles put first: the pair decides the media server path name, and a
+   * second pair would encode the same sound against a second picture.
+   */
+  it('has none for a video flow that did not take the group video track', () => {
+    const camera = [
+      flow('v1', 'Camera:Primary'),
+      flow('v2', 'Camera:Secondary'),
+      flow('a1', 'Camera:Audio 1', 'audio'),
+    ];
+
+    expect(audioSiblingOf(camera[0], camera)?.id).toBe('a1');
+    expect(audioSiblingOf(camera[1], camera)).toBeNull();
   });
 });
 
@@ -197,7 +254,7 @@ describe('groupedFlowRows', () => {
   /** The list shows the whole inventory, grouped or not. */
   it.each([
     ['a flow with no hint', flow('x1', null)],
-    ['a role nothing plays', flow('m1', 'srt-ingest-1:mux')],
+    ['a format nothing plays', flow('m1', 'srt-ingest-1:Mux', 'mux')],
     ['the second flow of a track a group named twice', flow('a2', 'srt-ingest-1:Audio', 'audio')],
   ])('gives %s a row of its own', (_name, extra) => {
     const rows = groupedFlowRows([
@@ -214,7 +271,7 @@ describe('groupedFlowRows', () => {
       flow('v1', 'srt-ingest-1:Video'),
       flow('a1', 'srt-ingest-1:Audio', 'audio'),
       flow('x1', null),
-      flow('m1', 'srt-ingest-1:mux'),
+      flow('m1', 'srt-ingest-1:Mux', 'mux'),
     ];
 
     expect(groupedFlowRows(flows).flat()).toHaveLength(flows.length);
