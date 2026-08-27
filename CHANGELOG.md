@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.29](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.28...v1.0.0-rc.29) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** use the relay the media server names ([#144](https://github.com/qvest-digital/dmf-app-qutil/issues/144)) ([6964afa](https://github.com/qvest-digital/dmf-app-qutil/commit/6964afaad72446bd868bbaa971b9370eae053c71))
+
 ## [1.0.0-rc.28](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.27...v1.0.0-rc.28) (2026-08-27)
 
 
