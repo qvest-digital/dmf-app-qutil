@@ -1182,9 +1182,15 @@ def _joined_path_for(video_uuid):
 
     The name is matched whole rather than split on the separator, because a
     hyphen also appears inside a UUID and splitting would pair the wrong ids.
+
+    Read from the configured paths and not the running ones. A running path
+    outlives its configuration: the reaper deletes the config, and the path
+    stays up until its last reader drains. Handing a caller a name out of that
+    window returns a URL the media server answers with "path is not
+    configured", which the card shows as a preview that never starts.
     """
     prefix = f"{_PREVIEW_PREFIX}{video_uuid}-"
-    code, res = _mtx("/v3/paths/list")
+    code, res = _mtx("/v3/config/paths/list")
     if code != 200:
         return None
     for item in (res.get("items") or []):
