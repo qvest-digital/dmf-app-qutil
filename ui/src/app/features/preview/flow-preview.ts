@@ -22,13 +22,6 @@ import { key, PreviewController, PreviewRequest } from './preview-controller';
 /** Audio readiness poll: 30 tries, one a second. */
 const AUDIO_TRIES = 30;
 const AUDIO_POLL_MS = 1000;
-/**
- * How often the levels refresh once audio is playing. The meters ease towards
- * each value, so this bounds how soon a bar starts reacting rather than how
- * smoothly it moves; the audio preview answers /status from memory, and one card
- * polls only the flow it plays.
- */
-const LEVEL_POLL_MS = 100;
 /** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
 const HLS_RETRY_MS = 4000;
 /**
@@ -45,9 +38,9 @@ const OWNER = 'preview';
  * column beside the metrics panel.
  *
  * Video: demo-metrics adds a mediamtx path that PULLS the flow (mxl://).
- * Audio: mediamtx's mxlSource refuses audio, so the audio-preview pod reads the
- * flow and PUSHES Opus into a publisher-mode path instead. Either way the card
- * plays a normal mediamtx path, and DELETE tears it down.
+ * Audio: the media server reads the flow itself and publishes Opus, so an audio
+ * preview is the same shape as a video one - a path it pulls from, torn down by
+ * DELETE.
  *
  * What arrives is a stereo pair of the flow's channels, so a wide flow is heard
  * a pair at a time and the buttons pick which. Levels for every channel come
@@ -124,7 +117,13 @@ export class FlowPreview {
   protected readonly pairs = signal<number[][]>([]);
   /** The 1-based pair on air, as reported rather than as requested. */
   protected readonly selected = signal<number[]>([]);
-  /** dBFS per source channel, straight from the polled status. */
+  /**
+   * Per-channel levels, when something reports them. Nothing does since the
+   * media server took over reading the flow: it publishes the pair being
+   * listened to and measures nothing else, so the meters fall back to the
+   * decoded stream and show that pair. A wide flow therefore meters what is
+   * audible rather than claiming its other channels are silent.
+   */
   protected readonly levels = signal<number[]>([]);
 
   /**
@@ -136,7 +135,6 @@ export class FlowPreview {
   private hls: HlsHandle | null = null;
   private pc: WhepHandle | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private levelTimer: ReturnType<typeof setTimeout> | undefined;
   private ancTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
@@ -245,11 +243,10 @@ export class FlowPreview {
           this.state.set(`preview failed: ${status.error}`);
           return;
         }
-        if (status.running && (status.samples ?? 0) > 0) {
+        if (status.running) {
           this.state.set('connecting audio…');
           this.applyStatus(status);
           this.playAudio(session, status.channels || channels);
-          this.pollLevels(id);
           return;
         }
         if (tries <= 0) {
@@ -266,27 +263,6 @@ export class FlowPreview {
           return;
         }
         again();
-      },
-    });
-  }
-
-  /**
-   * Keep the levels coming while the preview plays. Only the two audible
-   * channels reach the browser, so every other channel's level has to be asked
-   * for; the bars are a peak meter at this rate, not a continuous one.
-   */
-  private pollLevels(id: string): void {
-    this.api.previewStatus(id).subscribe({
-      next: (status) => {
-        if (this.sessionId !== id) return;
-        this.applyStatus(status);
-        this.levelTimer = setTimeout(() => this.pollLevels(id), LEVEL_POLL_MS);
-      },
-      error: () => {
-        if (this.sessionId !== id) return;
-        // A dropped poll is not a dropped preview: the audio keeps playing and
-        // the next poll is the recovery.
-        this.levelTimer = setTimeout(() => this.pollLevels(id), LEVEL_POLL_MS);
       },
     });
   }
@@ -312,8 +288,7 @@ export class FlowPreview {
   }
 
   private applyStatus(status: PreviewStatus): void {
-    this.levels.set(status.channelPeakDb ?? []);
-    // An audio-preview without the pair selection reports neither, and guessing
+    // A status without the pair selection reports neither, and guessing
     // [1, 2] would light a button for something nobody chose.
     if (status.selected?.length) this.selected.set(status.selected);
     if (status.channels && this.pairs().length === 0) {
@@ -388,10 +363,6 @@ export class FlowPreview {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
-    }
-    if (this.levelTimer !== undefined) {
-      clearTimeout(this.levelTimer);
-      this.levelTimer = undefined;
     }
     if (this.ancTimer !== undefined) {
       clearTimeout(this.ancTimer);

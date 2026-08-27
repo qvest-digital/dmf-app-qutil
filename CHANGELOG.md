@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-rc.29](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.28...v1.0.0-rc.29) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** use the relay the media server names ([#144](https://github.com/qvest-digital/dmf-app-qutil/issues/144)) ([6964afa](https://github.com/qvest-digital/dmf-app-qutil/commit/6964afaad72446bd868bbaa971b9370eae053c71))
+
+## [1.0.0-rc.28](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.27...v1.0.0-rc.28) (2026-08-27)
+
+
+### Bug Fixes
+
+* **preview:** present a CDN token so HLS stops answering 401 ([#141](https://github.com/qvest-digital/dmf-app-qutil/issues/141)) ([488bf2a](https://github.com/qvest-digital/dmf-app-qutil/commit/488bf2a04159271843d4b836dfc0318850eaf2e3))
+
+## [1.0.0-rc.27](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.26...v1.0.0-rc.27) (2026-08-27)
+
+
+### Features
+
+* **preview:** let the media server read audio flows itself ([93ef16e](https://github.com/qvest-digital/dmf-app-qutil/commit/93ef16e3e51fbb6e98c76396af81a6d2511d5a90))
+
+
+### Bug Fixes
+
+* **aggregator:** wait for a mirror before giving up on a source ([93ef16e](https://github.com/qvest-digital/dmf-app-qutil/commit/93ef16e3e51fbb6e98c76396af81a6d2511d5a90))
+
 ## [1.0.0-rc.26](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.25...v1.0.0-rc.26) (2026-08-26)
 
 

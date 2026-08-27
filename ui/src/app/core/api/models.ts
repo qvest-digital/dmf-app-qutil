@@ -256,21 +256,20 @@ export interface AncGrain {
   error?: string;
 }
 
-/** One entry of the audio-preview pod's /status, proxied verbatim. */
+/** What the aggregator reports about a preview path's readiness. */
 export interface PreviewStatus {
-  flow?: string;
+  /** Whether the path's source has opened the flow and is carrying media. */
   running?: boolean;
-  samples?: number;
+  /** What the path publishes, e.g. ["H264"] or ["Opus"]. */
+  tracks?: string[];
   /** The flow's channel count, which is not what is published: see `selected`. */
   channels?: number;
   /**
-   * The 1-based source channels on their way out as stereo, after clamping to
-   * the flow's width. Absent from an audio-preview that predates the pair
-   * selection, so a caller must tolerate it missing rather than assume [1, 2].
+   * The 1-based source channels being published as stereo. A path configured
+   * without a pair takes the flow's first, so a caller must tolerate this
+   * missing rather than assume [1, 2].
    */
   selected?: number[];
-  /** dBFS per source channel, all of them, not only the published pair. */
-  channelPeakDb?: number[];
   error?: string;
 }
 

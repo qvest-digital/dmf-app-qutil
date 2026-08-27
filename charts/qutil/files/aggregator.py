@@ -872,7 +872,6 @@ def operator_flows():
 # there rather than guessed. An explicit env var still wins, which is what a
 # port-forwarded dev loop uses.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
-AUDIO_PREVIEW_API = os.environ.get("AUDIO_PREVIEW_API")
 # Reader for ANC data flows. Nothing in the catalog provides one yet, so this
 # stays unset on a stock install and data previews report that rather than fail.
 ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
@@ -1058,14 +1057,6 @@ def _mtx(path, method="GET", body=None):
     return _http_json(base, path, method, body)
 
 
-def _audio_preview(path, method="GET"):
-    base = _resolve_base(AUDIO_PREVIEW_API, "audio-preview", COMPOSITOR_CLAIM,
-                         COMPOSITOR_CLASS, "audio-preview")
-    if not base:
-        return 503, {"error": "no ready compositor claim in " + CLAIM_NS}
-    return _http_json(base, path, method)
-
-
 def _anc_preview(path, method="GET"):
     """The ANC reader, which decodes RFC-8331 grains into JSON.
 
@@ -1087,8 +1078,6 @@ def _known_flow(uuid):
 
 
 _PREVIEW_PREFIX = "preview-"
-_AUDIO_PREFIX = _PREVIEW_PREFIX + "audio-"
-_HLS_SUFFIX = "-hls"
 
 # When each preview path was last seen with nobody reading it.
 #
@@ -1107,6 +1096,14 @@ _HLS_SUFFIX = "-hls"
 #
 # The grace has to clear the client's own budget, which is 2.5 s of ICE
 # gathering plus an 8 s connect timeout for WHEP, and a 4 s retry for HLS.
+# How long a path's source may take to come up before the media server gives up
+# on it. Its own default is ten seconds, which is enough for a flow already in
+# the node's domain and not enough for one that is not: opening that flow makes
+# the intent shim ask the node agent to mirror it, and the mirror has to be
+# established before any read succeeds. Ten seconds killed the source first, so
+# a preview of a flow originating on another node never started.
+SOURCE_START_TIMEOUT = "60s"
+
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
 
@@ -1123,14 +1120,7 @@ def _preview_track(*names):
 
 
 def _preview_delete(name):
-    """Drop one preview path, stopping its publisher first where it has one."""
-    if name.startswith(_AUDIO_PREFIX):
-        # Audio is pushed in by a separate process. Stopping it before the path
-        # goes lets its pipeline send EOS into a path that still exists.
-        flow = name[len(_AUDIO_PREFIX):]
-        if flow.endswith(_HLS_SUFFIX):
-            flow = flow[:-len(_HLS_SUFFIX)]
-        _audio_preview(f"/stop?flow={flow}", "DELETE")
+    """Drop one preview path. Every preview is now a path the server reads."""
     _mtx(f"/v3/config/paths/delete/{name}", "DELETE")
 
 
@@ -1217,10 +1207,7 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
     if audio:
         return preview_add_joined(uuid, fmt, audio)
     if fmt == "audio":
-        code, res = preview_add_audio(uuid, channels)
-        if code == 200:
-            _preview_track(*_audio_preview_paths(uuid))
-        return code, res
+        return preview_add_audio(uuid, channels)
     if fmt == "data":
         # No transport carries ANC to a browser, so a data preview is not a
         # player: the reader decodes grains and the card reads them from
@@ -1270,6 +1257,7 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # of refusing it.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
                 "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
@@ -1314,6 +1302,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
     if code != 200:
         conf = {"source": f"mxl://{MXL_DOMAIN}/{video_uuid}?audio={audio_uuid}",
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "veryfast", "mxlH264Profile": "high",
                 "mxlH264Bitrate": 5000000}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
@@ -1325,79 +1314,86 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
                  "audio": audio_uuid}
 
 
-def _audio_preview_paths(uuid):
-    """The pair of mediamtx paths one audio preview publishes into.
-
-    Opus for WHEP and AAC for HLS, because neither transport can carry the
-    other's codec: WebRTC has no AAC, and hlsVariant: mpegts refuses Opus ("the
-    MPEG-TS variant of HLS supports MPEG-4 Audio only") -- its muxer crashes the
-    moment such a path is published. The suffix must match kHlsPathSuffix in
-    compositor/src/audio_preview.cpp; both sides derive the names rather than
-    exchange them, because these paths have to exist before /start is called.
-    """
-    name = _AUDIO_PREFIX + uuid
-    return name, name + _HLS_SUFFIX
-
-
 def preview_add_audio(uuid, channels=""):
-    """Create the publisher-mode paths, then ask audio-preview to push into them.
+    """One path, read by the media server itself.
+
+    The server reads the flow's samples and publishes Opus, so there is no
+    publisher to start and no second path: one Opus track serves WebRTC and,
+    because the server muxes fMP4 rather than MPEG-TS, HLS as well. What took a
+    reader process, two paths and an AAC copy of the same audio is now the same
+    shape as a video preview.
 
     `channels` is the 1-based pair to publish, which is all a browser can play
-    however wide the flow is. Repeating this call with a different pair moves a
-    running session rather than restarting it, so the paths already exist and
-    the loop below is a no-op -- that is what makes switching pairs mid-listen
-    cheap enough to drive from a button.
+    however wide the flow is. Repeating the call with a different pair moves it,
+    which is what the card's buttons do; unlike the pushed pipeline this
+    replaces, moving it reconfigures the path and a listener hears the gap.
     """
-    name, hls_name = _audio_preview_paths(uuid)
-    added = []
-    for path in (name, hls_name):
-        code, _ = _mtx(f"/v3/config/paths/get/{path}")
-        if code == 200:
-            continue
-        # Empty config == publisher mode: no source, mediamtx waits to be
-        # published to. The video branch above is the opposite -- a source it
-        # pulls from.
-        code, res = _mtx(f"/v3/config/paths/add/{path}", "POST", {})
-        if code != 200:
-            # Both paths or neither: the pipeline has a sink for each and fails
-            # as a whole if one has nowhere to publish.
-            for done in added:
-                _mtx(f"/v3/config/paths/delete/{done}", "DELETE")
-            return code, {"error": res.get("error") or "mediamtx add failed"}
-        added.append(path)
-    query = f"/start?flow={uuid}"
+    if channels and not _CHANNELS_RE.match(channels):
+        return 400, {"error": "channels must be one or two 1-based numbers"}
+
+    name = _PREVIEW_PREFIX + uuid
+    conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
+            "sourceOnDemandCloseAfter": "10s",
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
     if channels:
-        query += f"&channels={channels}"
-    code, res = _audio_preview(query, "POST")
-    if code != 200:
-        # Don't leave orphan paths waiting for a publisher that never comes.
-        for path in (name, hls_name):
-            _mtx(f"/v3/config/paths/delete/{path}", "DELETE")
-        return code, {"error": res.get("error") or "audio preview start failed"}
-    # `path` is the Opus one: the overlay builds its WHEP URL from it, and only
-    # the HLS fallback uses the AAC path.
-    return 200, {"path": name, "hls": f"/hls/{hls_name}/index.m3u8",
+        conf["mxlAudioChannels"] = channels
+
+    code, existing = _mtx(f"/v3/config/paths/get/{name}")
+    if code == 200:
+        # Already there. Only a different pair is worth a write: replacing the
+        # path restarts the reader, so doing it on every poll would stutter the
+        # audio for as long as a card stayed open.
+        if channels and (existing.get("mxlAudioChannels") or "") != channels:
+            code, res = _mtx(f"/v3/config/paths/replace/{name}", "POST", conf)
+            if code != 200:
+                return code, {"error": res.get("error") or "mediamtx replace failed"}
+    else:
+        code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
+        if code != 200:
+            return code, {"error": res.get("error") or "mediamtx add failed"}
+
+    _preview_track(name)
+    return 200, {"path": name, "hls": f"/hls/{name}/index.m3u8",
                  "whep": f"/webrtc/{name}/whep", "format": "audio"}
 
 
 def preview_status(uuid):
-    """Whether an audio preview is actually producing, for the overlay to poll.
+    """Whether a preview is actually producing, for the card to poll.
 
-    /start only spawns the reader -- opening the flow can take seconds while the
-    intent shim waits for the gateway to mirror it, and it can fail outright on
-    a flow that is not readable on that node. Without somewhere to surface that,
-    a failed session is a silently spinning overlay, which is the same fault as
-    the zombie video path this endpoint pair already had.
+    A path exists as soon as it is configured; only one whose source has opened
+    the flow carries media. Opening can take seconds while the intent shim waits
+    for the gateway to mirror the flow, and it can fail outright where the flow
+    is not readable on that node, so a card polls this rather than assuming.
+
+    Per-channel levels are gone with the reader that measured them. The card
+    still meters what it plays, from the decoded stream, but the channels it is
+    not playing now read as silent rather than as unknown.
     """
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
-    code, res = _audio_preview("/status")
+
+    name = _PREVIEW_PREFIX + uuid
+    code, res = _mtx(f"/v3/paths/get/{name}")
     if code != 200:
-        return code, {"error": res.get("error") or "audio preview unreachable"}
-    for s in res.get("sessions", []):
-        if s.get("flow") == uuid:
-            return 200, s
-    return 404, {"error": "no session for this flow"}
+        return 404, {"error": "no preview path for this flow"}
+
+    fl = _known_flow(uuid)
+    d = (fl or {}).get("spec", {}).get("definition", {}) or {}
+
+    # The pair on air is the one the path is configured with, which is what the
+    # server is reading; an empty setting means it took the flow's first.
+    code, conf = _mtx(f"/v3/config/paths/get/{name}")
+    picked = (conf.get("mxlAudioChannels") or "") if code == 200 else ""
+    selected = [int(c) for c in picked.split(",") if c.strip().isdigit()]
+    if not selected and d.get("channel_count"):
+        selected = [1, 2][: min(2, int(d["channel_count"]))]
+
+    return 200, {
+        "running": bool(res.get("ready")),
+        "tracks": res.get("tracks") or [],
+        "channels": d.get("channel_count"),
+        "selected": selected,
+    }
 
 
 def anc_grain(uuid):
@@ -1805,12 +1801,8 @@ def generator_delete(name):
     # A mediamtx path left pointing at a flow that is going away retries the open
     # every 5s for as long as the server lives.
     for flow_id in _claim_flow_ids(claim):
-        for path in _audio_preview_paths(flow_id):
-            _preview_delete(path)
         _preview_delete(_PREVIEW_PREFIX + flow_id)
         with _idle_lock:
-            for path in _audio_preview_paths(flow_id):
-                _idle_since.pop(path, None)
             _idle_since.pop(_PREVIEW_PREFIX + flow_id, None)
     return 200, {"deleted": name}
 

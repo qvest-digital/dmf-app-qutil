@@ -16,6 +16,65 @@ export interface WhepOptions {
 
 /** How long to wait for ICE gathering before posting the offer anyway. */
 const ICE_GATHER_MS = 2500;
+/** Budget for asking the server which relay to use. */
+const ICE_DISCOVER_MS = 3000;
+
+/**
+ * The ICE servers out of a WHEP endpoint's Link headers.
+ *
+ * Format per entry, and several may arrive comma-separated in one header:
+ *
+ *   <turn:host:3478?transport=tcp>; rel="ice-server"; username="u";
+ *     credential="p"; credential-type="password"
+ */
+export function parseIceServers(header: string): RTCIceServer[] {
+  const out: RTCIceServer[] = [];
+  // Split only where a new bracketed URI begins: a URI may carry a comma.
+  for (const entry of header.split(/,\s*(?=<)/)) {
+    const uri = /^\s*<([^>]+)>/.exec(entry);
+    if (!uri || !/rel\s*=\s*"?ice-server"?/.test(entry)) continue;
+    const server: RTCIceServer = { urls: uri[1] };
+    const username = /username\s*=\s*"([^"]*)"/.exec(entry);
+    const credential = /credential\s*=\s*"([^"]*)"/.exec(entry);
+    if (username) server.username = username[1];
+    if (credential) server.credential = credential[1];
+    out.push(server);
+  }
+  return out;
+}
+
+/**
+ * Ask the media server which relay this client should use.
+ *
+ * Not a nicety, and not something that can be a constant here. Every candidate
+ * the server offers is a pod address: an unsplit instance adds the one public
+ * address its UDP load balancer fronts, and a read replica has nothing but the
+ * pod. So for a replica the relay is the entire connection rather than a
+ * fallback for awkward networks, and which relay to use differs per cluster.
+ *
+ * WHEP puts the servers on OPTIONS precisely so a client can build its
+ * PeerConnection before it has an offer to send; the POST repeats them, by
+ * which time it is too late to configure anything.
+ */
+export async function discoverIceServers(path: string): Promise<RTCIceServer[]> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ICE_DISCOVER_MS);
+  try {
+    const res = await fetch(`/webrtc/${path}/whep`, {
+      method: 'OPTIONS',
+      signal: abort.signal,
+    });
+    const header = res.headers.get('Link');
+    return header ? parseIceServers(header) : [];
+  } catch {
+    // An offer with only host candidates still connects wherever the client
+    // shares a network with the server, so this is worth attempting rather
+    // than treating as fatal.
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
 /** Overall budget before the attempt is declared a failure and HLS takes over. */
 const CONNECT_TIMEOUT_MS = 8000;
 
@@ -70,40 +129,8 @@ export function whep(
     release();
   };
 
-  try {
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-  } catch {
-    fail();
-    return { stop };
-  }
-
   entry = registry.track({ kind: 'pc', stop });
   timer = setTimeout(fail, CONNECT_TIMEOUT_MS);
-
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('audio', { direction: 'recvonly' });
-
-  pc.ontrack = (e) => {
-    if (video.srcObject) return;
-    video.srcObject = e.streams[0];
-    video.play().catch(() => {
-      // Autoplay refused; the element still shows the first frame.
-    });
-    onStream?.(e.streams[0]);
-  };
-
-  pc.onconnectionstatechange = () => {
-    if (!pc) return;
-    if (pc.connectionState === 'connected') {
-      done = true;
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-    } else if (pc.connectionState === 'failed') {
-      fail();
-    }
-  };
 
   const gatherIce = (peer: RTCPeerConnection) =>
     new Promise<void>((resolve) => {
@@ -119,8 +146,43 @@ export function whep(
     });
 
   void (async () => {
+    // Before the connection exists: iceServers is read at construction and
+    // cannot be supplied to a PeerConnection afterwards.
+    const iceServers = await discoverIceServers(path);
+    if (done) return;
+
+    try {
+      pc = new RTCPeerConnection({ iceServers });
+    } catch {
+      fail();
+      return;
+    }
     const peer = pc;
-    if (!peer) return;
+
+    peer.addTransceiver('video', { direction: 'recvonly' });
+    peer.addTransceiver('audio', { direction: 'recvonly' });
+
+    peer.ontrack = (e) => {
+      if (video.srcObject) return;
+      video.srcObject = e.streams[0];
+      video.play().catch(() => {
+        // Autoplay refused; the element still shows the first frame.
+      });
+      onStream?.(e.streams[0]);
+    };
+
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'connected') {
+        done = true;
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      } else if (peer.connectionState === 'failed') {
+        fail();
+      }
+    };
+
     try {
       await peer.setLocalDescription(await peer.createOffer());
       await gatherIce(peer);
