@@ -137,3 +137,40 @@ describe('OperatorFlowRow preview button', () => {
     expect(controller.requests()).toHaveLength(0);
   });
 });
+
+/**
+ * The pill's class is what colours it, and the colour is what an operator reads
+ * the format off at a glance. A format that falls through to the wrong pill
+ * claims a data flow is video.
+ */
+describe('OperatorFlowRow format badge', () => {
+  let fixture: ComponentFixture<OperatorFlowRow>;
+
+  function badgeClasses(flow: OperatorFlow): string[] {
+    fixture = TestBed.createComponent(OperatorFlowRow);
+    fixture.componentRef.setInput('flow', flow);
+    fixture.detectChanges();
+    const badge: HTMLElement = fixture.nativeElement.querySelector('.badge');
+    return [...badge.classList];
+  }
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ imports: [OperatorFlowRow] });
+  });
+
+  it('gives a data flow its own pill rather than the video one', () => {
+    const classes = badgeClasses(DATA);
+
+    expect(classes).toContain('data');
+    expect(classes).not.toContain('video');
+  });
+
+  it('keeps the video and audio pills on their own formats', () => {
+    expect(badgeClasses(VIDEO)).toContain('video');
+    expect(badgeClasses(AUDIO)).toContain('audio');
+  });
+
+  it('falls back to the video pill for a format it does not know', () => {
+    expect(badgeClasses(UNKNOWN)).toContain('video');
+  });
+});
