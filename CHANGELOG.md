@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.27](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.26...v1.0.0-rc.27) (2026-08-27)
+
+
+### Features
+
+* **preview:** let the media server read audio flows itself ([93ef16e](https://github.com/qvest-digital/dmf-app-qutil/commit/93ef16e3e51fbb6e98c76396af81a6d2511d5a90))
+
+
+### Bug Fixes
+
+* **aggregator:** wait for a mirror before giving up on a source ([93ef16e](https://github.com/qvest-digital/dmf-app-qutil/commit/93ef16e3e51fbb6e98c76396af81a6d2511d5a90))
+
 ## [1.0.0-rc.26](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.25...v1.0.0-rc.26) (2026-08-26)
 
 
