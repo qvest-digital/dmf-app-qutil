@@ -26,6 +26,14 @@ spec:
   parameters:
     paths:
       {{- toYaml .Values.mediamtx.paths | nindent 6 }}
+    {{- if .Values.mediamtx.cdn.enabled }}
+    # Names the Secret this release writes into the production namespace, so
+    # the server recognises requests arriving through the proxy and serves
+    # them without a per-client HLS session. The value is never here.
+    hlsCDNSecret:
+      secretName: {{ .Values.mediamtx.cdn.secretName }}
+      key: {{ .Values.mediamtx.cdn.key }}
+    {{- end }}
     {{- with .Values.mediamtx.parameters }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

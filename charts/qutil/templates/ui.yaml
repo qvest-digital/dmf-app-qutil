@@ -41,6 +41,16 @@ spec:
           image: {{ include "qutil.ui.image" . }}
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
           args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+          {{- if and .Values.mediamtx.enabled .Values.mediamtx.cdn.enabled }}
+          env:
+            # Caddy resolves {$VAR} out of the environment when it loads the
+            # config, so the token stays out of the ConfigMap.
+            - name: MTX_HLS_CDN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mediamtx.cdn.secretName }}
+                  key: {{ .Values.mediamtx.cdn.key }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.ui.service.targetPort }}
