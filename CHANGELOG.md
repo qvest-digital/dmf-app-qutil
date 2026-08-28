@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.38](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.37...v1.0.0-rc.38) (2026-08-28)
+
+
+### Bug Fixes
+
+* **preview:** recover a WHEP card that stops after it connected ([#162](https://github.com/qvest-digital/dmf-app-qutil/issues/162)) ([db81e26](https://github.com/qvest-digital/dmf-app-qutil/commit/db81e269504fcc422f6635f96a20cb5385c5982e))
+
 ## [1.0.0-rc.37](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.36...v1.0.0-rc.37) (2026-08-27)
 
 
