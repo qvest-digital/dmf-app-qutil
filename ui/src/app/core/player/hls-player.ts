@@ -19,12 +19,29 @@ export interface HlsOptions {
   /** How long to wait before the next recovery attempt after a fatal error. */
   retryMs?: number;
   /**
-   * Latency ceiling before hls.js seeks forward to live. `null` leaves it to
-   * hls.js, which is what a preview card wants -- it is a look at one flow, not
-   * a wall of tiles that have to stay in step.
+   * Distance from the live edge, once a second. The same question the WHEP
+   * player answers with its jitter buffer, so the two transports can be
+   * compared rather than guessed between.
    */
-  liveMaxLatencyDurationCount?: number | null;
+  onLatency?: (seconds: number) => void;
 }
+
+/** How often the latency readout is taken. */
+const LATENCY_POLL_MS = 1000;
+
+/**
+ * How fast hls.js may play to close a latency gap.
+ *
+ * The lever that matters here, because it recovers latency without a seek: a
+ * player that has fallen behind eases back to the live edge instead of jumping
+ * and rebuffering. 1.5 is what the media server's own player uses.
+ *
+ * A card that never catches up is the failure this exists to prevent. Left to
+ * the default of 1, hls.js has only the forward seek at `maxLatency`, and a
+ * card that once buffered keeps the delay it picked up for as long as it is
+ * open.
+ */
+const MAX_LIVE_SYNC_PLAYBACK_RATE = 1.5;
 
 /**
  * HLS playback of a mediamtx playlist, which Caddy exposes under
@@ -33,15 +50,10 @@ export interface HlsOptions {
  * A preview card ends up here wherever WHEP cannot complete ICE.
  */
 export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOptions = {}): HlsHandle {
-  const {
-    registry,
-    onManifest,
-    onFatal,
-    retryMs = 5000,
-    liveMaxLatencyDurationCount = 8,
-  } = options;
+  const { registry, onManifest, onFatal, onLatency, retryMs = 5000 } = options;
   let hls: Hls | null = null;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let latencyTimer: ReturnType<typeof setInterval> | undefined;
   let entry: PlayerEntry | null = null;
   let stopped = false;
   /** When the last media-error recovery ran, so it cannot run in a tight loop. */
@@ -64,11 +76,29 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
     hls = null;
   };
 
+  /**
+   * Resume at the live edge rather than where playback stopped.
+   *
+   * A hidden tab, a minimized window or a manual pause leaves the element
+   * behind by however long it was away, and hls.js picks up from there. That
+   * is the one gap the playback-rate catch-up cannot close in reasonable time,
+   * because it is unbounded: an hour minimized is an hour behind.
+   */
+  const seekLive = () => {
+    const position = hls?.liveSyncPosition;
+    if (position != null && Number.isFinite(position)) video.currentTime = position;
+  };
+
   const stop = () => {
     stopped = true;
     clearRetry();
+    if (latencyTimer !== undefined) {
+      clearInterval(latencyTimer);
+      latencyTimer = undefined;
+    }
     destroyHls();
     try {
+      video.removeEventListener('play', seekLive);
       video.removeAttribute('src');
       video.load();
     } catch {
@@ -158,13 +188,13 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
 
     hls = new Hls({
       liveSyncDurationCount: 3,
-      ...(liveMaxLatencyDurationCount == null ? {} : { liveMaxLatencyDurationCount }),
       enableWorker: true,
       // The media server publishes the low-latency HLS variant, which carries
       // EXT-X-PART. Left off, hls.js ignores the parts and syncs on whole
       // segments, so the playlist window is paid in full and nothing says so:
       // the server half looks like it did not help.
       lowLatencyMode: true,
+      maxLiveSyncPlaybackRate: MAX_LIVE_SYNC_PLAYBACK_RATE,
     });
     hls.loadSource(src);
     hls.attachMedia(video);
@@ -175,6 +205,14 @@ export function hlsPlay(src: string, video: HTMLVideoElement, options: HlsOption
       onManifest?.();
     });
     hls.on(Hls.Events.ERROR, onError);
+    video.addEventListener('play', seekLive);
+
+    if (onLatency && latencyTimer === undefined) {
+      latencyTimer = setInterval(() => {
+        const latency = hls?.latency;
+        if (latency) onLatency(latency);
+      }, LATENCY_POLL_MS);
+    }
   };
 
   if (Hls.isSupported()) {

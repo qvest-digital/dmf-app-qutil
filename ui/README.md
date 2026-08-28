@@ -89,9 +89,16 @@ Three things are less obvious than they look, and all three were bugs once:
   background-tab WebRTC decode, so an unattended wall of tiles kept pulling
   ~12 Mbit/s behind a Google Meet tab and starved the call. `PlayerRegistry`
   tracks every PeerConnection and Hls instance so a teardown releases the whole
-  set in one pass, mediamtx paths included. `window.__mvDebug.counts()` reports
-  what is live. Only a preview card opens a player now, and each one owns its
-  own teardown.
+  set in one pass, mediamtx paths included. It runs that pass off
+  `visibilitychange` and publishes what it did, because the entries are stopped
+  rather than suspended and a card has to rebuild its own.
+  `window.__mvDebug.counts()` reports what is live.
+- **A connection that came up can still stop.** The transport stays
+  `connected` while a path's source restarts or a writer recreates a flow, so
+  nothing in the PeerConnection API reports the picture freezing. The WHEP
+  player polls `getStats()` for it, and the same poll carries the jitter-buffer
+  reading the card shows -- which is what separates a delay a reconnect clears
+  from one that is upstream of the browser.
 - **Origin freshness is three-state.** Green means an origin Lease is being
   renewed, orange means the claim outlived its Lease, grey means nothing claims
   Origin at all. Grey is _unknown_, not broken — most flows carry no

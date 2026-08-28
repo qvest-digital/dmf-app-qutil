@@ -492,6 +492,12 @@ main.previewing {
   margin-top: 8px;
   min-height: 16px;
 }
+/* What the transport is measured to cost, under whatever it is saying. */
+.pv-meas {
+  font-size: 11px;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
 
 .btn {
   border-radius: var(--qv-radius-pill);

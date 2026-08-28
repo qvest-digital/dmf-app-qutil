@@ -24,6 +24,8 @@ class FakeHls {
   startLoadCount = 0;
   recoverCount = 0;
   destroyed = false;
+  liveSyncPosition = 120;
+  latency = 3.5;
 
   constructor(config: Record<string, unknown> = {}) {
     this.config = config;
@@ -56,15 +58,21 @@ vi.mock('hls.js', () => ({ default: FakeHls }));
 
 const { hlsPlay } = await import('./hls-player');
 
-function videoStub(): HTMLVideoElement {
+type VideoStub = HTMLVideoElement & { fire: (event: string) => void };
+
+function videoStub(): VideoStub {
+  const listeners = new Map<string, () => void>();
   return {
     srcObject: null,
+    currentTime: 0,
     play: () => Promise.resolve(),
     canPlayType: () => '',
     removeAttribute: () => undefined,
     load: () => undefined,
-    addEventListener: () => undefined,
-  } as unknown as HTMLVideoElement;
+    addEventListener: (event: string, handler: () => void) => listeners.set(event, handler),
+    removeEventListener: (event: string) => listeners.delete(event),
+    fire: (event: string) => listeners.get(event)?.(),
+  } as unknown as VideoStub;
 }
 
 describe('hlsPlay fatal error recovery', () => {
@@ -182,5 +190,97 @@ describe('hlsPlay fatal error recovery', () => {
     expect(fatals).toBe(0);
     built[0].raise(FakeHls.ErrorTypes.MEDIA_ERROR);
     expect(fatals).toBe(1);
+  });
+});
+
+/**
+ * Catching up, which the preview card used to have switched off.
+ *
+ * It passed a null latency ceiling to leave the live edge to hls.js, and
+ * hls.js on its own does nothing about latency below that ceiling. A card that
+ * rebuffered once kept the delay it picked up for as long as it stayed open,
+ * which on a wall watched for an afternoon is the whole complaint.
+ */
+describe('hlsPlay live latency', () => {
+  let registry: PlayerRegistry;
+
+  beforeEach(() => {
+    built.length = 0;
+    registry = new PlayerRegistry();
+  });
+
+  it('is allowed to play faster than real time to close a gap', () => {
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry });
+
+    // Anything above 1 recovers latency without a seek, so the picture eases
+    // back to live rather than jumping and rebuffering.
+    expect(built[0].config['maxLiveSyncPlaybackRate']).toBeGreaterThan(1);
+  });
+
+  it('does not leave the latency ceiling switched off', () => {
+    hlsPlay('/hls/preview-a/index.m3u8', videoStub(), { registry });
+
+    // Absent means the hls.js default, which does seek forward. The
+    // regression was passing null to disable it outright.
+    expect(built[0].config['liveMaxLatencyDurationCount']).toBeUndefined();
+  });
+
+  /**
+   * A minimized window or a hidden tab leaves the element behind by however
+   * long it was away, and hls.js resumes from there. That gap is unbounded, so
+   * it is the one the playback-rate catch-up cannot close.
+   */
+  it('resumes at the live edge rather than where it stopped', () => {
+    const video = videoStub();
+    hlsPlay('/hls/preview-a/index.m3u8', video, { registry });
+
+    video.fire('play');
+
+    expect(video.currentTime).toBe(120);
+  });
+
+  it('does not seek when hls.js has no live edge to give', () => {
+    const video = videoStub();
+    hlsPlay('/hls/preview-a/index.m3u8', video, { registry });
+    built[0].liveSyncPosition = NaN;
+
+    video.fire('play');
+
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('reports how far behind live it is, so the two transports compare', () => {
+    vi.useFakeTimers();
+    try {
+      const seen: number[] = [];
+      hlsPlay('/hls/preview-a/index.m3u8', videoStub(), {
+        registry,
+        onLatency: (s) => seen.push(s),
+      });
+      vi.advanceTimersByTime(2500);
+
+      expect(seen).toContain(3.5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops measuring once stopped', () => {
+    vi.useFakeTimers();
+    try {
+      const seen: number[] = [];
+      const handle = hlsPlay('/hls/preview-a/index.m3u8', videoStub(), {
+        registry,
+        onLatency: (s) => seen.push(s),
+      });
+      vi.advanceTimersByTime(1500);
+      const taken = seen.length;
+      handle.stop();
+      vi.advanceTimersByTime(5000);
+
+      expect(seen).toHaveLength(taken);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

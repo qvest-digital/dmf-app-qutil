@@ -103,6 +103,16 @@ export class AudioMeters {
    */
   private context: AudioContext | null = null;
   private elementSource: MediaElementAudioSourceNode | null = null;
+  /**
+   * Volume for the graph when the graph is what reaches the speakers. Driven
+   * from the element, whose transport controls the operator still uses.
+   */
+  private gain: GainNode | null = null;
+  private volumeFrom: HTMLVideoElement | null = null;
+  private readonly syncVolume = () => {
+    const element = this.volumeFrom;
+    if (this.gain && element) this.gain.gain.value = element.muted ? 0 : element.volume;
+  };
 
   private viz: Visualisation | null = null;
   private frame = 0;
@@ -137,7 +147,7 @@ export class AudioMeters {
     let src: AudioNode;
     try {
       // MediaStream (WHEP): tap the stream and leave the element to make the
-      // sound — routing to destination as well would play it twice. HLS/MSE: the
+      // sound -- routing to destination as well would play it twice. HLS/MSE: the
       // graph MUST reach destination or the element goes silent.
       if (stream) {
         src = ctx.createMediaStreamSource(stream);
@@ -148,6 +158,14 @@ export class AudioMeters {
     } catch {
       return;
     }
+
+    // createMediaElementSource takes an element's output away for good, and
+    // the node it returns is not a route for a MediaStream. So once HLS has
+    // run on this element, a later WHEP attempt on the same card cannot leave
+    // the sound to the element: the stream has to carry it, through a gain the
+    // element's own volume and mute still govern. Without this a card that
+    // recovers from HLS back to WHEP plays silently for the rest of its life.
+    const streamDrivesOutput = stream !== null && this.elementSource !== null;
 
     const count = Math.min(Math.max(channels || 2, 1), MAX_CHANNELS);
     const splitter = ctx.createChannelSplitter(count);
@@ -171,7 +189,16 @@ export class AudioMeters {
     spectrum.fftSize = 1024;
     spectrum.smoothingTimeConstant = 0.7;
     src.connect(spectrum);
-    if (!stream) src.connect(ctx.destination);
+    if (!stream) {
+      src.connect(ctx.destination);
+    } else if (streamDrivesOutput) {
+      this.gain = ctx.createGain();
+      src.connect(this.gain);
+      this.gain.connect(ctx.destination);
+      this.volumeFrom = element;
+      element.addEventListener('volumechange', this.syncVolume);
+      this.syncVolume();
+    }
 
     this.viz = {
       src,
@@ -192,12 +219,24 @@ export class AudioMeters {
     }
     if (this.viz) {
       try {
-        // The element source is permanent — only detach it from the graph.
+        // The element source is permanent -- only detach it from the graph.
         this.viz.src.disconnect();
       } catch {
         // Already detached.
       }
       this.viz = null;
+    }
+    if (this.volumeFrom) {
+      this.volumeFrom.removeEventListener('volumechange', this.syncVolume);
+      this.volumeFrom = null;
+    }
+    if (this.gain) {
+      try {
+        this.gain.disconnect();
+      } catch {
+        // Already detached.
+      }
+      this.gain = null;
     }
     this.sourceHold = [];
     this.levelsDb = [];
