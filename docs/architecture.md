@@ -129,8 +129,11 @@ It finds mediamtx through the endpoints its claim publishes under
 hardcoded: the namespace a booking lands in is not this app's to assume.
 
 **Frontend.** An Angular app served by Caddy. Each tile plays its own
-`<video>`, trying WHEP first and falling back to HLS. Players are tracked in a
-registry and torn down on tab hide and on route change; a tile that goes away
+`<video>`, trying WHEP first and rebuilding it whenever the connection drops or
+the media stops arriving. HLS is where it lands once those rebuilds are spent,
+and it climbs back to WHEP on a backoff rather than staying there. Players are
+tracked in a registry and torn down on tab hide and on route change, and the
+card that owns one puts it back when the tab returns; a tile that goes away
 releases the path it asked for, or paths leak.
 
 ---

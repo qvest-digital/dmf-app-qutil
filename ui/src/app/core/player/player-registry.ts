@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Signal, signal } from '@angular/core';
 
 /**
  * `preview` is not a decoder: it is a server-side mediamtx path held open for a
@@ -25,6 +25,14 @@ export interface PlayerEntry {
 @Injectable({ providedIn: 'root' })
 export class PlayerRegistry {
   private readonly live = new Set<PlayerEntry>();
+  private readonly _visible = signal(true);
+
+  /**
+   * Whether the tab is on screen. A player owner watches this to rebuild what
+   * the teardown below took away, because nothing else will: the entries are
+   * stopped, not suspended, and a stopped player does not come back on its own.
+   */
+  readonly visible: Signal<boolean> = this._visible.asReadonly();
 
   constructor() {
     // Verification probe, carried over from the page this replaces: counts
@@ -33,6 +41,16 @@ export class PlayerRegistry {
     (globalThis as unknown as { __mvDebug?: unknown }).__mvDebug = {
       counts: () => this.counts(),
     };
+
+    if (typeof document === 'undefined') return;
+    this._visible.set(!document.hidden);
+    document.addEventListener('visibilitychange', () => {
+      const visible = !document.hidden;
+      // Torn down before the signal is published, so an owner reacting to it
+      // sees a set that is already empty rather than racing this pass.
+      if (!visible) this.teardownAll();
+      this._visible.set(visible);
+    });
   }
 
   track(entry: PlayerEntry): PlayerEntry {

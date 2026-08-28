@@ -115,13 +115,43 @@ describe('FlowPreview video transport', () => {
     expect(offered).toEqual([`/webrtc/preview-${FLOW}/whep`, `/webrtc/preview-${FLOW}/whep`]);
   });
 
-  it('falls back to HLS when the offer is refused', async () => {
-    answerWith = async () => new Response('', { status: 404 });
-    openVideo();
-    await settle();
+  /**
+   * A refused offer is not a verdict on the transport. The path is created on
+   * demand, so an offer can arrive before the media server has it, and
+   * dropping to HLS on that costs the playlist window for the life of the
+   * card. The connection is rebuilt first.
+   */
+  it('rebuilds a refused offer rather than dropping straight to HLS', async () => {
+    vi.useFakeTimers();
+    try {
+      answerWith = async () => new Response('', { status: 404 });
+      openVideo();
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(registry.counts().pc).toBe(0);
-    expect(registry.counts().hls).toBe(1);
+      expect(registry.counts().pc).toBe(1);
+      expect(registry.counts().hls).toBe(0);
+
+      const before = offered.length;
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(offered.length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to HLS once the rebuilds are spent', async () => {
+    vi.useFakeTimers();
+    try {
+      answerWith = async () => new Response('', { status: 404 });
+      openVideo();
+      // Three rebuilds two seconds apart, then the transport is given up on.
+      await vi.advanceTimersByTimeAsync(12000);
+
+      expect(registry.counts().pc).toBe(0);
+      expect(registry.counts().hls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**

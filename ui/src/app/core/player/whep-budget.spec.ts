@@ -56,21 +56,23 @@ describe('whep budgets', () => {
       });
     }) as unknown as typeof fetch;
 
-    let failed = false;
+    // Running out of budget rebuilds the connection rather than giving up on
+    // it, so the retry is what says the budget expired.
+    let retried = 0;
     const registry = new PlayerRegistry();
     const video = { play: () => Promise.resolve() } as unknown as HTMLVideoElement;
-    whep(registry, 'preview-x', video, { onFail: () => (failed = true) });
+    whep(registry, 'preview-x', video, { onRetry: () => retried++ });
 
     // Past the old shared budget, and past the answer.
     await vi.advanceTimersByTimeAsync(7500);
-    expect(failed).toBe(false);
+    expect(retried).toBe(0);
 
     // The connection's own budget starts at the answer, so it has its full
     // span from there rather than the remainder of someone else's.
     await vi.advanceTimersByTimeAsync(7000);
-    expect(failed).toBe(false);
+    expect(retried).toBe(0);
 
     await vi.advanceTimersByTimeAsync(2000);
-    expect(failed).toBe(true);
+    expect(retried).toBe(1);
   });
 });
