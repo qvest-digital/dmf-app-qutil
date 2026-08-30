@@ -22,11 +22,19 @@ import { key, PreviewController, PreviewRequest } from './preview-controller';
 /** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
 const HLS_RETRY_MS = 4000;
 /**
- * How often a data preview asks for the current grain. Fast enough that a
- * timecode reads as counting rather than jumping, and each poll is one decoded
- * grain rather than a stream.
+ * How often a data preview asks for the current grain.
+ *
+ * A flow produces about thirty grains a second and the reader answers with
+ * whichever is current, so every request lands on a different one and the rate
+ * here is what decides whether a timecode counts or jumps. At half a second it
+ * jumped over half the frames; at a tenth it reads as counting.
+ *
+ * Not the grain rate itself: matching it would be a request per frame per open
+ * card, for a display that is already legible several frames apart. The poll is
+ * a chain of timeouts rather than an interval, so a slow answer delays the next
+ * request instead of stacking one behind it.
  */
-const ANC_POLL_MS = 500;
+const ANC_POLL_MS = 100;
 /** Names this card as a holder of the path, so the aggregator can count holders. */
 const OWNER = 'preview';
 /**
