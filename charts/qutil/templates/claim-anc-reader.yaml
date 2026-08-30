@@ -1,0 +1,33 @@
+{{- if .Values.ancReader.enabled }}
+{{- /* The reader behind the data previews. Ancillary data has no transport to a
+       browser, so a card showing a `video/smpte291` flow is handed the decoded
+       packets instead; this is what decodes them.
+
+       Booked rather than deployed, like every other function here: the image,
+       the MXL runtime volume, the intent shim and the node tolerations belong
+       to the MediaFunctionClass and are deliberately absent from the claim.
+
+       No parameters, and that is the whole point. The reader takes the flow per
+       request over its API rather than being bound to one at provision time, so
+       one booking serves every data flow the multiviewer lists. A parameter
+       naming a flow would put this back to one booking per flow, and a claim's
+       parameters are consumed at provision time anyway, so editing one would
+       not reach a bound claim. */ -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.ancReader.claimName }}
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.ancReader.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+  {{- with .Values.ancReader.parameters }}
+  parameters:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

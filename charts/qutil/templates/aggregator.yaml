@@ -214,10 +214,13 @@ spec:
               value: {{ .Values.compositor.className }}
             - name: COMPOSITOR_STATS
               value: http://{{ .Values.compositor.claimName }}.{{ include "qutil.productionNamespace" . }}:9090/
+            - name: ANC_READER_CLAIM
+              value: {{ .Values.ancReader.claimName }}
+            - name: ANC_READER_CLASS
+              value: {{ .Values.ancReader.className }}
             {{- with .Values.aggregator.ancPreviewApi }}
-            # An address rather than a claim: no class publishes an ANC reader
-            # endpoint, so there is nothing to resolve one from. Unset means data
-            # previews report that no reader is booked.
+            # An address instead of the claim above, for a port-forwarded dev
+            # loop. An install leaves it unset and resolves the booking.
             - name: ANC_PREVIEW_API
               value: {{ . | quote }}
             {{- end }}

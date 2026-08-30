@@ -53,6 +53,12 @@ CASES = {
     # The default. The case that matters is the other one: with generators on,
     # the chart grows a Role that can create and delete claims.
     "generators": {"generators": {"enabled": True}},
+    # Both halves of the ANC path off by default, because neither class is in
+    # every catalog. On, they are two more claims.
+    "anc": {
+        "ancReader": {"enabled": True},
+        "ancTestSource": {"enabled": True},
+    },
 }
 
 
