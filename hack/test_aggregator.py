@@ -602,8 +602,9 @@ class AncReader(unittest.TestCase):
                                lambda *a: asked.append(a) or None):
             agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
 
+        # The endpoint name the class publishes is "anc".
         self.assertEqual(asked, [(agg.ANC_READER_CLAIM, agg.ANC_READER_CLASS,
-                                  "api")])
+                                  "anc")])
 
     def test_says_no_reader_is_booked_rather_than_failing_the_lookup(self):
         """An install with no reader claim is a normal state, not a fault."""

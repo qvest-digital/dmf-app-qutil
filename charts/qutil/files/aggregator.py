@@ -1071,8 +1071,11 @@ def _anc_preview(path, method="GET"):
     address of its own: which namespace the booking lands in is not this app's
     to assume, and a reader that is re-provisioned moves.
     """
+    # "anc" is the endpoint name the class publishes, not "api": one reader
+    # answers for every data flow, so what it serves is named for the data
+    # rather than for being an API.
     base = _resolve_base(ANC_PREVIEW_API, "anc-reader", ANC_READER_CLAIM,
-                         ANC_READER_CLASS, "api")
+                         ANC_READER_CLASS, "anc")
     if not base:
         return 503, {"error": "no ready ANC reader claim in " + CLAIM_NS}
     return _http_json(base, path, method)
