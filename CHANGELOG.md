@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.39](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.38...v1.0.0-rc.39) (2026-08-30)
+
+
+### Features
+
+* **chart:** book the ANC reader and resolve it from its claim ([#164](https://github.com/qvest-digital/dmf-app-qutil/issues/164)) ([e695fd4](https://github.com/qvest-digital/dmf-app-qutil/commit/e695fd428d8c6562a8a743cb746fee3985e01a0d))
+
 ## [1.0.0-rc.38](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.37...v1.0.0-rc.38) (2026-08-28)
 
 
