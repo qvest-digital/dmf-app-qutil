@@ -53,10 +53,9 @@ aggregator:
   flowCount: 4
   # Namespace the per-booking txDarwin instances are deployed into.
   bookingNamespace: txdarwin
-  # Reader for ANC data flows, as a plain address: previewing SMPTE 291 means
-  # decoding grains, which needs libmxl and the node's MXL domain, so it is a
-  # media function's job rather than the aggregator's. No catalog class publishes
-  # one yet, so this is empty and a data preview says the reader is not booked.
+  # Reader for ANC data flows, as a plain address. Empty on an install: the
+  # aggregator resolves the booked ancReader claim's endpoint instead, the same
+  # way it finds the media server. Set it only for a port-forwarded dev loop.
   ancPreviewApi: ""
   resources:
     requests:
@@ -244,6 +243,25 @@ generators:
     limits:
       cpu: "2500m"
       memory: "1Gi"
+
+# The reader behind the data previews. Previewing SMPTE 291 means decoding
+# grains, which needs libmxl and the node's MXL domain, so it is a media
+# function's job rather than the aggregator's: this books it and the aggregator
+# reaches it through the endpoint the claim publishes.
+#
+# No parameters. The reader takes the flow per request, so one booking serves
+# every data flow the multiviewer lists.
+#
+# Off by default for the same reason the producer below is: the class is not in
+# every catalog, and a claim against one that is absent never provisions. A
+# cluster turns it on once its catalog pin carries mxl-anc-reader. Until then a
+# data preview says no reader is booked, which is what it did before this
+# existed.
+ancReader:
+  enabled: false
+  claimName: anc-reader
+  className: mxl-anc-reader
+  parameters: {}
 
 # An ancillary-data producer, so the multiviewer has a video/smpte291 flow to
 # list and preview. Off by default: the class is not in every catalog, so a

@@ -872,8 +872,8 @@ def operator_flows():
 # there rather than guessed. An explicit env var still wins, which is what a
 # port-forwarded dev loop uses.
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
-# Reader for ANC data flows. Nothing in the catalog provides one yet, so this
-# stays unset on a stock install and data previews report that rather than fail.
+# Reader for ANC data flows. An override for the port-forwarded dev loop; an
+# install resolves the booked claim instead.
 ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 
@@ -883,12 +883,14 @@ MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 CLAIM_NS = os.environ.get("CLAIM_NS", WRITER_NS)
 MEDIAMTX_CLAIM = os.environ.get("MEDIAMTX_CLAIM", "")
 COMPOSITOR_CLAIM = os.environ.get("COMPOSITOR_CLAIM", "")
+ANC_READER_CLAIM = os.environ.get("ANC_READER_CLAIM", "")
 
 # The class a nameless claim is looked up by. A cluster may register a class
 # under a different name than the catalog's default, so this follows the same
 # value the claim was rendered from rather than assuming the two agree.
 MEDIAMTX_CLASS = os.environ.get("MEDIAMTX_CLASS", "mediamtx")
 COMPOSITOR_CLASS = os.environ.get("COMPOSITOR_CLASS", "compositor")
+ANC_READER_CLASS = os.environ.get("ANC_READER_CLASS", "mxl-anc-reader")
 
 # A claim's address only changes when it is re-provisioned, so re-reading it per
 # request would spend an API call on an answer that is almost always the same.
@@ -1065,13 +1067,15 @@ def _mtx(path, method="GET", body=None):
 def _anc_preview(path, method="GET"):
     """The ANC reader, which decodes RFC-8331 grains into JSON.
 
-    Env-only for now: no class in the catalog publishes an anc-preview endpoint,
-    so there is no claim to resolve one from. Unset reads as not booked rather
-    than as a broken lookup.
+    Resolved from the booked claim like the media server is, rather than from an
+    address of its own: which namespace the booking lands in is not this app's
+    to assume, and a reader that is re-provisioned moves.
     """
-    if not ANC_PREVIEW_API:
-        return 503, {"error": "no ANC reader configured (ANC_PREVIEW_API)"}
-    return _http_json(ANC_PREVIEW_API, path, method)
+    base = _resolve_base(ANC_PREVIEW_API, "anc-reader", ANC_READER_CLAIM,
+                         ANC_READER_CLASS, "api")
+    if not base:
+        return 503, {"error": "no ready ANC reader claim in " + CLAIM_NS}
+    return _http_json(base, path, method)
 
 
 def _known_flow(uuid):

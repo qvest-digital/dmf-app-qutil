@@ -559,5 +559,86 @@ class PreviewDelete(unittest.TestCase):
         self.assertEqual(code, 400)
 
 
+class AncReader(unittest.TestCase):
+    """The ANC reader is a booked function, reached through its claim.
+
+    Data flows have no transport to a browser, so the card is handed decoded
+    packets instead. Where they come from is the claim's business: an address
+    compiled into the aggregator would assume a namespace this app does not own.
+    """
+
+    def setUp(self):
+        # _resolve_base memoises a hit, so a test that did not clear it would
+        # answer from whatever ran before it.
+        with agg._endpoint_lock:
+            agg._endpoint_cache.clear()
+        self.addCleanup(self._clear)
+
+    def _clear(self):
+        with agg._endpoint_lock:
+            agg._endpoint_cache.clear()
+
+    def test_reads_the_grain_from_the_endpoint_the_claim_publishes(self):
+        seen = {}
+
+        def http_json(base, path, method="GET", body=None):
+            seen["base"], seen["path"] = base, path
+            return 200, {"flow": "x", "ancCount": 1}
+
+        with mock.patch.object(agg, "_claim_endpoint",
+                               lambda *a: "http://anc-reader.prod:8080"), \
+                mock.patch.object(agg, "_http_json", http_json):
+            code, _ = agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+
+        self.assertEqual(code, 200)
+        self.assertEqual(seen["base"], "http://anc-reader.prod:8080")
+        self.assertEqual(
+            seen["path"], "/grain?flow=a0d30000-0000-0000-0000-000000000001")
+
+    def test_looks_the_claim_up_by_the_configured_name_and_class(self):
+        asked = []
+
+        with mock.patch.object(agg, "_claim_endpoint",
+                               lambda *a: asked.append(a) or None):
+            agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+
+        self.assertEqual(asked, [(agg.ANC_READER_CLAIM, agg.ANC_READER_CLASS,
+                                  "api")])
+
+    def test_says_no_reader_is_booked_rather_than_failing_the_lookup(self):
+        """An install with no reader claim is a normal state, not a fault."""
+        with mock.patch.object(agg, "_claim_endpoint", lambda *a: None):
+            code, body = agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+
+        self.assertEqual(code, 503)
+        self.assertIn("ANC reader", body["error"])
+
+    def test_an_explicit_address_wins_over_the_claim(self):
+        """The port-forwarded dev loop, where no claim is reachable at all."""
+        seen = {}
+
+        def http_json(base, path, method="GET", body=None):
+            seen["base"] = base
+            return 200, {}
+
+        def fail(*_a):
+            raise AssertionError("resolved a claim despite the override")
+
+        with mock.patch.object(agg, "ANC_PREVIEW_API", "http://127.0.0.1:8080"), \
+                mock.patch.object(agg, "_claim_endpoint", fail), \
+                mock.patch.object(agg, "_http_json", http_json):
+            agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+
+        self.assertEqual(seen["base"], "http://127.0.0.1:8080")
+
+    def test_rejects_a_malformed_flow_id_before_asking_anything(self):
+        def fail(*_a):
+            raise AssertionError("resolved a claim for a bad flow id")
+
+        with mock.patch.object(agg, "_claim_endpoint", fail):
+            code, _ = agg.anc_grain("not-a-uuid")
+        self.assertEqual(code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()
