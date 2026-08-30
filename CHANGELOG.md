@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.40](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.39...v1.0.0-rc.40) (2026-08-30)
+
+
+### Bug Fixes
+
+* **preview:** poll the ANC grain often enough to read as a timecode ([#166](https://github.com/qvest-digital/dmf-app-qutil/issues/166)) ([47889b7](https://github.com/qvest-digital/dmf-app-qutil/commit/47889b78fb7350447769e27a53ad44ae8c862bc8))
+
 ## [1.0.0-rc.39](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.38...v1.0.0-rc.39) (2026-08-30)
 
 
