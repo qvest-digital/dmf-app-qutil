@@ -128,6 +128,13 @@ It finds mediamtx through the endpoints its claim publishes under
 `status.handle.endpoints`, gated on `handle.ready`. No Service name is
 hardcoded: the namespace a booking lands in is not this app's to assume.
 
+The polled routes report cluster state and nothing about who asked, so each is
+served from a snapshot rebuilt at most once a second by one thread at a time:
+what the panels cost follows the cluster, not the number of open tabs. Past a
+ceiling of requests in flight a poll is refused rather than queued, which the
+frontend absorbs by keeping the value it last had. The health route is answered
+ahead of that ceiling, so shedding load cannot fail a liveness probe.
+
 **Frontend.** An Angular app served by Caddy. Each tile plays its own
 `<video>`, trying WHEP first and rebuilding it whenever the connection drops or
 the media stops arriving. HLS is where it lands once those rebuilds are spent,
