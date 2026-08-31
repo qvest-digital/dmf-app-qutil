@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.41](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.40...v1.0.0-rc.41) (2026-08-31)
+
+
+### Bug Fixes
+
+* **aggregator:** stop a slow poll cycle from consuming the pod ([#168](https://github.com/qvest-digital/dmf-app-qutil/issues/168)) ([8a250d5](https://github.com/qvest-digital/dmf-app-qutil/commit/8a250d50c44b55211bb4b230c8f21c2bdf7f8f15))
+
 ## [1.0.0-rc.40](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.39...v1.0.0-rc.40) (2026-08-30)
 
 
