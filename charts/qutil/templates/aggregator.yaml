@@ -255,14 +255,21 @@ spec:
             - name: script
               mountPath: /app
               readOnly: true
+          # Both timeouts are the 1s default raised. /healthz is a constant and
+          # is answered ahead of the in-flight gate, so missing it says the
+          # process did not get scheduled rather than that it is unhealthy --
+          # and restarting a busy aggregator is what turned one overload into a
+          # crash loop.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 15
+            timeoutSeconds: 5
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.aggregator.resources | nindent 12 }}
       volumes:

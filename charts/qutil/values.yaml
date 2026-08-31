@@ -57,13 +57,22 @@ aggregator:
   # aggregator resolves the booked ancReader claim's endpoint instead, the same
   # way it finds the media server. Set it only for a port-forwarded dev loop.
   ancPreviewApi: ""
+  # A CPU limit is a CFS quota, not a share: a threaded server spends its slice
+  # in a fraction of the period and is frozen for the rest of it. At 250m the
+  # container was measured taking 0.11-0.19 cores while 30-60% of its periods
+  # were throttled, and every request served in that state was slower than the
+  # 1.5s poll behind it. Requests then arrived faster than they retired.
+  #
+  # The floor is what it idles at, which is 44 MiB and well over the 32Mi this
+  # used to request -- an under-request makes the pod an early eviction
+  # candidate under node memory pressure, for no gain.
   resources:
     requests:
-      cpu: 10m
-      memory: 32Mi
+      cpu: 50m
+      memory: 64Mi
     limits:
-      cpu: 250m
-      memory: 128Mi
+      cpu: "1"
+      memory: 256Mi
 
 # Booked media functions. Each is a MediaFunctionClaim rendered into
 # production.namespace. A claim names a class and carries only what makes this

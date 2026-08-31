@@ -1797,6 +1797,7 @@ def generator_create(req):
         code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                              "POST", _gen_claim(name, req))
         if code in (200, 201):
+            snapshot_drop("generators")
             return 201, _gen_row(res)
         # A fresh suffix is the whole fix for a name that is taken; anything else
         # is the operator's to see.
@@ -1832,19 +1833,98 @@ def generator_delete(name):
         _preview_delete(_PREVIEW_PREFIX + flow_id)
         with _idle_lock:
             _idle_since.pop(_PREVIEW_PREFIX + flow_id, None)
+    snapshot_drop("generators")
     return 200, {"deleted": name}
+
+
+# -- Serving under load ------------------------------------------------------
+# Everything the panels poll answers the same thing to everybody: it reports
+# cluster state, and nothing in it depends on who asked. Answering each poll on
+# its own made the work scale with the number of open tabs rather than with the
+# cluster -- one /api/operator-flows lists every MxlFlow, MxlReceiver,
+# MxlFlowMirror and origin Lease and parses about 700 KiB of mirror status, 96%
+# of it an RDMA region table this process never reads.
+#
+# Serve one snapshot instead, rebuilt at most this often and by one thread at a
+# time. A caller arriving mid-rebuild waits for that rebuild rather than
+# starting a second.
+#
+# A second, against poll intervals of 1.5s and 3s: short enough to add no
+# visible lag to a panel, long enough that the cost stops following the tab
+# count.
+_SNAPSHOT_TTL = 1.0
+_snapshots = {}
+_snapshot_locks = {}
+_snapshot_guard = threading.Lock()
+
+
+def snapshot(key, produce):
+    """`produce()`, serialised to JSON bytes and reused for _SNAPSHOT_TTL."""
+    def fresh():
+        with _snapshot_guard:
+            hit = _snapshots.get(key)
+            return hit[1] if hit and time.monotonic() - hit[0] < _SNAPSHOT_TTL else None
+
+    body = fresh()
+    if body is not None:
+        return body
+    with _snapshot_guard:
+        lock = _snapshot_locks.setdefault(key, threading.Lock())
+    with lock:
+        # Whoever held the lock has just rebuilt it, so do not rebuild it again.
+        body = fresh()
+        if body is None:
+            body = json.dumps(produce()).encode()
+            with _snapshot_guard:
+                _snapshots[key] = (time.monotonic(), body)
+    return body
+
+
+def snapshot_drop(key):
+    """Forget one snapshot, so the next caller rebuilds it.
+
+    A booking the operator just made or released has to be in the list they are
+    looking at. Waiting out the TTL there reads as a click that did nothing.
+    """
+    with _snapshot_guard:
+        _snapshots.pop(key, None)
+
+
+# How many requests may be in flight at once. A thread per request with no
+# ceiling is what turned a slow aggregator into a dead one: the UI polls with
+# switchMap, so a request still running when the next tick fires is dropped by
+# the browser but runs to completion here, and every tick then added a thread
+# to the ones already going. Working set went from 45 MiB to the 128 MiB limit
+# in under 30 seconds, and each restart repeated it while the tabs kept
+# polling.
+#
+# Past the ceiling a poll is refused rather than queued. The UI keeps the value
+# it last had on an error, so a refused poll shows the panel one interval
+# stale; the alternative it replaces showed nothing at all for five minutes.
+_MAX_INFLIGHT = 32
+_inflight = threading.BoundedSemaphore(_MAX_INFLIGHT)
 
 
 class H(BaseHTTPRequestHandler):
     def _send(self, code, obj):
-        body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_body(code, json.dumps(obj).encode())
+
+    def _send_body(self, code, body):
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The normal end of an abandoned poll, not a fault: switchMap drops
+            # the request the moment the next tick fires and this is the write
+            # that lands on the closed socket. Left to propagate, socketserver
+            # printed a traceback per occurrence, which under load cost more
+            # than serving the request had.
+            pass
 
     def _preview_args(self):
         """(uuid, owner, channels, audio) from
@@ -1888,14 +1968,28 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path in ("/healthz", "/api/healthz"):
+            # Ahead of the in-flight gate and never behind it. The liveness
+            # probe has to be answerable while the aggregator is shedding load,
+            # or the overload this gate exists to survive restarts the pod
+            # anyway -- which is how the first collapse became a crash loop.
+            return self._send(200, {"ok": True})
+        if not _inflight.acquire(blocking=False):
+            return self._send(503, {"error": "too many requests in flight"})
+        try:
+            self._get()
+        finally:
+            _inflight.release()
+
+    def _get(self):
         if self.path.startswith("/api/booking"):
             try:
-                self._send(200, booking())
+                self._send_body(200, snapshot("booking", booking))
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/operator-flows"):
             try:
-                self._send(200, operator_flows())
+                self._send_body(200, snapshot("operator-flows", operator_flows))
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/generators/flow-ids"):
@@ -1907,7 +2001,7 @@ class H(BaseHTTPRequestHandler):
             self._send(code, res)
         elif self.path.startswith("/api/generators"):
             try:
-                self._send(200, generators())
+                self._send_body(200, snapshot("generators", generators))
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/anc/"):
@@ -1931,11 +2025,9 @@ class H(BaseHTTPRequestHandler):
             self._send(code, res)
         elif self.path.startswith("/api/flows"):
             try:
-                self._send(200, build())
+                self._send_body(200, snapshot("flows", build))
             except Exception as e:
                 self._send(500, {"error": str(e)})
-        elif self.path in ("/healthz", "/api/healthz"):
-            self._send(200, {"ok": True})
         else:
             self._send(404, {"error": "not found"})
 

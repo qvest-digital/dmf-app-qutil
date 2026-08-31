@@ -12,8 +12,11 @@ it free of side effects.
 Run: DEMO_NS=test python3 -m unittest discover -s hack -p 'test_*.py'
 """
 import importlib.util
+import io
+import json
 import os
 import pathlib
+import threading
 import unittest
 from unittest import mock
 
@@ -639,6 +642,227 @@ class AncReader(unittest.TestCase):
         with mock.patch.object(agg, "_claim_endpoint", fail):
             code, _ = agg.anc_grain("not-a-uuid")
         self.assertEqual(code, 400)
+
+
+class Snapshot(unittest.TestCase):
+    """One answer per polled endpoint, shared by everyone asking for it.
+
+    Every panel poll used to redo the whole job -- the same lists, the same
+    700 KiB of MxlFlowMirror status, the same JSON -- so the work followed the
+    number of open tabs. Enough tabs and requests arrived faster than they
+    retired, and the pod died of the threads that piled up.
+    """
+
+    def setUp(self):
+        self.addCleanup(self._clear)
+        self._clear()
+
+    def _clear(self):
+        with agg._snapshot_guard:
+            agg._snapshots.clear()
+
+    def test_builds_once_for_repeated_callers(self):
+        calls = []
+        produce = lambda: calls.append(1) or {"n": len(calls)}
+
+        first = agg.snapshot("k", produce)
+        second = agg.snapshot("k", produce)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first, second)
+        self.assertEqual(json.loads(first), {"n": 1})
+
+    def test_rebuilds_once_the_snapshot_is_stale(self):
+        """Bounded staleness is the whole trade: a panel must still move."""
+        calls = []
+        produce = lambda: calls.append(1) or {"n": len(calls)}
+
+        with mock.patch.object(agg, "_SNAPSHOT_TTL", 0.0):
+            agg.snapshot("k", produce)
+            agg.snapshot("k", produce)
+
+        self.assertEqual(len(calls), 2)
+
+    def test_keys_do_not_share_an_answer(self):
+        agg.snapshot("a", lambda: {"which": "a"})
+        self.assertEqual(json.loads(agg.snapshot("b", lambda: {"which": "b"})),
+                         {"which": "b"})
+        self.assertEqual(json.loads(agg.snapshot("a", lambda: {"which": "!"})),
+                         {"which": "a"})
+
+    def test_callers_arriving_mid_build_wait_rather_than_start_another(self):
+        """The case that matters: four tabs whose polls land together."""
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def produce():
+            calls.append(1)
+            started.set()
+            release.wait(5)
+            return {"n": len(calls)}
+
+        bodies = []
+        threads = [threading.Thread(target=lambda: bodies.append(
+            agg.snapshot("k", produce))) for _ in range(4)]
+        threads[0].start()
+        self.assertTrue(started.wait(5))
+        for t in threads[1:]:
+            t.start()
+        release.set()
+        for t in threads:
+            t.join(5)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(bodies), 4)
+        self.assertEqual(len(set(bodies)), 1)
+
+    def test_dropping_one_forces_the_next_caller_to_rebuild(self):
+        """A booking just made has to be in the list the operator is looking at."""
+        calls = []
+        produce = lambda: calls.append(1) or {"n": len(calls)}
+
+        agg.snapshot("generators", produce)
+        agg.snapshot_drop("generators")
+        agg.snapshot("generators", produce)
+
+        self.assertEqual(len(calls), 2)
+
+
+def get(path, wfile=None):
+    """Drive one GET through the real handler, without a socket.
+
+    The handler writes to whatever `wfile` it is given, so a BytesIO stands in
+    for the client and a raising one stands in for a client that hung up.
+    Returns (status, parsed body), or (None, None) where the fake client never
+    received the response.
+    """
+    handler = agg.H.__new__(agg.H)
+    handler.path = path
+    handler.requestline = f"GET {path} HTTP/1.1"
+    handler.request_version = "HTTP/1.1"
+    handler.client_address = ("test", 0)
+    handler.wfile = io.BytesIO() if wfile is None else wfile
+    handler.do_GET()
+
+    if not isinstance(handler.wfile, io.BytesIO):
+        return None, None
+    head, _, body = handler.wfile.getvalue().partition(b"\r\n\r\n")
+    status = int(head.split(b"\r\n", 1)[0].split()[1])
+    return status, (json.loads(body) if body else None)
+
+
+class ServedFromTheSnapshot(unittest.TestCase):
+    """The polled routes answer from the snapshot, not from a fresh build."""
+
+    def setUp(self):
+        self.addCleanup(self._clear)
+        self._clear()
+
+    def _clear(self):
+        with agg._snapshot_guard:
+            agg._snapshots.clear()
+
+    def test_two_polls_of_a_route_cost_one_build(self):
+        calls = []
+        with mock.patch.object(agg, "build", lambda: calls.append(1) or {"flows": []}):
+            first = get("/api/flows")
+            second = get("/api/flows")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first, (200, {"flows": []}))
+        self.assertEqual(second, first)
+
+    def test_each_route_has_its_own_snapshot(self):
+        with mock.patch.object(agg, "build", lambda: {"which": "flows"}), \
+                mock.patch.object(agg, "operator_flows", lambda: {"which": "operator"}):
+            self.assertEqual(get("/api/flows")[1], {"which": "flows"})
+            self.assertEqual(get("/api/operator-flows")[1], {"which": "operator"})
+
+    def test_a_failed_build_is_reported_and_not_remembered(self):
+        """Holding a 500 for a second would outlast the blip that caused it."""
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("apiserver said no")
+            return {"flows": []}
+
+        with mock.patch.object(agg, "build", flaky):
+            self.assertEqual(get("/api/flows")[0], 500)
+            self.assertEqual(get("/api/flows"), (200, {"flows": []}))
+
+
+class InFlightCeiling(unittest.TestCase):
+    """Past the ceiling a poll is refused, because queueing it killed the pod.
+
+    The UI drops a request the moment the next tick fires, but the thread
+    serving it runs to completion regardless, so an aggregator slower than the
+    poll interval gained a thread per tick until it reached its memory limit.
+    """
+
+    def setUp(self):
+        self.addCleanup(self._clear)
+        self._clear()
+
+    def _clear(self):
+        with agg._snapshot_guard:
+            agg._snapshots.clear()
+
+    def test_refuses_a_poll_once_the_ceiling_is_reached(self):
+        full = threading.BoundedSemaphore(1)
+        full.acquire()
+        with mock.patch.object(agg, "_inflight", full), \
+                mock.patch.object(agg, "build", lambda: {"flows": []}):
+            code, body = get("/api/flows")
+
+        self.assertEqual(code, 503)
+        self.assertIn("in flight", body["error"])
+
+    def test_still_answers_the_health_probe_while_refusing_polls(self):
+        """A liveness probe failing here restarts the pod the ceiling saved."""
+        full = threading.BoundedSemaphore(1)
+        full.acquire()
+        with mock.patch.object(agg, "_inflight", full):
+            self.assertEqual(get("/healthz"), (200, {"ok": True}))
+
+    def test_releases_its_slot_when_a_route_raises(self):
+        """A slot leaked per failure would shrink the ceiling to nothing."""
+        one = threading.BoundedSemaphore(1)
+        with mock.patch.object(agg, "_inflight", one), \
+                mock.patch.object(agg, "build",
+                                  mock.Mock(side_effect=RuntimeError("boom"))):
+            self.assertEqual(get("/api/flows")[0], 500)
+            self.assertEqual(get("/api/flows")[0], 500)
+
+
+class ClientHangUp(unittest.TestCase):
+    """A poll the browser abandoned is a normal end, not an error.
+
+    switchMap drops the request as the next tick fires and the socket closes
+    under the write. Left to propagate it printed a traceback per occurrence,
+    which under the load that caused it cost more than the request had.
+    """
+
+    def setUp(self):
+        with agg._snapshot_guard:
+            agg._snapshots.clear()
+
+    def test_a_closed_socket_does_not_raise(self):
+        class Hangup(io.RawIOBase):
+            def write(self, _b):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        with mock.patch.object(agg, "build", lambda: {"flows": []}):
+            get("/api/flows", wfile=Hangup())
+
+    def test_a_reset_connection_does_not_raise_either(self):
+        class Reset(io.RawIOBase):
+            def write(self, _b):
+                raise ConnectionResetError(104, "Connection reset by peer")
+
+        with mock.patch.object(agg, "build", lambda: {"flows": []}):
+            get("/api/flows", wfile=Reset())
 
 
 if __name__ == "__main__":
