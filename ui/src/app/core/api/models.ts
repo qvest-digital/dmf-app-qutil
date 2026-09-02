@@ -361,3 +361,28 @@ export interface FlowIds {
   videoFlowId: string;
   audioFlowId: string;
 }
+
+// ── GET /api/services ───────────────────────────────────────────────────────
+
+/** One address a booked function publishes on its handle. */
+export interface ServiceEndpoint {
+  name: string;
+  /** In-cluster Service address. Always present, never reachable from a browser. */
+  url: string;
+  api?: string;
+  /**
+   * The address a person opens, read off the resource the function's chart
+   * applied. Absent for most classes: a class publishes one only where it
+   * names that resource, so absence means "there is none", not "unknown".
+   */
+  externalUrl?: string;
+}
+
+export interface BookedService {
+  claim: string;
+  endpoints: ServiceEndpoint[];
+}
+
+export interface ServicesResponse {
+  services: BookedService[];
+}

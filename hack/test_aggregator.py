@@ -867,3 +867,46 @@ class ClientHangUp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServiceEndpoints(unittest.TestCase):
+    """What a booked function publishes, as the page shows it.
+
+    externalUrl is the address a person opens. Most classes publish none: a
+    class carries one only where it names the resource its chart applies, so
+    the key is absent rather than empty, and the page must not turn the
+    in-cluster url into a link to fill the gap.
+    """
+
+    @staticmethod
+    def _claim(endpoints, ready=True):
+        return {"status": {"handle": {"ready": ready, "endpoints": endpoints}}}
+
+    def test_carries_the_external_address_through(self):
+        claim = self._claim([
+            {"name": "ui", "url": "https://mcm.p-demo:443", "api": "https",
+             "externalUrl": "https://mcm-p-demo.dmf.example.com"},
+        ])
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            got = agg.service_endpoints("mcm", "mcm")
+
+        self.assertEqual(got, [{
+            "name": "ui",
+            "url": "https://mcm.p-demo:443",
+            "api": "https",
+            "externalUrl": "https://mcm-p-demo.dmf.example.com",
+        }])
+
+    def test_omits_the_key_where_the_class_publishes_none(self):
+        claim = self._claim([{"name": "rtsp", "url": "rtsp://mtx.p-demo:8554"}])
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            got = agg.service_endpoints("mediamtx", "mediamtx")
+
+        self.assertNotIn("externalUrl", got[0])
+
+    def test_publishes_nothing_until_the_handle_is_ready(self):
+        claim = self._claim([{"name": "ui", "url": "https://mcm.p-demo:443",
+                              "externalUrl": "https://mcm.example.com"}],
+                            ready=False)
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            self.assertEqual(agg.service_endpoints("mcm", "mcm"), [])

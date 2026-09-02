@@ -214,6 +214,13 @@ spec:
               value: {{ .Values.compositor.className }}
             - name: COMPOSITOR_STATS
               value: http://{{ .Values.compositor.claimName }}.{{ include "qutil.productionNamespace" . }}:9090/
+            {{- if .Values.mcm.enabled }}
+            # Only when the claim exists: /api/services reads the handle of a
+            # booking this chart made, and an unset name would make it search
+            # the namespace by class instead.
+            - name: MCM_CLAIM
+              value: {{ .Values.mcm.claimName }}
+            {{- end }}
             - name: ANC_READER_CLAIM
               value: {{ .Values.ancReader.claimName }}
             - name: ANC_READER_CLASS

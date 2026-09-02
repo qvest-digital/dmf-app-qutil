@@ -19,6 +19,8 @@
 #   GET    /api/preview/<uuid>     -> whether an audio preview is producing yet
 #   DELETE /api/preview/<uuid>     -> release this owner's hold on the path
 #   GET    /api/anc/<uuid>         -> the latest decoded ANC grain of a data flow
+#   GET    /api/services           -> booked functions and the addresses
+#                                    they publish, external where there is one
 #   GET    /api/generators         -> the writer claims the UI booked
 #   GET    /api/generators/flow-ids-> two unused MXL flow ids
 #   POST   /api/generators         -> book a writer claim
@@ -884,6 +886,7 @@ CLAIM_NS = os.environ.get("CLAIM_NS", WRITER_NS)
 MEDIAMTX_CLAIM = os.environ.get("MEDIAMTX_CLAIM", "")
 COMPOSITOR_CLAIM = os.environ.get("COMPOSITOR_CLAIM", "")
 ANC_READER_CLAIM = os.environ.get("ANC_READER_CLAIM", "")
+MCM_CLAIM = os.environ.get("MCM_CLAIM", "")
 
 # The class a nameless claim is looked up by. A cluster may register a class
 # under a different name than the catalog's default, so this follows the same
@@ -997,14 +1000,8 @@ def _http_json(base, path, method="GET", body=None):
         return 503, {"error": f"{base} unreachable: {e}"}
 
 
-def _claim_endpoint(claim_name, class_name, ep_name):
-    """The URL a booked function publishes for one of its endpoints.
-
-    The lifecycle plane renders a class's endpointTemplates once, at provision
-    time, and the binder copies the result onto the claim as
-    status.handle.endpoints. That is the only address a consumer is promised:
-    the Service name is the claim's, in whatever namespace the production owns,
-    so nothing here may assume either.
+def _claim_handle(claim_name, class_name):
+    """The published handle of a booked function, or None.
 
     handle.ready gates it. An endpoint published for a function whose workload
     is not up yet resolves to a Service with no backend, which fails as a
@@ -1030,6 +1027,47 @@ def _claim_endpoint(claim_name, class_name, ep_name):
         return None
     handle = (claim.get("status") or {}).get("handle") or {}
     if not handle.get("ready"):
+        return None
+    return handle
+
+
+def service_endpoints(claim_name, class_name):
+    """What a booked function publishes, as the page shows it.
+
+    externalUrl is carried through untouched and is absent for most classes:
+    a class publishes one only where it names the resource its chart applies,
+    which is the gateway route. url is always there and is in-cluster, so the
+    page must not offer it as a link.
+    """
+    handle = _claim_handle(claim_name, class_name)
+    if not handle:
+        return []
+    out = []
+    for ep in handle.get("endpoints") or []:
+        item = {"name": ep.get("name"), "url": ep.get("url")}
+        if ep.get("api"):
+            item["api"] = ep["api"]
+        if ep.get("externalUrl"):
+            item["externalUrl"] = ep["externalUrl"]
+        out.append(item)
+    return out
+
+
+def _claim_endpoint(claim_name, class_name, ep_name):
+    """The URL a booked function publishes for one of its endpoints.
+
+    The lifecycle plane renders a class's endpointTemplates once, at provision
+    time, and the binder copies the result onto the claim as
+    status.handle.endpoints. That is the only address a consumer is promised:
+    the Service name is the claim's, in whatever namespace the production owns,
+    so nothing here may assume either.
+
+    handle.ready gates it. An endpoint published for a function whose workload
+    is not up yet resolves to a Service with no backend, which fails as a
+    connection timeout rather than as the "not ready yet" it actually is.
+    """
+    handle = _claim_handle(claim_name, class_name)
+    if not handle:
         return None
     for ep in handle.get("endpoints") or []:
         if ep.get("name") == ep_name:
@@ -2023,6 +2061,14 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             self._send(code, res)
+        elif self.path.startswith("/api/services"):
+            try:
+                self._send(200, {"services": [
+                    {"claim": MCM_CLAIM or "mcm",
+                     "endpoints": service_endpoints(MCM_CLAIM, "mcm")},
+                ]})
+            except Exception as e:
+                self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/flows"):
             try:
                 self._send_body(200, snapshot("flows", build))
