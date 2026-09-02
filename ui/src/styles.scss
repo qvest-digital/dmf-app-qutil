@@ -632,6 +632,51 @@ main.previewing {
   opacity: 0.6;
 }
 
+/* Booked services. Same card as a gateway, because both answer "what is up and
+   where": the only difference is that one of these addresses is meant to be
+   clicked. The link carries the lime the page already uses for a live value,
+   rather than the browser's own, which reads as an unstyled mistake next to
+   the cards around it. */
+.svcgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.svc {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  min-width: 0;
+}
+.svc .node {
+  font-weight: 800;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+.svc .ext {
+  color: var(--qv-lime);
+  text-decoration: none;
+  /* A hostname has no spaces to wrap on and the card is half the panel. */
+  overflow-wrap: anywhere;
+  display: inline-block;
+}
+.svc .ext:hover,
+.svc .ext:focus-visible {
+  text-decoration: underline;
+}
+.svc .name {
+  opacity: 0.6;
+  overflow-wrap: anywhere;
+}
+/* Says why there is nothing to click, so an address without a link does not
+   read as one that failed to render. */
+.svc .note {
+  opacity: 0.45;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
 /* Tabs. They are <a routerLink> now rather than <button>, so the anchor needs
    the button's text/box treatment reset onto it. */
 .tabs {

@@ -5,12 +5,13 @@ import { FmtPipe } from '../../shared/format-pipes';
 import { FlowPreview } from '../preview/flow-preview';
 import { PreviewController } from '../preview/preview-controller';
 import { GatewayGrid } from './gateway-grid';
+import { ServiceLinks } from './service-links';
 import { OperatorFlowList } from './operator-flow-list';
 
 @Component({
   selector: 'mv-multiviewer-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [GatewayGrid, OperatorFlowList, FlowPreview, FmtPipe],
+  imports: [GatewayGrid, ServiceLinks, OperatorFlowList, FlowPreview, FmtPipe],
   templateUrl: './multiviewer-page.html',
 })
 export class MultiviewerPage {
@@ -28,11 +29,15 @@ export class MultiviewerPage {
    * moment someone looks back.
    */
   private readonly data = poll(1500, () => this.api.flows());
+  // Slower than the flow poll: an address changes when a route does, which
+  // is an operator action, not something that moves frame to frame.
+  private readonly svc = poll(15000, () => this.api.services());
   private readonly operatorFlows = poll(3000, () => this.api.operatorFlows());
 
   private readonly flows = computed(() => this.data()?.flows ?? []);
 
   protected readonly gateways = computed(() => this.data()?.gateways ?? []);
+  protected readonly services = computed(() => this.svc()?.services ?? []);
   protected readonly opFlows = computed(() => this.operatorFlows()?.flows ?? []);
 
   /**

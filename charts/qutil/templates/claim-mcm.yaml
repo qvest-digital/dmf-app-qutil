@@ -1,0 +1,23 @@
+{{- if .Values.mcm.enabled }}
+{{- /* A booked function whose address is served through the gateway, so the
+       page has something whose externalUrl is worth showing. The multiviewer
+       does not play from it: it is here because the classes qutil books for
+       its own work are reached in-cluster and publish no external address.
+
+       Off by default. Turning it on books a vendor workload that wants a
+       registry pull secret and a node on the MXL fabric, which is a cost an
+       install should opt into rather than inherit. */ -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.mcm.claimName }}
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.mcm.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+{{- end }}

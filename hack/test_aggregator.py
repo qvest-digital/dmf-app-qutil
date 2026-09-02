@@ -867,3 +867,86 @@ class ClientHangUp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServiceEndpoints(unittest.TestCase):
+    """What a booked function publishes, as the page shows it.
+
+    externalUrl is the address a person opens. Most classes publish none: a
+    class carries one only where it names the resource its chart applies, so
+    the key is absent rather than empty, and the page must not turn the
+    in-cluster url into a link to fill the gap.
+    """
+
+    @staticmethod
+    def _claim(endpoints, ready=True):
+        return {"status": {"handle": {"ready": ready, "endpoints": endpoints}}}
+
+    def test_carries_the_external_address_through(self):
+        claim = self._claim([
+            {"name": "ui", "url": "https://mcm.p-demo:443", "api": "https",
+             "externalUrl": "https://mcm-p-demo.dmf.example.com"},
+        ])
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            got = agg.service_endpoints("mcm", "mcm")
+
+        self.assertEqual(got, [{
+            "name": "ui",
+            "url": "https://mcm.p-demo:443",
+            "api": "https",
+            "externalUrl": "https://mcm-p-demo.dmf.example.com",
+        }])
+
+    def test_omits_the_key_where_the_class_publishes_none(self):
+        claim = self._claim([{"name": "rtsp", "url": "rtsp://mtx.p-demo:8554"}])
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            got = agg.service_endpoints("mediamtx", "mediamtx")
+
+        self.assertNotIn("externalUrl", got[0])
+
+    def test_publishes_nothing_until_the_handle_is_ready(self):
+        claim = self._claim([{"name": "ui", "url": "https://mcm.p-demo:443",
+                              "externalUrl": "https://mcm.example.com"}],
+                            ready=False)
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: claim):
+            self.assertEqual(agg.service_endpoints("mcm", "mcm"), [])
+
+
+class BookedServices(unittest.TestCase):
+    """The panel lists what is reachable, not what was configured.
+
+    A booking the release did not make, or whose handle is not ready, has
+    nothing to offer a reader. Listing it with no endpoints would read as a
+    fault rather than as an absence, so it is left out entirely.
+    """
+
+    def test_omits_a_function_that_published_nothing(self):
+        def endpoints(claim_name, class_name):
+            if class_name == "mcm":
+                return [{"name": "ui", "url": "https://mcm.p-demo:443",
+                         "externalUrl": "https://mcm-p-demo.dmf.example.com"}]
+            return []
+
+        with mock.patch.object(agg, "service_endpoints", endpoints):
+            got = agg.booked_services()
+
+        self.assertEqual([s["claim"] for s in got], ["mcm"])
+
+    def test_lists_every_booking_that_published_something(self):
+        with mock.patch.object(
+                agg, "service_endpoints",
+                lambda c, k: [{"name": "x", "url": f"http://{k}:1"}]):
+            got = agg.booked_services()
+
+        self.assertEqual(len(got), 4)
+        # An internal-only booking still appears; it just carries no link.
+        self.assertNotIn("externalUrl", got[1]["endpoints"][0])
+
+    def test_names_the_class_when_no_claim_name_is_configured(self):
+        with mock.patch.object(agg, "MCM_CLAIM", ""), \
+                mock.patch.object(
+                    agg, "service_endpoints",
+                    lambda c, k: [{"name": "ui", "url": "u"}] if k == "mcm" else []):
+            got = agg.booked_services()
+
+        self.assertEqual(got[0]["claim"], "mcm")
