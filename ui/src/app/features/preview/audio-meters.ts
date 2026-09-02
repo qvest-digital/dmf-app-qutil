@@ -36,7 +36,6 @@ const PEAK_HOLD_MS = 900;
 const PEAK_DECAY_PER_SEC = 0.7;
 /** Above this the bar turns orange — the usual "too hot" cue. */
 const HOT_DBFS = -6;
-const MAX_CHANNELS = 8;
 const SPECTRUM_COLUMNS = 64;
 /**
  * Time constants for a bar chasing a new level, rising and falling. Asymmetric
@@ -70,11 +69,13 @@ const WIDE_STRIP_CHANNELS = 8;
 /**
  * Level meters and a spectrum for an audio preview.
  *
- * The bars are measured from the decoded stream, so they meter the pair being
- * listened to. A wide flow shows that pair rather than all of its channels:
- * nothing reports the rest since the media server took over reading the flow,
- * and drawing them from no measurement would claim they are silent. The
- * spectrum comes from the same stream.
+ * The strip carries one bar per source channel. Without reported levels only
+ * the pair being listened to is measured, since the media server publishes
+ * that pair and measures nothing else, so those two bars sit at the positions
+ * `selected` names and the rest carry no level at all. A bar drawn from no
+ * measurement would read as silence, which is why an unmeasured channel keeps
+ * its frame and its number but shows neither a level nor a peak. The spectrum
+ * comes from the same stream.
  *
  * sourcePeaks stays as an input for a reporter that measures every channel,
  * should one exist again; with none the bars ease towards the measured values
@@ -115,6 +116,8 @@ export class AudioMeters {
   };
 
   private viz: Visualisation | null = null;
+  /** Source channels the strip draws a bar for, which is the flow's width. */
+  private width = 2;
   private frame = 0;
   /** Displayed level per bar, in dBFS, carried between frames by the ballistics. */
   private levelsDb: number[] = [];
@@ -167,12 +170,15 @@ export class AudioMeters {
     // recovers from HLS back to WHEP plays silently for the rest of its life.
     const streamDrivesOutput = stream !== null && this.elementSource !== null;
 
-    const count = Math.min(Math.max(channels || 2, 1), MAX_CHANNELS);
-    const splitter = ctx.createChannelSplitter(count);
+    this.width = Math.max(channels || 2, 1);
+    // Only the published pair reaches the graph, however wide the flow is, so
+    // the splitter follows the decoded stream rather than the channel count.
+    const decoded = Math.max(src.channelCount || 2, 1);
+    const splitter = ctx.createChannelSplitter(decoded);
     src.connect(splitter);
 
     const meters: ChannelMeter[] = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < decoded; i++) {
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.4;
@@ -278,7 +284,7 @@ export class AudioMeters {
     g.clearRect(0, 0, W, H);
 
     const peaks = this.sourcePeaks();
-    const count = peaks.length || viz.channels.length;
+    const count = peaks.length || this.width;
     const pad = 18;
     // A wide flow gets more of the canvas: twelve bars in a third of it leave
     // no room for a channel number under each one.
@@ -294,10 +300,35 @@ export class AudioMeters {
     const dt = this.lastFrameAt ? now - this.lastFrameAt : 0;
     this.lastFrameAt = now;
 
-    const selected = this.selected();
+    // A path carries the flow's first channels until it is configured with a
+    // pair, and the selection is unreported until the status answers, so
+    // without that default a fresh card meters nothing at all.
+    const reported = this.selected();
+    const carried = reported.length ? reported : viz.channels.map((_, i) => i + 1);
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
-      const target = peaks.length ? peaks[c] : this.decodedDb(viz, c);
+      const audible = carried.includes(c + 1);
+      const x = pad + c * slot;
+      const w = slot * 0.62;
+      g.fillStyle = audible ? 'rgba(200,241,105,.16)' : 'rgba(255,255,255,.07)';
+      g.fillRect(x, pad, w, barHeight);
+
+      g.font = '11px system-ui,sans-serif';
+      g.textAlign = 'left';
+      g.fillStyle = audible ? '#C8F169' : 'rgba(255,255,255,.55)';
+      g.fillText(`ch${c + 1}`, x, H - pad - 4);
+
+      // Which decoded channel carries this source channel. Reported levels are
+      // already per source channel; without them the graph holds the published
+      // pair alone, in the order `selected` names it.
+      const from = peaks.length ? c : carried.indexOf(c + 1);
+      if (from < 0) {
+        this.levelsDb[c] = -120;
+        this.sourceHold[c] = { peak: 0, hold: 0 };
+        continue;
+      }
+
+      const target = peaks.length ? peaks[c] : this.decodedDb(viz, from);
       // Seeded with the target rather than silence, so opening a preview shows
       // the levels instead of sweeping up to them.
       const db = advanceLevelDb(this.levelsDb[c] ?? target, target, dt);
@@ -306,11 +337,6 @@ export class AudioMeters {
       this.sourceHold[c] ??= { peak: 0, hold: 0 };
       AudioMeters.advance(this.sourceHold[c], v, dt);
 
-      const audible = selected.includes(c + 1);
-      const x = pad + c * slot;
-      const w = slot * 0.62;
-      g.fillStyle = audible ? 'rgba(200,241,105,.16)' : 'rgba(255,255,255,.07)';
-      g.fillRect(x, pad, w, barHeight);
       const lit = Math.round(barHeight * v);
       g.fillStyle = db > HOT_DBFS ? '#F05012' : '#C8F169';
       g.fillRect(x, pad + barHeight - lit, w, lit);
@@ -318,10 +344,6 @@ export class AudioMeters {
       g.fillStyle = '#fff';
       g.fillRect(x, Math.max(pad, peakY - 2), w, 2);
 
-      g.font = '11px system-ui,sans-serif';
-      g.textAlign = 'left';
-      g.fillStyle = audible ? '#C8F169' : 'rgba(255,255,255,.55)';
-      g.fillText(`ch${c + 1}`, x, H - pad - 4);
       g.fillStyle = 'rgba(255,255,255,.45)';
       g.fillText(db <= -120 ? '-inf' : db.toFixed(1), x, H - pad + 8);
     }
