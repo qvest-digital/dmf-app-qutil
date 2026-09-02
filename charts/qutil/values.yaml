@@ -114,6 +114,19 @@ compositor:
   frameHeight: 720
   parameters: {}
 
+
+# A booked function reached through the gateway rather than in-cluster, so the
+# page has an external address to show. Nothing plays from it; the classes
+# qutil books for its own work publish no externalUrl, because none of them is
+# exposed through an HTTPRoute.
+#
+# Off by default: booking it costs a vendor workload that wants a registry pull
+# secret and a node on the MXL fabric.
+mcm:
+  enabled: false
+  claimName: mcm
+  className: mcm
+
 # One claim per flow: a writer pod writes one flow, so four tiles are four
 # claims. Geometry is stated per claim rather than inherited from the class.
 writers:

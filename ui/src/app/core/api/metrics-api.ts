@@ -11,6 +11,7 @@ import {
   OperatorFlowsResponse,
   PreviewSession,
   PreviewStatus,
+  ServicesResponse,
 } from './models';
 
 /**
@@ -25,6 +26,11 @@ export class MetricsApi {
   /** Per-flow writer + compositor + gateway metrics for the four demo flows. */
   flows(): Observable<FlowsResponse> {
     return this.http.get<FlowsResponse>('/api/flows');
+  }
+
+  /** Booked functions and the addresses they publish. */
+  services(): Observable<ServicesResponse> {
+    return this.http.get<ServicesResponse>('/api/services');
   }
 
   /** Every MxlFlow CR the mxl-k8s operator knows about, demo-related or not. */
