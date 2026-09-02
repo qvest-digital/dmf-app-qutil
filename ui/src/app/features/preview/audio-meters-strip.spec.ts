@@ -117,6 +117,22 @@ describe('AudioMeters strip', () => {
     meters.start({} as MediaStream, channels, element);
   };
 
+  /**
+   * Ask for another pair and draw one frame, which is the window a pair change
+   * opens: the selection has moved and the transport has not reconnected yet.
+   * The frame is driven directly because the component's own loop runs on the
+   * zone-patched rAF, which never fires here.
+   */
+  const select = (pair: number[]) => {
+    fixture.componentRef.setInput('selected', pair);
+    fixture.detectChanges();
+    drawn = [];
+    (meters as unknown as { draw(): void }).draw();
+    // Labels draw unconditionally, so their absence would make every level
+    // assertion below pass without anything having been measured.
+    expect(labels().length).toBeGreaterThan(0);
+  };
+
   it('draws one bar per source channel of a wide flow', () => {
     open(12, [1, 2]);
 
@@ -168,6 +184,39 @@ describe('AudioMeters strip', () => {
 
     expect(levels().map((d) => d.x)).toEqual([xOf('ch1'), xOf('ch2')]);
     expect(levels().map((d) => d.text)).toEqual(['-6.0', '-12.0']);
+  });
+
+  /** The old pair's levels under the new pair's labels read as already on air. */
+  it('meters nothing while a newly selected pair is still connecting', () => {
+    open(12, [1, 2]);
+    expect(levels()).toHaveLength(2);
+
+    select([5, 6]);
+
+    expect(levels()).toHaveLength(0);
+  });
+
+  it('meters the new pair once the stream has reconnected on it', () => {
+    open(12, [1, 2]);
+    select([5, 6]);
+
+    drawn = [];
+    meters.start({} as MediaStream, 12, element);
+
+    expect(levels().map((d) => d.x)).toEqual([xOf('ch5'), xOf('ch6')]);
+  });
+
+  /** Reported levels come from the source, so a reconnect cannot stale them. */
+  it('keeps metering through a pair change when levels are reported', () => {
+    fixture.componentRef.setInput(
+      'sourcePeaks',
+      Array.from({ length: 12 }, (_, i) => -i),
+    );
+    open(12, [1, 2]);
+
+    select([5, 6]);
+
+    expect(levels()).toHaveLength(12);
   });
 
   it('meters every channel when a reporter supplies levels for all of them', () => {

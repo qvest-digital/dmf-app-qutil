@@ -118,6 +118,8 @@ export class AudioMeters {
   private viz: Visualisation | null = null;
   /** Source channels the strip draws a bar for, which is the flow's width. */
   private width = 2;
+  /** The selection the graph was built for; anything else is not on air yet. */
+  private startedFor: number[] = [];
   private frame = 0;
   /** Displayed level per bar, in dBFS, carried between frames by the ballistics. */
   private levelsDb: number[] = [];
@@ -171,6 +173,7 @@ export class AudioMeters {
     const streamDrivesOutput = stream !== null && this.elementSource !== null;
 
     this.width = Math.max(channels || 2, 1);
+    this.startedFor = this.selected().slice();
     // Only the published pair reaches the graph, however wide the flow is, so
     // the splitter follows the decoded stream rather than the channel count.
     const decoded = Math.max(src.channelCount || 2, 1);
@@ -246,10 +249,15 @@ export class AudioMeters {
     }
     this.sourceHold = [];
     this.levelsDb = [];
+    this.startedFor = [];
     this.lastFrameAt = 0;
     if (!wasRunning) return;
     const canvas = this.canvasRef().nativeElement;
     canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  private static sameSelection(a: number[], b: number[]): boolean {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
   }
 
   /** -60..0 dBFS -> 0..1 */
@@ -305,6 +313,8 @@ export class AudioMeters {
     // without that default a fresh card meters nothing at all.
     const reported = this.selected();
     const carried = reported.length ? reported : viz.channels.map((_, i) => i + 1);
+    // Reported levels come from the source; a stream only carries the pair the graph started on.
+    const onAir = peaks.length || AudioMeters.sameSelection(reported, this.startedFor);
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
       const audible = carried.includes(c + 1);
@@ -321,7 +331,7 @@ export class AudioMeters {
       // Which decoded channel carries this source channel. Reported levels are
       // already per source channel; without them the graph holds the published
       // pair alone, in the order `selected` names it.
-      const from = peaks.length ? c : carried.indexOf(c + 1);
+      const from = onAir ? (peaks.length ? c : carried.indexOf(c + 1)) : -1;
       if (from < 0) {
         this.levelsDb[c] = -120;
         this.sourceHold[c] = { peak: 0, hold: 0 };
