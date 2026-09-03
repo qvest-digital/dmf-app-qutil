@@ -142,7 +142,7 @@ class PreviewPathConfig(unittest.TestCase):
         agg.preview_add(self.uuid)
         conf = self.mtx.added()
         self.assertEqual(conf["source"], f"mxl://{agg.MXL_DOMAIN}/{self.uuid}")
-        self.assertEqual(conf["mxlH264Preset"], "veryfast")
+        self.assertEqual(conf["mxlH264Preset"], "superfast")
         self.assertEqual(conf["mxlH264Profile"], "high")
         self.assertEqual(conf["mxlH264Bitrate"], 5000000)
 
