@@ -45,7 +45,10 @@ describe('FlowPreview channel pairs', () => {
       channels,
     });
     fixture.detectChanges();
-    http.expectOne((req) => req.method === 'POST' && req.url.startsWith(`/api/preview/${FLOW}`));
+  }
+
+  function pendingPreviewPosts(): ReturnType<HttpTestingController['match']> {
+    return http.match((r) => r.method === 'POST' && r.url.startsWith(`/api/preview/${FLOW}`));
   }
 
   it('offers one button per pair of a 12-channel flow', () => {
@@ -70,26 +73,63 @@ describe('FlowPreview channel pairs', () => {
     expect(buttons()).toHaveLength(0);
   });
 
-  it('names the requested pair on the wire', () => {
-    openAudio(12);
-    buttons()[2].click();
-    fixture.detectChanges();
+  it('caps a flow wider than twelve channels at six pairs', () => {
+    openAudio(16);
+    expect(buttons().map((b) => b.textContent?.trim())).toEqual([
+      '1/2',
+      '3/4',
+      '5/6',
+      '7/8',
+      '9/10',
+      '11/12',
+    ]);
+  });
 
-    const req = http.expectOne(
-      (r) => r.method === 'POST' && decodeURIComponent(r.url).includes('channels=5,6'),
-    );
-    expect(decodeURIComponent(req.request.url)).toContain('owner=preview');
-    req.flush({ path: 'p', hls: 'h', whep: 'w', format: 'audio' });
+  it('opens one connection per pair at once, each naming its pair on the wire', () => {
+    openAudio(12);
+    const requests = pendingPreviewPosts();
+    expect(requests.map((r) => decodeURIComponent(r.request.urlWithParams))).toEqual([
+      `/api/preview/${FLOW}?owner=preview&channels=1,2`,
+      `/api/preview/${FLOW}?owner=preview&channels=3,4`,
+      `/api/preview/${FLOW}?owner=preview&channels=5,6`,
+      `/api/preview/${FLOW}?owner=preview&channels=7,8`,
+      `/api/preview/${FLOW}?owner=preview&channels=9,10`,
+      `/api/preview/${FLOW}?owner=preview&channels=11,12`,
+    ]);
+    requests.forEach((r, i) => r.flush({ path: `p${i}`, hls: '', whep: '', format: 'audio' }));
+  });
+
+  it('opens exactly one connection for a flow no wider than a pair', () => {
+    openAudio(2);
+    const requests = pendingPreviewPosts();
+    expect(requests).toHaveLength(1);
+    expect(decodeURIComponent(requests[0].request.urlWithParams)).not.toContain('channels=');
+    requests[0].flush({ path: 'p', hls: 'h', whep: 'w', format: 'audio' });
   });
 
   it('marks a pair on the press rather than waiting for the next poll', () => {
     openAudio(12);
-    expect(buttons().some((b) => b.classList.contains('on'))).toBe(false);
+    // The first pair is heard as soon as the card opens, before any pair has
+    // actually connected, so it starts marked on its own.
+    expect(buttons().filter((b) => b.classList.contains('on'))).toHaveLength(1);
+    expect(buttons()[0].classList.contains('on')).toBe(true);
 
     buttons()[2].click();
     fixture.detectChanges();
     expect(buttons().filter((b) => b.classList.contains('on'))).toHaveLength(1);
     expect(buttons()[2].classList.contains('on')).toBe(true);
+  });
+
+  it('makes no server call when picking a different pair of a wide flow', () => {
+    openAudio(12);
+    pendingPreviewPosts().forEach((r) =>
+      r.flush({ path: 'p', hls: '', whep: '', format: 'audio' }),
+    );
+
+    buttons()[2].click();
+    fixture.detectChanges();
+
+    http.expectNone(() => true);
   });
 });
 
