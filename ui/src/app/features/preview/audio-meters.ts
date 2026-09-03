@@ -24,10 +24,16 @@ interface HoldState {
 }
 
 interface Visualisation {
-  src: AudioNode;
+  srcs: AudioNode[];
   channels: ChannelMeter[];
   spectrum: AnalyserNode;
   bins: Uint8Array<ArrayBuffer>;
+}
+
+/** One pair's decoded stream, ready to meter. */
+export interface PairStream {
+  pair: number[];
+  stream: MediaStream;
 }
 
 /** Peak-hold dwell before the marker starts sliding back down. */
@@ -120,6 +126,14 @@ export class AudioMeters {
   private width = 2;
   /** The selection the graph was built for; anything else is not on air yet. */
   private startedFor: number[] = [];
+  /** True once every pair of a wide flow is connected at once, so there is
+   *  no reconnect gap left for the bars or the spectrum to hide. */
+  private allConnected = false;
+  /** Each connected pair's own stream node, keyed by "1,2" etc, so the
+   *  spectrum can follow the selection without touching the bars. */
+  private readonly pairTaps = new Map<string, AudioNode>();
+  /** Which tap currently feeds the spectrum analyser. */
+  private spectrumFrom: AudioNode | null = null;
   private frame = 0;
   /** Displayed level per bar, in dBFS, carried between frames by the ballistics. */
   private levelsDb: number[] = [];
@@ -210,12 +224,86 @@ export class AudioMeters {
     }
 
     this.viz = {
-      src,
+      srcs: [src],
       channels: meters,
       spectrum,
       bins: new Uint8Array(spectrum.frequencyBinCount),
     };
     this.draw();
+  }
+
+  /**
+   * Meter every pair of a wide flow at once, rather than only the one
+   * published. Nothing here tears down when the selection changes, so every
+   * bar stays measured through a pair switch; only the spectrum, and which
+   * bar reads as the one heard, follow it.
+   */
+  startMulti(sources: PairStream[], channels: number): void {
+    this.stop();
+    try {
+      this.context ??= new AudioContext();
+    } catch {
+      return;
+    }
+    const ctx = this.context;
+    if (ctx.state === 'suspended') void ctx.resume();
+
+    this.width = Math.max(channels || 2, 1);
+    this.allConnected = true;
+
+    const srcs: AudioNode[] = [];
+    const meters: ChannelMeter[] = new Array(this.width);
+    for (const { pair, stream } of sources) {
+      let src: AudioNode;
+      try {
+        src = ctx.createMediaStreamSource(stream);
+      } catch {
+        continue;
+      }
+      srcs.push(src);
+      this.pairTaps.set(pair.join(','), src);
+
+      const decoded = Math.max(src.channelCount || pair.length, 1);
+      const splitter = ctx.createChannelSplitter(decoded);
+      src.connect(splitter);
+      pair.forEach((channelNumber, i) => {
+        if (i >= decoded) return;
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.4;
+        splitter.connect(analyser, i);
+        meters[channelNumber - 1] = {
+          analyser,
+          samples: new Float32Array(analyser.fftSize),
+          peak: 0,
+          hold: 0,
+        };
+      });
+    }
+    if (!srcs.length) return;
+
+    const spectrum = ctx.createAnalyser();
+    spectrum.fftSize = 1024;
+    spectrum.smoothingTimeConstant = 0.7;
+
+    this.viz = {
+      srcs,
+      channels: meters,
+      spectrum,
+      bins: new Uint8Array(spectrum.frequencyBinCount),
+    };
+    this.draw();
+  }
+
+  /** Keep the spectrum on the pair currently heard, without touching the bars. */
+  private syncSpectrum(): void {
+    if (!this.allConnected || !this.viz) return;
+    const pair = this.selected();
+    const wanted = pair.length ? (this.pairTaps.get(pair.join(',')) ?? null) : null;
+    if (wanted === this.spectrumFrom) return;
+    if (this.spectrumFrom) this.spectrumFrom.disconnect(this.viz.spectrum);
+    if (wanted) wanted.connect(this.viz.spectrum);
+    this.spectrumFrom = wanted;
   }
 
   stop(): void {
@@ -227,11 +315,12 @@ export class AudioMeters {
       this.frame = 0;
     }
     if (this.viz) {
-      try {
-        // The element source is permanent -- only detach it from the graph.
-        this.viz.src.disconnect();
-      } catch {
-        // Already detached.
+      for (const src of this.viz.srcs) {
+        try {
+          src.disconnect();
+        } catch {
+          // Already detached.
+        }
       }
       this.viz = null;
     }
@@ -250,6 +339,9 @@ export class AudioMeters {
     this.sourceHold = [];
     this.levelsDb = [];
     this.startedFor = [];
+    this.allConnected = false;
+    this.pairTaps.clear();
+    this.spectrumFrom = null;
     this.lastFrameAt = 0;
     if (!wasRunning) return;
     const canvas = this.canvasRef().nativeElement;
@@ -283,6 +375,7 @@ export class AudioMeters {
     this.frame = requestAnimationFrame(() => this.draw());
     const viz = this.viz;
     if (!viz) return;
+    this.syncSpectrum();
 
     const canvas = this.canvasRef().nativeElement;
     const g = canvas.getContext('2d');
@@ -313,8 +406,10 @@ export class AudioMeters {
     // without that default a fresh card meters nothing at all.
     const reported = this.selected();
     const carried = reported.length ? reported : viz.channels.map((_, i) => i + 1);
-    // Reported levels come from the source; a stream only carries the pair the graph started on.
-    const onAir = peaks.length || AudioMeters.sameSelection(reported, this.startedFor);
+    // Every pair is already connected in this mode, so there is no reconnect
+    // gap to hide.
+    const onAir =
+      this.allConnected || peaks.length || AudioMeters.sameSelection(reported, this.startedFor);
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
       const audible = carried.includes(c + 1);
@@ -328,10 +423,18 @@ export class AudioMeters {
       g.fillStyle = audible ? '#C8F169' : 'rgba(255,255,255,.55)';
       g.fillText(`ch${c + 1}`, x, H - pad - 4);
 
-      // Which decoded channel carries this source channel. Reported levels are
-      // already per source channel; without them the graph holds the published
-      // pair alone, in the order `selected` names it.
-      const from = onAir ? (peaks.length ? c : carried.indexOf(c + 1)) : -1;
+      // Which decoded channel carries this source channel. In this mode the
+      // bar array is already indexed by absolute channel, so no lookup is
+      // needed; a channel whose pair has not connected yet stays unmeasured.
+      const from = !onAir
+        ? -1
+        : this.allConnected
+          ? viz.channels[c]
+            ? c
+            : -1
+          : peaks.length
+            ? c
+            : carried.indexOf(c + 1);
       if (from < 0) {
         this.levelsDb[c] = -120;
         this.sourceHold[c] = { peak: 0, hold: 0 };
