@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.43](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.42...v1.0.0-rc.43) (2026-09-03)
+
+
+### Features
+
+* **preview:** connect and meter every pair of a wide audio flow ([#175](https://github.com/qvest-digital/dmf-app-qutil/issues/175)) ([01d216d](https://github.com/qvest-digital/dmf-app-qutil/commit/01d216d528c3227d1ce88348f6fa384759ac6f91))
+
 ## [1.0.0-rc.42](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.41...v1.0.0-rc.42) (2026-09-03)
 
 
