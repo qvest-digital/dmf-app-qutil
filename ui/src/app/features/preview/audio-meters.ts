@@ -431,18 +431,14 @@ export class AudioMeters {
       g.fillStyle = audible ? '#C8F169' : 'rgba(255,255,255,.55)';
       g.fillText(`ch${c + 1}`, x, H - pad - 4);
 
-      // Which decoded channel carries this source channel. In this mode the
-      // bar array is already indexed by absolute channel, so no lookup is
-      // needed; a channel whose pair has not connected yet stays unmeasured.
-      const from = !onAir
-        ? -1
-        : this.perPairMode
-          ? viz.channels[c]
-            ? c
-            : -1
-          : peaks.length
-            ? c
-            : carried.indexOf(c + 1);
+      // Per-pair mode indexes bars by absolute channel already. Otherwise: a
+      // reporter's own index, or this channel's spot in the selected pair.
+      const perPairChannelIndex = viz.channels[c] ? c : -1;
+      const singleConnectionChannelIndex = peaks.length ? c : carried.indexOf(c + 1);
+      const channelIndexOnAir = this.perPairMode
+        ? perPairChannelIndex
+        : singleConnectionChannelIndex;
+      const from = !onAir ? -1 : channelIndexOnAir;
       if (from < 0) {
         this.levelsDb[c] = -120;
         this.sourceHold[c] = { peak: 0, hold: 0 };
