@@ -16,7 +16,7 @@ import { PlayerRegistry } from '../../core/player/player-registry';
 import { WhepHandle, WhepStats, whep } from '../../core/player/whep';
 import { VideoShell } from '../../shared/video-shell';
 import { AncGrainView } from './anc-grain';
-import { AudioMeters, PairStream } from './audio-meters';
+import { AudioMeters, PairStream, pairKey } from './audio-meters';
 import { key, PreviewController, PreviewRequest } from './preview-controller';
 
 /** A preview tolerates more rebuffering than a wall of tiles before it gives up. */
@@ -233,25 +233,13 @@ export class FlowPreview {
    *
    * A wide flow has every pair connected already, so nothing here
    * reconnects: picking a different pair only changes which of the
-   * already-live streams reaches the speakers. A flow with a single pair
-   * never shows the buttons this is bound to.
+   * already-live streams reaches the speakers. Only reachable from the
+   * picker buttons, which only render for a wide flow.
    */
   protected pick(pair: number[]): void {
-    if (this.multiPair) {
-      this.selected.set(pair);
-      const stream = this.streamsByPair.get(pair.join(','));
-      if (stream) this.attach(stream);
-      return;
-    }
-    const id = this.sessionId;
-    if (!id) return;
     this.selected.set(pair);
-    this.api.selectPreviewChannels(id, pair, OWNER).subscribe({
-      error: (err: { error?: { error?: string } }) => {
-        if (this.sessionId !== id) return;
-        this.state.set(`channel switch failed: ${err.error?.error ?? ''}`);
-      },
-    });
+    const stream = this.streamsByPair.get(pairKey(pair));
+    if (stream) this.attach(stream);
   }
 
   private start(request: PreviewRequest): void {
@@ -259,7 +247,7 @@ export class FlowPreview {
     this.sessionId = id;
     this.channels = request.channels;
     this.title.set(request.label || id);
-    this.state.set('starting preview…');
+    this.state.set('starting preview...');
     this.isAudio.set(request.format === 'audio');
     this.isData.set(request.format === 'data');
     const pairs = request.format === 'audio' ? FlowPreview.pairsOf(request.channels) : [];
@@ -300,7 +288,7 @@ export class FlowPreview {
         next: (session) => {
           if (this.sessionId !== id) return;
           this.state.set('');
-          this.pairSessions.set(pair.join(','), { pair, session });
+          this.pairSessions.set(pairKey(pair), { pair, session });
           this.connectPair(pair, session);
         },
         error: (err: { error?: { error?: string } }) => {
@@ -317,12 +305,29 @@ export class FlowPreview {
    * lets several of these run for one card with only one of them heard.
    */
   private connectPair(pair: number[], session: PreviewSession): void {
-    const key = pair.join(',');
+    const key = pairKey(pair);
     const handle = whep(this.registry, session.path, null, {
       onStream: (stream) => {
+        if (this.streamsByPair.get(key) === stream) return;
         this.streamsByPair.set(key, stream);
         if (FlowPreview.sameSelection(this.selected(), pair)) this.attach(stream);
         this.rebuildMeters();
+      },
+      // Only the selected pair's readout is shown, but any pair's connection
+      // may be the one carrying it at a given moment.
+      onStats: (stats) => {
+        if (FlowPreview.sameSelection(this.selected(), pair)) {
+          this.measure.set(FlowPreview.describe(stats));
+        }
+      },
+      // Attempts spent: this pair is not coming back on its own. Drop it from
+      // both maps so the meters go back to showing it unmeasured instead of
+      // measured silence.
+      onFail: () => {
+        this.pcs.delete(key);
+        this.streamsByPair.delete(key);
+        this.rebuildMeters();
+        this.state.set(`pair ${this.pairLabel(pair)} failed to connect`);
       },
     });
     this.pcs.set(key, handle);
@@ -347,7 +352,7 @@ export class FlowPreview {
   private rebuildMeters(): void {
     const sources: PairStream[] = [];
     for (const { pair } of this.pairSessions.values()) {
-      const stream = this.streamsByPair.get(pair.join(','));
+      const stream = this.streamsByPair.get(pairKey(pair));
       if (stream) sources.push({ pair, stream });
     }
     this.meters()?.startMulti(sources, this.channels);
@@ -434,7 +439,7 @@ export class FlowPreview {
         this.state.set('');
         if (isAudio) this.meters()?.start(stream, this.channels, video);
       },
-      onRetry: (attempt) => this.state.set(`reconnecting (${attempt})…`),
+      onRetry: (attempt) => this.state.set(`reconnecting (${attempt})...`),
       onStats: (stats) => this.measure.set(FlowPreview.describe(stats)),
     });
   }
@@ -463,7 +468,7 @@ export class FlowPreview {
         this.state.set('');
         if (isAudio) this.meters()?.start(null, this.channels, video);
       },
-      onFatal: () => this.state.set('buffering…'),
+      onFatal: () => this.state.set('buffering...'),
       onLatency: (seconds) => this.measure.set(`HLS · ${seconds.toFixed(1)} s behind live`),
     });
     this.scheduleWhepRetry(session);
@@ -489,7 +494,7 @@ export class FlowPreview {
       this.hls?.stop();
       this.hls = null;
       this.meters()?.stop();
-      this.state.set('trying WebRTC again…');
+      this.state.set('trying WebRTC again...');
       this.playWhep(session);
     }, wait);
   }
@@ -498,12 +503,12 @@ export class FlowPreview {
   private resume(): void {
     if (this.multiPair) {
       if (!this.pairSessions.size || this.pcs.size) return;
-      this.state.set('starting preview…');
+      this.state.set('starting preview...');
       for (const { pair, session } of this.pairSessions.values()) this.connectPair(pair, session);
       return;
     }
     if (!this.session || this.pc || this.hls || this.ancTimer !== undefined) return;
-    this.state.set('starting preview…');
+    this.state.set('starting preview...');
     this.play();
   }
 

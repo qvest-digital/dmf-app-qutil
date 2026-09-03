@@ -36,11 +36,17 @@ export interface PairStream {
   stream: MediaStream;
 }
 
+/** The string key a pair is tracked under, e.g. [1, 2] -> "1,2". Shared with
+ *  flow-preview.ts so both agree on the format. */
+export function pairKey(pair: number[]): string {
+  return pair.join(',');
+}
+
 /** Peak-hold dwell before the marker starts sliding back down. */
 const PEAK_HOLD_MS = 900;
 /** How fast it slides once the dwell is over, in bar heights per second. */
 const PEAK_DECAY_PER_SEC = 0.7;
-/** Above this the bar turns orange — the usual "too hot" cue. */
+/** Above this the bar turns orange - the usual "too hot" cue. */
 const HOT_DBFS = -6;
 const SPECTRUM_COLUMNS = 64;
 /**
@@ -126,9 +132,11 @@ export class AudioMeters {
   private width = 2;
   /** The selection the graph was built for; anything else is not on air yet. */
   private startedFor: number[] = [];
-  /** True once every pair of a wide flow is connected at once, so there is
-   *  no reconnect gap left for the bars or the spectrum to hide. */
-  private allConnected = false;
+  /** True whenever multi-pair mode is active (startMulti has run): every bar
+   *  reads from its own always-connected stream rather than the single
+   *  decoded stream, so there is no reconnect gap left for the bars or the
+   *  spectrum to hide. */
+  private perPairMode = false;
   /** Each connected pair's own stream node, keyed by "1,2" etc, so the
    *  spectrum can follow the selection without touching the bars. */
   private readonly pairTaps = new Map<string, AudioNode>();
@@ -249,7 +257,7 @@ export class AudioMeters {
     if (ctx.state === 'suspended') void ctx.resume();
 
     this.width = Math.max(channels || 2, 1);
-    this.allConnected = true;
+    this.perPairMode = true;
 
     const srcs: AudioNode[] = [];
     const meters: ChannelMeter[] = new Array(this.width);
@@ -261,7 +269,7 @@ export class AudioMeters {
         continue;
       }
       srcs.push(src);
-      this.pairTaps.set(pair.join(','), src);
+      this.pairTaps.set(pairKey(pair), src);
 
       const decoded = Math.max(src.channelCount || pair.length, 1);
       const splitter = ctx.createChannelSplitter(decoded);
@@ -297,9 +305,9 @@ export class AudioMeters {
 
   /** Keep the spectrum on the pair currently heard, without touching the bars. */
   private syncSpectrum(): void {
-    if (!this.allConnected || !this.viz) return;
+    if (!this.perPairMode || !this.viz) return;
     const pair = this.selected();
-    const wanted = pair.length ? (this.pairTaps.get(pair.join(',')) ?? null) : null;
+    const wanted = pair.length ? (this.pairTaps.get(pairKey(pair)) ?? null) : null;
     if (wanted === this.spectrumFrom) return;
     if (this.spectrumFrom) this.spectrumFrom.disconnect(this.viz.spectrum);
     if (wanted) wanted.connect(this.viz.spectrum);
@@ -339,7 +347,7 @@ export class AudioMeters {
     this.sourceHold = [];
     this.levelsDb = [];
     this.startedFor = [];
-    this.allConnected = false;
+    this.perPairMode = false;
     this.pairTaps.clear();
     this.spectrumFrom = null;
     this.lastFrameAt = 0;
@@ -409,7 +417,7 @@ export class AudioMeters {
     // Every pair is already connected in this mode, so there is no reconnect
     // gap to hide.
     const onAir =
-      this.allConnected || peaks.length || AudioMeters.sameSelection(reported, this.startedFor);
+      this.perPairMode || peaks.length || AudioMeters.sameSelection(reported, this.startedFor);
     const slot = (barsW - pad) / count;
     for (let c = 0; c < count; c++) {
       const audible = carried.includes(c + 1);
@@ -428,7 +436,7 @@ export class AudioMeters {
       // needed; a channel whose pair has not connected yet stays unmeasured.
       const from = !onAir
         ? -1
-        : this.allConnected
+        : this.perPairMode
           ? viz.channels[c]
             ? c
             : -1
