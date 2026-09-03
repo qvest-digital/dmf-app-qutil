@@ -1,4 +1,4 @@
-import { advanceLevelDb } from './audio-meters';
+import { advanceLevelDb, pairKey } from './audio-meters';
 
 /** A 60 Hz frame, and how many of them fall inside one level poll. */
 const FRAME = 16;
@@ -70,5 +70,19 @@ describe('advanceLevelDb', () => {
 
   it('lands on the target after a long gap, as a hidden tab produces', () => {
     expect(advanceLevelDb(-10, -60, 60_000)).toBeCloseTo(-60, 6);
+  });
+});
+
+/**
+ * flow-preview.ts and this file both derive a pair's map key independently;
+ * this is the one place the format is pinned down for both.
+ */
+describe('pairKey', () => {
+  it('joins the pair with a comma', () => {
+    expect(pairKey([1, 2])).toBe('1,2');
+  });
+
+  it('carries a lone trailing channel as-is', () => {
+    expect(pairKey([5])).toBe('5');
   });
 });

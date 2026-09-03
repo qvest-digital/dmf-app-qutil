@@ -46,9 +46,9 @@ export class MetricsApi {
    * tears the path down when the last one releases it.
    *
    * `channels` is the 1-based source pair an audio preview should publish; a
-   * browser gets stereo however wide the flow is. Repeating the call with a
-   * different pair moves a running session instead of restarting it, which is
-   * what `selectPreviewChannels` relies on.
+   * browser gets stereo however wide the flow is. Each distinct `channels`
+   * value gets its own path, coexisting with any other pair's path for the
+   * same flow, per the aggregator's `preview_add_audio`.
    */
   startPreview(
     uuid: string,
@@ -60,20 +60,6 @@ export class MetricsApi {
       `/api/preview/${encodeURIComponent(uuid)}${this.previewQuery(owner, channels, audio)}`,
       null,
     );
-  }
-
-  /**
-   * Move a playing audio preview onto another channel pair. Same call as
-   * starting one, because the pair is a property of the path: the media server
-   * reads the flow itself now, so moving it reconfigures the path and restarts
-   * the reader, which a listener hears as a gap.
-   */
-  selectPreviewChannels(
-    uuid: string,
-    channels: number[],
-    owner?: string,
-  ): Observable<PreviewSession> {
-    return this.startPreview(uuid, owner, channels);
   }
 
   /**

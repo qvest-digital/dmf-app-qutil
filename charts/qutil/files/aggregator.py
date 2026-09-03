@@ -1272,6 +1272,28 @@ def _joined_path_for(video_uuid):
     return None
 
 
+def _preview_paths_for(flow_id):
+    """Every currently-configured preview path this flow could be behind:
+    the bare preview-<flow_id>, plus any preview-<flow_id>-... built from it
+    (a wide audio flow's per-pair paths, or a joined video+audio path).
+
+    Listed from the server's own configuration rather than guessed, the same
+    way _joined_path_for reads it: a wide flow can have up to six pair paths
+    live at once and nothing here predicts how many.
+    """
+    exact = _PREVIEW_PREFIX + flow_id
+    code, res = _mtx("/v3/config/paths/list")
+    if code != 200:
+        return [exact]
+    prefix = f"{exact}-"
+    names = [exact]
+    for item in (res.get("items") or []):
+        name = item.get("name") or ""
+        if name.startswith(prefix):
+            names.append(name)
+    return names
+
+
 def preview_add(uuid, owner="overlay", channels="", audio=""):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1410,39 +1432,32 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
 
 
 def preview_add_audio(uuid, channels=""):
-    """One path, read by the media server itself.
+    """One path per pair, each read by the media server itself.
 
     The server reads the flow's samples and publishes Opus, so there is no
-    publisher to start and no second path: one Opus track serves WebRTC and,
-    because the server muxes fMP4 rather than MPEG-TS, HLS as well. What took a
-    reader process, two paths and an AAC copy of the same audio is now the same
-    shape as a video preview.
+    publisher to start: one Opus track serves both WebRTC and, because the
+    server muxes fMP4 rather than MPEG-TS, HLS.
 
-    `channels` is the 1-based pair to publish, which is all a browser can play
-    however wide the flow is. Repeating the call with a different pair moves it,
-    which is what the card's buttons do; unlike the pushed pipeline this
-    replaces, moving it reconfigures the path and a listener hears the gap.
+    `channels` is the 1-based pair to publish, which is all one connection
+    can carry however wide the flow is, and it is part of the path's name:
+    asking for a second pair creates a second path rather than moving the
+    first. That is what lets a caller keep every pair of a wide flow up at
+    once and switch which one it plays without a reconnect gap, instead of
+    reconfiguring one path and restarting its reader on every switch.
     """
     if channels and not _CHANNELS_RE.match(channels):
         return 400, {"error": "channels must be one or two 1-based numbers"}
 
-    name = _PREVIEW_PREFIX + uuid
+    suffix = f"-p{channels.replace(',', '-')}" if channels else ""
+    name = _PREVIEW_PREFIX + uuid + suffix
     conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
             "sourceOnDemandCloseAfter": "10s",
-                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
+            "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
     if channels:
         conf["mxlAudioChannels"] = channels
 
-    code, existing = _mtx(f"/v3/config/paths/get/{name}")
-    if code == 200:
-        # Already there. Only a different pair is worth a write: replacing the
-        # path restarts the reader, so doing it on every poll would stutter the
-        # audio for as long as a card stayed open.
-        if channels and (existing.get("mxlAudioChannels") or "") != channels:
-            code, res = _mtx(f"/v3/config/paths/replace/{name}", "POST", conf)
-            if code != 200:
-                return code, {"error": res.get("error") or "mediamtx replace failed"}
-    else:
+    code, _ = _mtx(f"/v3/config/paths/get/{name}")
+    if code != 200:
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1460,9 +1475,10 @@ def preview_status(uuid):
     for the gateway to mirror the flow, and it can fail outright where the flow
     is not readable on that node, so a card polls this rather than assuming.
 
-    Per-channel levels are gone with the reader that measured them. The card
-    still meters what it plays, from the decoded stream, but the channels it is
-    not playing now read as silent rather than as unknown.
+    Reads the bare preview-<uuid> path, which is what a video flow or an
+    audio flow no wider than one pair gets. A wide audio flow has no such
+    path: each pair asked for lives under its own preview-<uuid>-p<a>-<b>
+    name instead, so this answers 404 for one.
     """
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1895,11 +1911,14 @@ def generator_delete(name):
         return code, {"error": res.get("error") or "claim delete failed"}
 
     # A mediamtx path left pointing at a flow that is going away retries the open
-    # every 5s for as long as the server lives.
+    # every 5s for as long as the server lives. A wide audio flow can have one
+    # such path per pair, so every preview-<flow_id>[-...] path goes, not only
+    # the bare one.
     for flow_id in _claim_flow_ids(claim):
-        _preview_delete(_PREVIEW_PREFIX + flow_id)
-        with _idle_lock:
-            _idle_since.pop(_PREVIEW_PREFIX + flow_id, None)
+        for path_name in _preview_paths_for(flow_id):
+            _preview_delete(path_name)
+            with _idle_lock:
+                _idle_since.pop(path_name, None)
     snapshot_drop("generators")
     return 200, {"deleted": name}
 
