@@ -282,7 +282,7 @@ class WhepSession {
   constructor(
     private readonly registry: PlayerRegistry,
     private readonly path: string,
-    private readonly video: HTMLVideoElement,
+    private readonly video: HTMLVideoElement | null,
     private readonly options: WhepOptions,
   ) {
     this.entry = registry.track({ kind: 'pc', stop: () => this.stop() });
@@ -480,14 +480,19 @@ class WhepSession {
 
   private onTrack(e: RTCTrackEvent): void {
     const stream = e.streams[0];
-    if (!stream || this.video.srcObject === stream) return;
-    // Assigned rather than skipped when the element already has one: a rebuild
-    // produces a new stream and the old one is dead, so refusing to replace it
-    // is exactly what leaves a reconnected card frozen on the previous frame.
-    this.video.srcObject = stream;
-    this.video.play().catch(() => {
-      // Autoplay refused; the element still shows the first frame.
-    });
+    if (!stream) return;
+    if (this.video) {
+      // Assigned rather than skipped when the element already has one: a
+      // rebuild produces a new stream and the old one is dead, so refusing
+      // to replace it is exactly what leaves a reconnected card frozen on
+      // the previous frame. A connection with no element (video is null) is
+      // metering-only and never takes over playback at all.
+      if (this.video.srcObject === stream) return;
+      this.video.srcObject = stream;
+      this.video.play().catch(() => {
+        // Autoplay refused; the element still shows the first frame.
+      });
+    }
     this.options.onStream?.(stream);
   }
 
@@ -590,7 +595,7 @@ class WhepSession {
 export function whep(
   registry: PlayerRegistry,
   path: string,
-  video: HTMLVideoElement,
+  video: HTMLVideoElement | null,
   options: WhepOptions = {},
 ): WhepHandle {
   const session = new WhepSession(registry, path, video, options);
