@@ -1272,6 +1272,28 @@ def _joined_path_for(video_uuid):
     return None
 
 
+def _preview_paths_for(flow_id):
+    """Every currently-configured preview path this flow could be behind:
+    the bare preview-<flow_id>, plus any preview-<flow_id>-... built from it
+    (a wide audio flow's per-pair paths, or a joined video+audio path).
+
+    Listed from the server's own configuration rather than guessed, the same
+    way _joined_path_for reads it: a wide flow can have up to six pair paths
+    live at once and nothing here predicts how many.
+    """
+    exact = _PREVIEW_PREFIX + flow_id
+    code, res = _mtx("/v3/config/paths/list")
+    if code != 200:
+        return [exact]
+    prefix = f"{exact}-"
+    names = [exact]
+    for item in (res.get("items") or []):
+        name = item.get("name") or ""
+        if name.startswith(prefix):
+            names.append(name)
+    return names
+
+
 def preview_add(uuid, owner="overlay", channels="", audio=""):
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1453,9 +1475,10 @@ def preview_status(uuid):
     for the gateway to mirror the flow, and it can fail outright where the flow
     is not readable on that node, so a card polls this rather than assuming.
 
-    Per-channel levels are gone with the reader that measured them. The card
-    still meters what it plays, from the decoded stream, but the channels it is
-    not playing now read as silent rather than as unknown.
+    Reads the bare preview-<uuid> path, which is what a video flow or an
+    audio flow no wider than one pair gets. A wide audio flow has no such
+    path: each pair asked for lives under its own preview-<uuid>-p<a>-<b>
+    name instead, so this answers 404 for one.
     """
     if not _UUID_RE.match(uuid or ""):
         return 400, {"error": "bad flow id"}
@@ -1888,11 +1911,14 @@ def generator_delete(name):
         return code, {"error": res.get("error") or "claim delete failed"}
 
     # A mediamtx path left pointing at a flow that is going away retries the open
-    # every 5s for as long as the server lives.
+    # every 5s for as long as the server lives. A wide audio flow can have one
+    # such path per pair, so every preview-<flow_id>[-...] path goes, not only
+    # the bare one.
     for flow_id in _claim_flow_ids(claim):
-        _preview_delete(_PREVIEW_PREFIX + flow_id)
-        with _idle_lock:
-            _idle_since.pop(_PREVIEW_PREFIX + flow_id, None)
+        for path_name in _preview_paths_for(flow_id):
+            _preview_delete(path_name)
+            with _idle_lock:
+                _idle_since.pop(path_name, None)
     snapshot_drop("generators")
     return 200, {"deleted": name}
 

@@ -581,6 +581,87 @@ class PreviewDelete(unittest.TestCase):
         self.assertEqual(code, 400)
 
 
+class GeneratorDeletePreviewPaths(unittest.TestCase):
+    """Deleting a generator's claim also drops the preview paths behind its
+    flows: left up, a path pointing at a flow that just went away retries the
+    open every 5s for as long as the server lives. A wide audio flow can have
+    one such path per pair, and none of them are the bare preview-<uuid>.
+    """
+
+    NAME = "generator-demo-ab12"
+    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def _claim(self):
+        return {
+            "metadata": {
+                "name": self.NAME,
+                "labels": {
+                    agg._GEN_LABEL_MANAGED: agg.GEN_MANAGER,
+                    agg._GEN_LABEL_COMPONENT: agg._GEN_COMPONENT,
+                },
+            },
+            "spec": {
+                "parameters": {
+                    "flow": {
+                        "video_output": {"id": self.VIDEO},
+                        "audio_output": {"id": self.AUDIO},
+                    }
+                }
+            },
+        }
+
+    def setUp(self):
+        self.mtx = MtxRecorder(existing={
+            f"preview-{self.VIDEO}",
+            f"preview-{self.VIDEO}-p1-2",
+            f"preview-{self.VIDEO}-p3-4",
+            f"preview-{self.AUDIO}",
+        })
+        patches = [
+            mock.patch.object(agg, "GEN_ENABLED", True),
+            mock.patch.object(agg, "_mtx", self.mtx),
+            mock.patch.object(agg, "safe_k8s", lambda *a, **k: self._claim()),
+            mock.patch.object(agg, "k8s_json", lambda *a, **k: (200, {})),
+            mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
+            mock.patch.object(agg, "_idle_since", {}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _deleted(self):
+        return [path.rsplit("/", 1)[-1] for path, method, _ in self.mtx.calls
+                if method == "DELETE" and path.startswith("/v3/config/paths/delete/")]
+
+    def test_deletes_every_pair_suffixed_path_of_a_wide_flow(self):
+        code, _ = agg.generator_delete(self.NAME)
+        self.assertEqual(code, 200)
+        self.assertIn(f"preview-{self.VIDEO}-p1-2", self._deleted())
+        self.assertIn(f"preview-{self.VIDEO}-p3-4", self._deleted())
+
+    def test_still_deletes_the_bare_path(self):
+        code, _ = agg.generator_delete(self.NAME)
+        self.assertEqual(code, 200)
+        self.assertIn(f"preview-{self.VIDEO}", self._deleted())
+
+    def test_covers_every_flow_the_claim_names(self):
+        code, _ = agg.generator_delete(self.NAME)
+        self.assertEqual(code, 200)
+        self.assertIn(f"preview-{self.AUDIO}", self._deleted())
+
+    def test_does_not_touch_another_flows_path(self):
+        other = "b2000000-0000-0000-0000-000000000002"
+        self.mtx.existing.add(f"preview-{other}")
+        agg.generator_delete(self.NAME)
+        self.assertNotIn(f"preview-{other}", self._deleted())
+
+    def test_returns_the_deleted_claim_name_not_a_preview_path(self):
+        code, res = agg.generator_delete(self.NAME)
+        self.assertEqual(code, 200)
+        self.assertEqual(res["deleted"], self.NAME)
+
+
 class AncReader(unittest.TestCase):
     """The ANC reader is a booked function, reached through its claim.
 
