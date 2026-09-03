@@ -421,13 +421,32 @@ class NativeAudioPreview(unittest.TestCase):
                   if c[1] == "POST" and "/paths/" in c[0]]
         self.assertEqual(writes, [])
 
-    def test_a_different_pair_moves_it(self):
-        self.mtx.existing.add(f"preview-{self.UUID}")
-        self.mtx.configs[f"preview-{self.UUID}"] = {"mxlAudioChannels": "1,2"}
-        agg.preview_add(self.UUID, channels="7,8")
+    def test_a_different_pair_gets_a_second_path(self):
+        """So it can run alongside the first rather than replacing it, which
+        is what lets a listener hear every pair at once and move between them
+        without a reconnect gap."""
+        self.mtx.existing.add(f"preview-{self.UUID}-p1-2")
+        code, res = agg.preview_add(self.UUID, channels="7,8")
+        self.assertEqual(code, 200)
+        self.assertEqual(res["path"], f"preview-{self.UUID}-p7-8")
         replaces = [c for c in self.mtx.calls if "/paths/replace/" in c[0]]
-        self.assertEqual(len(replaces), 1)
-        self.assertEqual(replaces[0][2]["mxlAudioChannels"], "7,8")
+        self.assertEqual(replaces, [])
+        self.assertEqual(self.mtx.added()["mxlAudioChannels"], "7,8")
+
+    def test_reopening_the_same_pair_does_not_duplicate_the_path(self):
+        self.mtx.existing.add(f"preview-{self.UUID}-p1-2")
+        agg.preview_add(self.UUID, channels="1,2")
+        adds = [c for c in self.mtx.calls
+                if c[1] == "POST" and "/paths/add/" in c[0]]
+        self.assertEqual(adds, [])
+
+    def test_two_pairs_coexist_as_separate_paths(self):
+        agg.preview_add(self.UUID, channels="1,2")
+        agg.preview_add(self.UUID, channels="3,4")
+        adds = [c[0].rsplit("/", 1)[-1] for c in self.mtx.calls
+                if c[1] == "POST" and "/paths/add/" in c[0]]
+        self.assertEqual(adds, [f"preview-{self.UUID}-p1-2",
+                                f"preview-{self.UUID}-p3-4"])
 
     def test_a_bad_pair_is_refused_before_anything_is_created(self):
         code, _ = agg.preview_add(self.UUID, channels="left,right")

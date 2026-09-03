@@ -1410,39 +1410,32 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
 
 
 def preview_add_audio(uuid, channels=""):
-    """One path, read by the media server itself.
+    """One path per pair, each read by the media server itself.
 
     The server reads the flow's samples and publishes Opus, so there is no
-    publisher to start and no second path: one Opus track serves WebRTC and,
-    because the server muxes fMP4 rather than MPEG-TS, HLS as well. What took a
-    reader process, two paths and an AAC copy of the same audio is now the same
-    shape as a video preview.
+    publisher to start: one Opus track serves both WebRTC and, because the
+    server muxes fMP4 rather than MPEG-TS, HLS.
 
-    `channels` is the 1-based pair to publish, which is all a browser can play
-    however wide the flow is. Repeating the call with a different pair moves it,
-    which is what the card's buttons do; unlike the pushed pipeline this
-    replaces, moving it reconfigures the path and a listener hears the gap.
+    `channels` is the 1-based pair to publish, which is all one connection
+    can carry however wide the flow is, and it is part of the path's name:
+    asking for a second pair creates a second path rather than moving the
+    first. That is what lets a caller keep every pair of a wide flow up at
+    once and switch which one it plays without a reconnect gap, instead of
+    reconfiguring one path and restarting its reader on every switch.
     """
     if channels and not _CHANNELS_RE.match(channels):
         return 400, {"error": "channels must be one or two 1-based numbers"}
 
-    name = _PREVIEW_PREFIX + uuid
+    suffix = f"-p{channels.replace(',', '-')}" if channels else ""
+    name = _PREVIEW_PREFIX + uuid + suffix
     conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
             "sourceOnDemandCloseAfter": "10s",
-                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
+            "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
     if channels:
         conf["mxlAudioChannels"] = channels
 
-    code, existing = _mtx(f"/v3/config/paths/get/{name}")
-    if code == 200:
-        # Already there. Only a different pair is worth a write: replacing the
-        # path restarts the reader, so doing it on every poll would stutter the
-        # audio for as long as a card stayed open.
-        if channels and (existing.get("mxlAudioChannels") or "") != channels:
-            code, res = _mtx(f"/v3/config/paths/replace/{name}", "POST", conf)
-            if code != 200:
-                return code, {"error": res.get("error") or "mediamtx replace failed"}
-    else:
+    code, _ = _mtx(f"/v3/config/paths/get/{name}")
+    if code != 200:
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
