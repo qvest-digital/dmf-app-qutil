@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-rc.42](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.41...v1.0.0-rc.42) (2026-09-03)
+
+
+### Features
+
+* **qutil:** show the external address a booked function publishes ([#171](https://github.com/qvest-digital/dmf-app-qutil/issues/171)) ([3006a1f](https://github.com/qvest-digital/dmf-app-qutil/commit/3006a1fa06b7446ed0613498927e0e561f3c4f9b))
+
+
+### Bug Fixes
+
+* **preview:** meter the audible pair where it comes from ([#173](https://github.com/qvest-digital/dmf-app-qutil/issues/173)) ([71c6937](https://github.com/qvest-digital/dmf-app-qutil/commit/71c6937e43edbd6a883bef341fbbd9ab446c5434))
+
+
+### Performance
+
+* **aggregator:** encode a preview at superfast ([#170](https://github.com/qvest-digital/dmf-app-qutil/issues/170)) ([8854223](https://github.com/qvest-digital/dmf-app-qutil/commit/88542239eeabf7f08afb545ef5799e0b8eb4d8c7))
+
 ## [1.0.0-rc.41](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.40...v1.0.0-rc.41) (2026-08-31)
 
 
