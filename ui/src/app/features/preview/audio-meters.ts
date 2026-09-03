@@ -46,7 +46,7 @@ export function pairKey(pair: number[]): string {
 const PEAK_HOLD_MS = 900;
 /** How fast it slides once the dwell is over, in bar heights per second. */
 const PEAK_DECAY_PER_SEC = 0.7;
-/** Above this the bar turns orange - the usual "too hot" cue. */
+/** Above this the bar turns orange — the usual "too hot" cue. */
 const HOT_DBFS = -6;
 const SPECTRUM_COLUMNS = 64;
 /**

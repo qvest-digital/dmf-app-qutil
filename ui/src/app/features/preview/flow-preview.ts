@@ -247,7 +247,7 @@ export class FlowPreview {
     this.sessionId = id;
     this.channels = request.channels;
     this.title.set(request.label || id);
-    this.state.set('starting preview...');
+    this.state.set('starting preview…');
     this.isAudio.set(request.format === 'audio');
     this.isData.set(request.format === 'data');
     const pairs = request.format === 'audio' ? FlowPreview.pairsOf(request.channels) : [];
@@ -439,7 +439,7 @@ export class FlowPreview {
         this.state.set('');
         if (isAudio) this.meters()?.start(stream, this.channels, video);
       },
-      onRetry: (attempt) => this.state.set(`reconnecting (${attempt})...`),
+      onRetry: (attempt) => this.state.set(`reconnecting (${attempt})…`),
       onStats: (stats) => this.measure.set(FlowPreview.describe(stats)),
     });
   }
@@ -468,7 +468,7 @@ export class FlowPreview {
         this.state.set('');
         if (isAudio) this.meters()?.start(null, this.channels, video);
       },
-      onFatal: () => this.state.set('buffering...'),
+      onFatal: () => this.state.set('buffering…'),
       onLatency: (seconds) => this.measure.set(`HLS · ${seconds.toFixed(1)} s behind live`),
     });
     this.scheduleWhepRetry(session);
@@ -494,7 +494,7 @@ export class FlowPreview {
       this.hls?.stop();
       this.hls = null;
       this.meters()?.stop();
-      this.state.set('trying WebRTC again...');
+      this.state.set('trying WebRTC again…');
       this.playWhep(session);
     }, wait);
   }
@@ -503,12 +503,12 @@ export class FlowPreview {
   private resume(): void {
     if (this.multiPair) {
       if (!this.pairSessions.size || this.pcs.size) return;
-      this.state.set('starting preview...');
+      this.state.set('starting preview…');
       for (const { pair, session } of this.pairSessions.values()) this.connectPair(pair, session);
       return;
     }
     if (!this.session || this.pc || this.hls || this.ancTimer !== undefined) return;
-    this.state.set('starting preview...');
+    this.state.set('starting preview…');
     this.play();
   }
 
