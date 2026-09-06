@@ -174,9 +174,9 @@ export class FlowPreview {
    */
   private sessionId: string | null = null;
   /**
-   * What the aggregator provisioned, kept so playback can be rebuilt without
-   * asking for the path again: a hidden tab and a climb back to WHEP both
-   * restart the player against a path that never went away.
+   * What the aggregator last provisioned, kept so a climb back to WHEP can
+   * restart the player without asking for the path again. A card coming back
+   * from a hidden tab does ask again: see resume().
    */
   private session: PreviewSession | null = null;
   private channels = 0;
@@ -255,11 +255,23 @@ export class FlowPreview {
     this.multiPair = pairs.length > 1;
 
     if (this.multiPair) {
-      this.startAllPairs(id, pairs);
+      this.selected.set(pairs[0]);
+      for (const pair of pairs) this.openPair(id, pair);
       return;
     }
+    this.openPath(id, request.audioId);
+  }
 
-    this.api.startPreview(id, OWNER, undefined, request.audioId).subscribe({
+  /**
+   * Ask the aggregator for this flow's path, and play what it hands back.
+   *
+   * Also what a card coming back from a hidden tab runs, rather than replaying
+   * the session it already holds. The request is idempotent -- a path that is
+   * still configured is handed back as it stands -- so asking again costs one
+   * call and rebuilds the path where it has gone.
+   */
+  private openPath(id: string, audioId?: string): void {
+    this.api.startPreview(id, OWNER, undefined, audioId).subscribe({
       next: (session) => {
         if (this.sessionId !== id) return;
         this.session = session;
@@ -273,30 +285,27 @@ export class FlowPreview {
   }
 
   /**
-   * One mediamtx path and one WHEP connection per pair, opened together.
+   * One mediamtx path and one WHEP connection for one pair.
    *
    * A stereo pair is all one connection can carry, so hearing every pair at
    * once and switching between them without a gap both need a pair's own
-   * path to stay up rather than being reconfigured. `selected` names the
-   * first pair before any of them answer, so the card has something to mark
-   * as heard from the first frame.
+   * path to stay up rather than being reconfigured. A card opens every pair
+   * together, and `selected` names the first before any of them answer, so
+   * the card has something to mark as heard from the first frame.
    */
-  private startAllPairs(id: string, pairs: number[][]): void {
-    this.selected.set(pairs[0]);
-    for (const pair of pairs) {
-      this.api.startPreview(id, OWNER, pair).subscribe({
-        next: (session) => {
-          if (this.sessionId !== id) return;
-          this.state.set('');
-          this.pairSessions.set(pairKey(pair), { pair, session });
-          this.connectPair(pair, session);
-        },
-        error: (err: { error?: { error?: string } }) => {
-          if (this.sessionId !== id) return;
-          this.state.set(`preview failed: ${err.error?.error ?? ''}`);
-        },
-      });
-    }
+  private openPair(id: string, pair: number[]): void {
+    this.api.startPreview(id, OWNER, pair).subscribe({
+      next: (session) => {
+        if (this.sessionId !== id) return;
+        this.state.set('');
+        this.pairSessions.set(pairKey(pair), { pair, session });
+        this.connectPair(pair, session);
+      },
+      error: (err: { error?: { error?: string } }) => {
+        if (this.sessionId !== id) return;
+        this.state.set(`preview failed: ${err.error?.error ?? ''}`);
+      },
+    });
   }
 
   /**
@@ -499,23 +508,40 @@ export class FlowPreview {
     }, wait);
   }
 
-  /** Come back to the foreground on the transport a fresh card would use. */
+  /**
+   * Come back to the foreground on the transport a fresh card would use, and
+   * on a path the media server still has.
+   *
+   * The path is asked for again rather than reconnected to. Nothing reads it
+   * while the tab is hidden, so the aggregator's reaper drops it once it has
+   * been idle for its grace period, and a couple of minutes in the background
+   * is well past that. Reconnecting to the name held here then spends the WHEP
+   * budget on a path the media server no longer has configured and settles on
+   * an HLS playlist that is equally gone, which is a card that never plays
+   * again for as long as it is open.
+   */
   private resume(): void {
+    const id = this.sessionId;
+    if (!id) return;
     if (this.multiPair) {
       if (!this.pairSessions.size || this.pcs.size) return;
       this.state.set('starting preview…');
-      for (const { pair, session } of this.pairSessions.values()) this.connectPair(pair, session);
+      // Snapshot: reopening a pair writes its new session back into this map.
+      for (const { pair } of [...this.pairSessions.values()]) this.openPair(id, pair);
       return;
     }
     if (!this.session || this.pc || this.hls || this.ancTimer !== undefined) return;
     this.state.set('starting preview…');
-    this.play();
+    this.openPath(id, this.request().audioId);
   }
 
   /**
-   * Go quiet while the tab is hidden. The path is left alone: the aggregator
-   * reaps it on its own once nothing reads it, and holding it means a tab
-   * coming forward plays from a warm source rather than reopening one.
+   * Go quiet while the tab is hidden.
+   *
+   * The path is left alone: whether one is still wanted is answered by whether
+   * anything is reading it, which the aggregator's reaper watches and this card
+   * cannot. A tab that comes back inside the grace period finds a warm source;
+   * one that comes back later asks for the path again.
    */
   private hide(): void {
     if (!this.session && !this.pairSessions.size) return;

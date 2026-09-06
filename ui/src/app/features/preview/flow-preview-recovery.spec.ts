@@ -80,18 +80,37 @@ describe('FlowPreview transport recovery', () => {
     vi.useRealTimers();
   });
 
+  const SESSION = {
+    path: `preview-${FLOW}`,
+    hls: `/hls/preview-${FLOW}/index.m3u8`,
+    whep: `/webrtc/preview-${FLOW}/whep`,
+    format: 'video',
+  };
+
+  /** Answer the card's request for a path with the one the aggregator holds. */
+  function givePath(): void {
+    http
+      .expectOne((r) => r.method === 'POST' && r.url.startsWith(`/api/preview/${FLOW}`))
+      .flush(SESSION);
+    fixture.detectChanges();
+  }
+
   function openVideo(): void {
     fixture = TestBed.createComponent(FlowPreview);
     fixture.componentRef.setInput('request', { id: FLOW, label: 'writer-1', format: 'video' });
     fixture.detectChanges();
-    http
-      .expectOne((r) => r.method === 'POST' && r.url.startsWith(`/api/preview/${FLOW}`))
-      .flush({
-        path: `preview-${FLOW}`,
-        hls: `/hls/preview-${FLOW}/index.m3u8`,
-        whep: `/webrtc/preview-${FLOW}/whep`,
-        format: 'video',
-      });
+    givePath();
+  }
+
+  function hideTab(): void {
+    hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+    fixture.detectChanges();
+  }
+
+  function showTab(): void {
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
     fixture.detectChanges();
   }
 
@@ -149,14 +168,11 @@ describe('FlowPreview transport recovery', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(registry.counts().pc).toBe(1);
 
-    hidden = true;
-    document.dispatchEvent(new Event('visibilitychange'));
-    fixture.detectChanges();
+    hideTab();
     expect(registry.counts().pc).toBe(0);
 
-    hidden = false;
-    document.dispatchEvent(new Event('visibilitychange'));
-    fixture.detectChanges();
+    showTab();
+    givePath();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(registry.counts().pc).toBe(1);
@@ -167,28 +183,74 @@ describe('FlowPreview transport recovery', () => {
     await fallToHls();
     refuse = false;
 
-    hidden = true;
-    document.dispatchEvent(new Event('visibilitychange'));
-    fixture.detectChanges();
-    hidden = false;
-    document.dispatchEvent(new Event('visibilitychange'));
-    fixture.detectChanges();
+    hideTab();
+    showTab();
+    givePath();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(registry.counts().pc).toBe(1);
     expect(registry.counts().hls).toBe(0);
   });
 
-  /** The path is left alone while hidden, so coming back finds a warm source. */
+  /** The path is left alone while hidden: whether one is still wanted is
+   *  answered by whether anything reads it, which the aggregator watches. */
   it('does not release the mediamtx path while hidden', async () => {
     refuse = false;
     openVideo();
     await vi.advanceTimersByTimeAsync(0);
 
-    hidden = true;
-    document.dispatchEvent(new Event('visibilitychange'));
-    fixture.detectChanges();
+    hideTab();
 
     expect(http.match((r) => r.method === 'DELETE')).toHaveLength(0);
+  });
+
+  /**
+   * Nothing reads a path while the tab is hidden, so the aggregator's reaper
+   * drops it once its idle grace is spent. Reconnecting to the name the card
+   * still holds then spends the WHEP budget on a path the media server no
+   * longer has configured and settles on an HLS playlist that is equally gone,
+   * which is a card that never plays again for as long as it is open.
+   */
+  it('asks the aggregator for the path again before it reconnects', async () => {
+    refuse = false;
+    openVideo();
+    await vi.advanceTimersByTimeAsync(0);
+
+    hideTab();
+    showTab();
+
+    const again = http.match(
+      (r) => r.method === 'POST' && r.url.startsWith(`/api/preview/${FLOW}`),
+    );
+    expect(again).toHaveLength(1);
+    // Nothing is connected until the path is answered for: the card plays what
+    // the aggregator hands back, not the name it was holding.
+    expect(registry.counts().pc).toBe(0);
+
+    again[0].flush(SESSION);
+    fixture.detectChanges();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(registry.counts().pc).toBe(1);
+  });
+
+  /** A card whose path cannot be rebuilt says so rather than sitting on
+   *  "starting preview" with nothing behind it. */
+  it('reports a path it cannot get back', async () => {
+    refuse = false;
+    openVideo();
+    await vi.advanceTimersByTimeAsync(0);
+
+    hideTab();
+    showTab();
+    http
+      .expectOne((r) => r.method === 'POST' && r.url.startsWith(`/api/preview/${FLOW}`))
+      .flush({ error: 'flow not known to the operator' }, { status: 404, statusText: 'Not Found' });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.pv-state').textContent).toContain(
+      'preview failed',
+    );
+    expect(registry.counts().pc).toBe(0);
   });
 });
