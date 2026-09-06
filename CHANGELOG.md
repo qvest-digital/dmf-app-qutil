@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.44](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.43...v1.0.0-rc.44) (2026-09-06)
+
+
+### Features
+
+* **flows:** copy a flow id, and name the fabric carrying it ([f571b5c](https://github.com/qvest-digital/dmf-app-qutil/commit/f571b5ce8e04fd102541f8766cfe326a286355fc))
+* **flows:** head a group with its name and a paired preview ([f571b5c](https://github.com/qvest-digital/dmf-app-qutil/commit/f571b5ce8e04fd102541f8766cfe326a286355fc))
+
+
+### Bug Fixes
+
+* **preview:** ask for the path again when a hidden tab comes back ([f571b5c](https://github.com/qvest-digital/dmf-app-qutil/commit/f571b5ce8e04fd102541f8766cfe326a286355fc))
+
 ## [1.0.0-rc.43](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.42...v1.0.0-rc.43) (2026-09-03)
 
 
