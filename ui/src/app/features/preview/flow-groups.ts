@@ -122,25 +122,23 @@ export function groupFlows(flows: readonly OperatorFlow[]): FlowGroup[] {
   return [...groups.values()];
 }
 
-/**
- * The audio flow that belongs with a video flow, if the two were tagged into
- * one group. Null when the video flow carries no hint, its group published no
- * audio, or this is not the flow that took the group's video track.
- */
-export function audioSiblingOf(
-  video: OperatorFlow,
-  flows: readonly OperatorFlow[],
-): OperatorFlow | null {
-  const hint = parseGroupHint(video.grouphint);
-  if (!hint) return null;
-  const group = groupFlows(flows).find((g) => g.name === hint.group);
-  if (group?.video?.id !== video.id) return null;
-  return group.audio ?? null;
-}
-
 /** The flows a group published, picture first, in the order a row shows them. */
 function groupMembers(group: FlowGroup): OperatorFlow[] {
   return [group.video, group.audio, group.data].filter((f): f is OperatorFlow => !!f);
+}
+
+/**
+ * One box in the flow list: the flows to render in it, and the group they were
+ * tagged into where there is one.
+ *
+ * The group travels with the flows rather than being looked up again per box,
+ * because it is what the box's header is drawn from: its name, and the picture
+ * and sound a combined preview needs.
+ */
+export interface FlowRow {
+  /** Null for a flow no hint put in a group, which is a box of one. */
+  group: FlowGroup | null;
+  flows: OperatorFlow[];
 }
 
 /**
@@ -153,24 +151,25 @@ function groupMembers(group: FlowGroup): OperatorFlow[] {
  * second flow of a track a group named twice -- comes back as a row of its own,
  * because the list still has to show it.
  */
-export function groupedFlowRows(flows: readonly OperatorFlow[]): OperatorFlow[][] {
-  const byName = new Map(groupFlows(flows).map((g) => [g.name, groupMembers(g)]));
+export function groupedFlowRows(flows: readonly OperatorFlow[]): FlowRow[] {
+  const byName = new Map(groupFlows(flows).map((g) => [g.name, g]));
   const groupOf = new Map<string, string>();
-  for (const [name, members] of byName) {
-    for (const member of members) groupOf.set(member.id, name);
+  for (const [name, group] of byName) {
+    for (const member of groupMembers(group)) groupOf.set(member.id, name);
   }
 
-  const rows: OperatorFlow[][] = [];
+  const rows: FlowRow[] = [];
   const taken = new Set<string>();
   for (const flow of flows) {
     const name = groupOf.get(flow.id);
     if (name === undefined) {
-      rows.push([flow]);
+      rows.push({ group: null, flows: [flow] });
       continue;
     }
     if (taken.has(name)) continue;
     taken.add(name);
-    rows.push(byName.get(name)!);
+    const group = byName.get(name)!;
+    rows.push({ group, flows: groupMembers(group) });
   }
   return rows;
 }

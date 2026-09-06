@@ -1,11 +1,21 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { OperatorFlow } from '../../core/api/models';
+import { copyText } from '../../shared/clipboard';
 import { originState, originTooltip } from '../../shared/origin-state';
-import { PreviewController } from '../preview/preview-controller';
+import { PreviewController, requestFor } from '../preview/preview-controller';
 import { OperatorFlowDetail } from './operator-flow-detail';
 
-/** Fallback channel count when the flow definition does not state one. */
-const DEFAULT_CHANNELS = 2;
+/**
+ * How a libmxl-fabrics provider reads on a badge. `auto` is deliberately
+ * absent: it asks the control plane to resolve a provider rather than naming
+ * one, so a mirror still carrying it says nothing about what moves the grains.
+ */
+const FABRIC_LABELS: Record<string, string> = {
+  verbs: 'RoCEv2',
+  efa: 'EFA',
+  tcp: 'TCP',
+  shm: 'SHM',
+};
 
 @Component({
   selector: 'mv-operator-flow-row',
@@ -16,6 +26,9 @@ const DEFAULT_CHANNELS = 2;
       <div class="row">
         <span class="dot" [class]="origin().cls" [title]="tooltip()"></span>
         <span class="name">
+          @for (fabric of fabrics(); track fabric) {
+            <span class="badge fabric" title="Fabric this flow is mirrored over">{{ fabric }}</span>
+          }
           {{ flow().label }}
           @if (format()) {
             <span class="badge" [class]="badgeClass()">{{ format() }}</span>
@@ -40,9 +53,7 @@ const DEFAULT_CHANNELS = 2;
                to a browser, so the button says so instead of opening a card that
                never fills. -->
           @if (previewable()) {
-            <button class="btn of-prev" type="button" [title]="previewTitle()" (click)="preview()">
-              Preview
-            </button>
+            <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
           } @else {
             <button
               class="btn"
@@ -56,7 +67,18 @@ const DEFAULT_CHANNELS = 2;
         </span>
       </div>
       <div class="of-meta">
-        {{ flow().id }} · <span class="loc">{{ locations() }}</span> · {{ origin().label }}
+        {{ flow().id }}
+        <button
+          class="cp"
+          [class.done]="copied()"
+          type="button"
+          title="Copy flow id"
+          aria-label="Copy flow id"
+          (click)="copyId()"
+        >
+          {{ copied() ? '✓' : '⧉' }}
+        </button>
+        · <span class="loc">{{ locations() }}</span> · {{ origin().label }}
         @if (flow().grouphint) {
           · {{ flow().grouphint }}
         }
@@ -71,16 +93,11 @@ const DEFAULT_CHANNELS = 2;
 })
 export class OperatorFlowRow {
   readonly flow = input.required<OperatorFlow>();
-  /**
-   * The audio flow tagged with the same NMOS source as this one, when the
-   * producer published both. Supplied by the list, which is the only place
-   * that can see a flow's siblings.
-   */
-  readonly audioSibling = input<OperatorFlow | null>(null);
 
   private readonly preview$ = inject(PreviewController);
 
   protected readonly open = signal(false);
+  protected readonly copied = signal(false);
 
   protected readonly format = computed(() => (this.flow().format ?? '').toLowerCase());
   /**
@@ -95,14 +112,23 @@ export class OperatorFlowRow {
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
 
   /**
-   * Video and audio are both pulled by mediamtx, which reads the flow, and a
-   * data flow is read as decoded ANC packets. Anything else has no route to a
-   * browser at all.
+   * The transports carrying this flow off the node that holds it, taken from
+   * the mirrors rather than from the receivers: a receiver's provider is what a
+   * consumer asked for and defaults to `auto`, while the control plane stamps
+   * the resolved one onto every mirror before the gateway sets it up.
+   *
+   * Empty for a flow nothing mirrors, which is read straight out of the local
+   * domain and crosses no fabric at all. More than one where a flow is mirrored
+   * to nodes that resolved differently, so both are named rather than one of
+   * them standing for the other.
    */
-  /** Names the sound that comes with the picture, where there is any. */
-  protected readonly previewTitle = computed(() => {
-    const audio = this.audioSibling();
-    return audio ? `Picture and sound, with ${audio.label}` : '';
+  protected readonly fabrics = computed(() => {
+    const seen = new Set<string>();
+    for (const mirror of this.flow().detail?.mirrors ?? []) {
+      const label = FABRIC_LABELS[(mirror.provider ?? '').toLowerCase()];
+      if (label) seen.add(label);
+    }
+    return [...seen];
   });
 
   /**
@@ -129,24 +155,20 @@ export class OperatorFlowRow {
   );
 
   /**
-   * Open this flow's canonical preview.
+   * Open this flow, and only this one.
    *
-   * Where the producer tagged a video flow and an audio flow with one source,
-   * the canonical preview is the pair. It is not an alternative offered beside
-   * a picture-only one: two affordances would be two paths on the media
-   * server, so the same picture would be decoded and encoded twice, at about
-   * 1.4 cores each against roughly one percent for the sound. A viewer who
-   * does not want to hear it mutes the element.
+   * A picture its producer tagged with sound is previewed with that sound from
+   * the group's head, which is the only place that can see both. This button
+   * stays what it says it is, so a grouped picture can still be watched alone.
    */
   protected preview(): void {
-    const f = this.flow();
-    const audio = this.audioSibling();
-    this.preview$.open({
-      id: f.id,
-      label: audio ? `${f.label} + ${audio.label}` : f.label,
-      format: this.format() as 'video' | 'audio' | 'data',
-      channels: (audio ?? f).detail?.media?.channels ?? DEFAULT_CHANNELS,
-      audioId: audio?.id,
-    });
+    this.preview$.open(requestFor(this.flow()));
+  }
+
+  /** The id is what every kubectl and every log line is keyed on. */
+  protected async copyId(): Promise<void> {
+    if (!(await copyText(this.flow().id))) return;
+    this.copied.set(true);
+    setTimeout(() => this.copied.set(false), 1000);
   }
 }
