@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { OperatorFlow } from '../../core/api/models';
+import { DetailMirror, OperatorFlow } from '../../core/api/models';
 import { PreviewController } from '../preview/preview-controller';
 import { OperatorFlowRow } from './operator-flow-row';
 
@@ -118,7 +118,7 @@ describe('OperatorFlowRow format badge', () => {
     fixture = TestBed.createComponent(OperatorFlowRow);
     fixture.componentRef.setInput('flow', flow);
     fixture.detectChanges();
-    const badge: HTMLElement = fixture.nativeElement.querySelector('.badge');
+    const badge: HTMLElement = fixture.nativeElement.querySelector('.badge:not(.fabric)');
     return [...badge.classList];
   }
 
@@ -143,3 +143,112 @@ describe('OperatorFlowRow format badge', () => {
   });
 });
 
+/**
+ * What moves a flow off the node that holds it, read where an operator is
+ * already looking. The value is the mirror's, because that is the one the
+ * control plane resolved: a receiver's provider is a request and defaults to
+ * `auto`.
+ */
+describe('OperatorFlowRow fabric badge', () => {
+  let fixture: ComponentFixture<OperatorFlowRow>;
+
+  function badges(mirrors: DetailMirror[]): string[] {
+    fixture = TestBed.createComponent(OperatorFlowRow);
+    fixture.componentRef.setInput('flow', { ...VIDEO, detail: { mirrors } });
+    fixture.detectChanges();
+    return Array.from(fixture.nativeElement.querySelectorAll('.badge.fabric')).map((b) =>
+      ((b as HTMLElement).textContent ?? '').trim(),
+    );
+  }
+
+  function mirror(provider: string, name = provider): DetailMirror {
+    return { name, provider, targetNode: name };
+  }
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ imports: [OperatorFlowRow] });
+  });
+
+  it.each([
+    ['verbs', 'RoCEv2'],
+    ['efa', 'EFA'],
+    ['tcp', 'TCP'],
+  ])('reads the provider %p as %p', (provider, shown) => {
+    expect(badges([mirror(provider)])).toEqual([shown]);
+  });
+
+  /** Nothing crosses a fabric, so naming one would be an invention. */
+  it('shows none for a flow nothing mirrors', () => {
+    expect(badges([])).toEqual([]);
+  });
+
+  /**
+   * `auto` asks the control plane to resolve a provider rather than naming one.
+   * A mirror still carrying it says nothing about what moves the grains.
+   */
+  it.each(['auto', '', 'something-else'])('shows none for the provider %p', (provider) => {
+    expect(badges([mirror(provider, 'm1')])).toEqual([]);
+  });
+
+  it('names one transport once, however many nodes it carries the flow to', () => {
+    expect(badges([mirror('verbs', 'm1'), mirror('verbs', 'm2')])).toEqual(['RoCEv2']);
+  });
+
+  /** Two nodes can resolve differently, and one must not stand for the other. */
+  it('names both where a flow is mirrored over two transports', () => {
+    expect(badges([mirror('verbs', 'm1'), mirror('tcp', 'm2')])).toEqual(['RoCEv2', 'TCP']);
+  });
+});
+
+/**
+ * The id is what every kubectl and every log line is keyed on, and it is 36
+ * characters of hex nobody retypes correctly.
+ */
+describe('OperatorFlowRow id copy', () => {
+  let fixture: ComponentFixture<OperatorFlowRow>;
+  let written: string[];
+
+  beforeEach(() => {
+    written = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          written.push(text);
+          return Promise.resolve();
+        },
+      },
+    });
+    TestBed.configureTestingModule({ imports: [OperatorFlowRow] });
+    fixture = TestBed.createComponent(OperatorFlowRow);
+    fixture.componentRef.setInput('flow', VIDEO);
+    fixture.detectChanges();
+  });
+
+  function copyButton(): HTMLButtonElement {
+    return fixture.nativeElement.querySelector('.of-meta .cp');
+  }
+
+  /** The write and the handler resuming after it are two ticks apart. */
+  function settled(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve));
+  }
+
+  it('copies the flow id, not the whole meta line', async () => {
+    copyButton().click();
+    await settled();
+
+    expect(written).toEqual([VIDEO.id]);
+  });
+
+  /** Nothing else confirms it: the clipboard cannot be read back. */
+  it('marks the button once the id is on the clipboard', async () => {
+    expect(copyButton().classList).not.toContain('done');
+
+    copyButton().click();
+    await settled();
+    fixture.detectChanges();
+
+    expect(copyButton().classList).toContain('done');
+  });
+});

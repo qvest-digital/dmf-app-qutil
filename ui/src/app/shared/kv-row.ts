@@ -6,6 +6,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { copyText } from './clipboard';
 
 /**
  * One row of a `.kv` detail grid: label, value, copy button.
@@ -45,33 +46,7 @@ export class KvRow {
   protected async copy(): Promise<void> {
     const text = (this.vv().nativeElement.textContent ?? '').trim();
     if (!text || text === '--') return;
-
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        this.flash();
-        return;
-      } catch {
-        // Denied or unavailable — fall through to the legacy path.
-      }
-    }
-    // execCommand still works where the async clipboard API is refused, which
-    // is any non-secure context — a port-forward to http://localhost:8080, for
-    // instance, or the demo served over plain HTTP.
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-      this.flash();
-    } catch {
-      // Nothing else to try; leave the button unchanged.
-    }
-    document.body.removeChild(ta);
-  }
-
-  private flash(): void {
+    if (!(await copyText(text))) return;
     this.copied.set(true);
     setTimeout(() => this.copied.set(false), 1000);
   }

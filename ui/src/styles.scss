@@ -322,6 +322,16 @@ main.previewing {
   background: rgba(255, 214, 0, 0.18);
   color: #ffe680;
 }
+/* Leads the label rather than trailing it, so the transport reads with the
+   origin dot beside it. */
+.flow .badge.fabric {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--qv-white);
+  /* RoCEv2, not ROCEV2: the format pills are words, this is a protocol name. */
+  text-transform: none;
+  margin-left: 0;
+  margin-right: 6px;
+}
 .flow .of-meta {
   font-size: 11px;
   opacity: 0.6;
@@ -331,6 +341,9 @@ main.previewing {
 }
 .flow .of-meta .loc {
   opacity: 0.8;
+}
+.flow .of-meta .cp {
+  vertical-align: baseline;
 }
 .flow.empty {
   opacity: 0.6;
