@@ -1,11 +1,5 @@
 import { OperatorFlow } from '../../core/api/models';
-import {
-  audioSiblingOf,
-  flowTrack,
-  groupedFlowRows,
-  groupFlows,
-  parseGroupHint,
-} from './flow-groups';
+import { flowTrack, groupedFlowRows, groupFlows, parseGroupHint } from './flow-groups';
 
 function flow(id: string, grouphint: string | null, format = 'video'): OperatorFlow {
   return { id, label: id, format, grouphint } as OperatorFlow;
@@ -163,89 +157,52 @@ describe('groupFlows', () => {
   });
 });
 
-describe('audioSiblingOf', () => {
-  const flows = [
-    flow('v1', 'srt-ingest-1:Video'),
-    flow('a1', 'srt-ingest-1:Audio', 'audio'),
-    flow('v2', 'lone:Video'),
-  ];
-
-  it('finds the audio tagged into the same group', () => {
-    expect(audioSiblingOf(flows[0], flows)?.id).toBe('a1');
-  });
-
-  it('has none when the group published no audio', () => {
-    expect(audioSiblingOf(flows[2], flows)).toBeNull();
-  });
-
-  it('has none for a flow with no hint', () => {
-    expect(audioSiblingOf(flow('v3', null), flows)).toBeNull();
-  });
-
-  /** Asking an audio flow for its audio sibling is a caller error, not a pair. */
-  it('has none when asked about a flow that is not the video track', () => {
-    expect(audioSiblingOf(flows[1], flows)).toBeNull();
-  });
-
-  /**
-   * Two pictures in one group, one pair. The sound goes with the video the
-   * group's roles put first: the pair decides the media server path name, and a
-   * second pair would encode the same sound against a second picture.
-   */
-  it('has none for a video flow that did not take the group video track', () => {
-    const camera = [
-      flow('v1', 'Camera:Primary'),
-      flow('v2', 'Camera:Secondary'),
-      flow('a1', 'Camera:Audio 1', 'audio'),
-    ];
-
-    expect(audioSiblingOf(camera[0], camera)?.id).toBe('a1');
-    expect(audioSiblingOf(camera[1], camera)).toBeNull();
-  });
-});
-
 /**
  * A group only reads as one box while its flows render next to each other, so
- * what this returns is the render order, not just the pairing.
+ * what this returns is the render order, not just the pairing. Each box also
+ * carries the group it renders, which is what its head is drawn from.
  */
 describe('groupedFlowRows', () => {
-  it('puts a group in one row, picture first', () => {
-    const rows = groupedFlowRows([
-      flow('d1', 'srt-ingest-1:Ancillary Data', 'data'),
-      flow('a1', 'srt-ingest-1:Audio', 'audio'),
-      flow('v1', 'srt-ingest-1:Video'),
-    ]);
+  /** The ids of each box, in the order the list renders them. */
+  function ids(flows: OperatorFlow[]): string[][] {
+    return groupedFlowRows(flows).map((r) => r.flows.map((f) => f.id));
+  }
 
-    expect(rows.map((r) => r.map((f) => f.id))).toEqual([['v1', 'a1', 'd1']]);
+  it('puts a group in one row, picture first', () => {
+    expect(
+      ids([
+        flow('d1', 'srt-ingest-1:Ancillary Data', 'data'),
+        flow('a1', 'srt-ingest-1:Audio', 'audio'),
+        flow('v1', 'srt-ingest-1:Video'),
+      ]),
+    ).toEqual([['v1', 'a1', 'd1']]);
   });
 
   it('keeps a group that published one track alone in its row', () => {
-    const rows = groupedFlowRows([flow('v1', 'lone:Video')]);
-
-    expect(rows).toEqual([[expect.objectContaining({ id: 'v1' })]]);
+    expect(ids([flow('v1', 'lone:Video')])).toEqual([['v1']]);
   });
 
   /** A poll that reorders the inventory must not move a group up the list. */
   it('leaves a group where its first member was', () => {
-    const rows = groupedFlowRows([
-      flow('x1', null),
-      flow('a1', 'srt-ingest-1:Audio', 'audio'),
-      flow('x2', null),
-      flow('v1', 'srt-ingest-1:Video'),
-    ]);
-
-    expect(rows.map((r) => r.map((f) => f.id))).toEqual([['x1'], ['v1', 'a1'], ['x2']]);
+    expect(
+      ids([
+        flow('x1', null),
+        flow('a1', 'srt-ingest-1:Audio', 'audio'),
+        flow('x2', null),
+        flow('v1', 'srt-ingest-1:Video'),
+      ]),
+    ).toEqual([['x1'], ['v1', 'a1'], ['x2']]);
   });
 
   it('keeps two groups in separate rows', () => {
-    const rows = groupedFlowRows([
-      flow('v1', 'srt-ingest-1:Video'),
-      flow('v2', 'mcm-55555-1:video'),
-      flow('a1', 'srt-ingest-1:Audio', 'audio'),
-      flow('a2', 'mcm-55555-1:audio', 'audio'),
-    ]);
-
-    expect(rows.map((r) => r.map((f) => f.id))).toEqual([
+    expect(
+      ids([
+        flow('v1', 'srt-ingest-1:Video'),
+        flow('v2', 'mcm-55555-1:video'),
+        flow('a1', 'srt-ingest-1:Audio', 'audio'),
+        flow('a2', 'mcm-55555-1:audio', 'audio'),
+      ]),
+    ).toEqual([
       ['v1', 'a1'],
       ['v2', 'a2'],
     ]);
@@ -257,13 +214,9 @@ describe('groupedFlowRows', () => {
     ['a format nothing plays', flow('m1', 'srt-ingest-1:Mux', 'mux')],
     ['the second flow of a track a group named twice', flow('a2', 'srt-ingest-1:Audio', 'audio')],
   ])('gives %s a row of its own', (_name, extra) => {
-    const rows = groupedFlowRows([
-      flow('v1', 'srt-ingest-1:Video'),
-      flow('a1', 'srt-ingest-1:Audio', 'audio'),
-      extra,
-    ]);
-
-    expect(rows.map((r) => r.map((f) => f.id))).toEqual([['v1', 'a1'], [extra.id]]);
+    expect(
+      ids([flow('v1', 'srt-ingest-1:Video'), flow('a1', 'srt-ingest-1:Audio', 'audio'), extra]),
+    ).toEqual([['v1', 'a1'], [extra.id]]);
   });
 
   it('shows every flow exactly once', () => {
@@ -274,6 +227,26 @@ describe('groupedFlowRows', () => {
       flow('m1', 'srt-ingest-1:Mux', 'mux'),
     ];
 
-    expect(groupedFlowRows(flows).flat()).toHaveLength(flows.length);
+    expect(groupedFlowRows(flows).flatMap((r) => r.flows)).toHaveLength(flows.length);
+  });
+
+  /**
+   * The head names the group and previews its pair, so a box that came from a
+   * group has to carry the group rather than only its flows.
+   */
+  it('carries the group a box came from', () => {
+    const rows = groupedFlowRows([
+      flow('v1', 'srt-ingest-1:Video'),
+      flow('a1', 'srt-ingest-1:Audio', 'audio'),
+    ]);
+
+    expect(rows[0].group?.name).toBe('srt-ingest-1');
+    expect(rows[0].group?.video?.id).toBe('v1');
+    expect(rows[0].group?.audio?.id).toBe('a1');
+  });
+
+  /** A box with no group gets no head, so nothing may stand in for one. */
+  it('carries no group for a flow no hint grouped', () => {
+    expect(groupedFlowRows([flow('x1', null)])[0].group).toBeNull();
   });
 });

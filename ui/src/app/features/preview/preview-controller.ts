@@ -1,4 +1,8 @@
 import { Injectable, signal } from '@angular/core';
+import { OperatorFlow } from '../../core/api/models';
+
+/** Fallback channel count when the flow definition does not state one. */
+const DEFAULT_CHANNELS = 2;
 
 export interface PreviewRequest {
   id: string;
@@ -14,6 +18,33 @@ export interface PreviewRequest {
 }
 
 /**
+ * What makes two requests the same card. A flow previewed on its own and the
+ * same flow previewed with its sound are different paths on the media server,
+ * so they are different cards here.
+ */
+export function key(request: PreviewRequest): string {
+  return request.audioId ? `${request.id}+${request.audioId}` : request.id;
+}
+
+/**
+ * What to open a card with for one flow, or for a picture carrying the sound a
+ * producer tagged into the same group.
+ *
+ * The channel count comes from the flow definition rather than from the row's
+ * summary field, because it decides how many pairs the card connects to. On a
+ * pair it is the audio flow's, whatever the picture states.
+ */
+export function requestFor(flow: OperatorFlow, audio?: OperatorFlow | null): PreviewRequest {
+  return {
+    id: flow.id,
+    label: audio ? `${flow.label} + ${audio.label}` : flow.label,
+    format: (flow.format ?? '').toLowerCase() as PreviewRequest['format'],
+    channels: (audio ?? flow).detail?.media?.channels ?? DEFAULT_CHANNELS,
+    audioId: audio?.id,
+  };
+}
+
+/**
  * Which flows the preview column is carrying, in the order they were opened.
  *
  * The column lives outside the polled operator-flows list -- a 3s refresh must
@@ -23,15 +54,6 @@ export interface PreviewRequest {
  * One entry per flow: two cards on one flow would resolve to the same mediamtx
  * path, and closing either would release it under the other.
  */
-/**
- * What makes two requests the same card. A flow previewed on its own and the
- * same flow previewed with its sound are different paths on the media server,
- * so they are different cards here.
- */
-export function key(request: PreviewRequest): string {
-  return request.audioId ? `${request.id}+${request.audioId}` : request.id;
-}
-
 @Injectable({ providedIn: 'root' })
 export class PreviewController {
   private readonly _requests = signal<PreviewRequest[]>([]);

@@ -45,6 +45,7 @@ mv-root {
 mv-multiviewer-page,
 mv-gateway-grid,
 mv-operator-flow-list,
+mv-flow-group-head,
 mv-operator-flow-row,
 mv-operator-flow-detail,
 mv-flow-preview,
@@ -223,6 +224,32 @@ main.previewing {
 .flow-group > mv-operator-flow-row:not(:last-child) .flow {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+}
+/* The box's own head: what the producer called the group, and the preview that
+   plays its picture and sound together. Same tint as the rows it caps, so the
+   group reads as one block rather than as a label floating above one. */
+.fg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px 14px 0 0;
+  padding: 8px 14px 6px;
+}
+/* The producer's own string, so it is not upper-cased the way the panel's own
+   headings are: half these names are hex, and a group name is an identifier
+   somebody greps for. */
+.fg-name {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  word-break: break-all;
+}
+.fg-prev {
+  white-space: nowrap;
+  flex: none;
 }
 .flow .row {
   display: grid;

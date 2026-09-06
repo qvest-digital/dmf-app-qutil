@@ -61,6 +61,22 @@ describe('OperatorFlowList grouping', () => {
     expect(groups()[0].querySelectorAll('.flow')).toHaveLength(1);
   });
 
+  /**
+   * The head names the group and carries its combined preview, so it belongs to
+   * a box that came from a group and to no other.
+   */
+  it('heads a group box with the group name', () => {
+    mount([VIDEO, AUDIO]);
+
+    expect(groups()[0].querySelector('.fg-name')?.textContent?.trim()).toBe('srt-ingest-1');
+  });
+
+  it('gives an ungrouped flow no head', () => {
+    mount([LONE]);
+
+    expect(groups()[0].querySelector('.fg-head')).toBeNull();
+  });
+
   it('says so when the operator knows no flow at all', () => {
     mount([]);
 

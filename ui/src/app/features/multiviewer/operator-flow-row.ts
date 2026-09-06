@@ -1,11 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { OperatorFlow } from '../../core/api/models';
 import { originState, originTooltip } from '../../shared/origin-state';
-import { PreviewController } from '../preview/preview-controller';
+import { PreviewController, requestFor } from '../preview/preview-controller';
 import { OperatorFlowDetail } from './operator-flow-detail';
-
-/** Fallback channel count when the flow definition does not state one. */
-const DEFAULT_CHANNELS = 2;
 
 @Component({
   selector: 'mv-operator-flow-row',
@@ -40,9 +37,7 @@ const DEFAULT_CHANNELS = 2;
                to a browser, so the button says so instead of opening a card that
                never fills. -->
           @if (previewable()) {
-            <button class="btn of-prev" type="button" [title]="previewTitle()" (click)="preview()">
-              Preview
-            </button>
+            <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
           } @else {
             <button
               class="btn"
@@ -71,12 +66,6 @@ const DEFAULT_CHANNELS = 2;
 })
 export class OperatorFlowRow {
   readonly flow = input.required<OperatorFlow>();
-  /**
-   * The audio flow tagged with the same NMOS source as this one, when the
-   * producer published both. Supplied by the list, which is the only place
-   * that can see a flow's siblings.
-   */
-  readonly audioSibling = input<OperatorFlow | null>(null);
 
   private readonly preview$ = inject(PreviewController);
 
@@ -93,17 +82,6 @@ export class OperatorFlowRow {
   });
   protected readonly origin = computed(() => originState(this.flow().originFresh));
   protected readonly tooltip = computed(() => originTooltip(this.flow()));
-
-  /**
-   * Video and audio are both pulled by mediamtx, which reads the flow, and a
-   * data flow is read as decoded ANC packets. Anything else has no route to a
-   * browser at all.
-   */
-  /** Names the sound that comes with the picture, where there is any. */
-  protected readonly previewTitle = computed(() => {
-    const audio = this.audioSibling();
-    return audio ? `Picture and sound, with ${audio.label}` : '';
-  });
 
   /**
    * Video is pulled by mediamtx, audio is pushed by the audio-preview pod, and a
@@ -129,24 +107,13 @@ export class OperatorFlowRow {
   );
 
   /**
-   * Open this flow's canonical preview.
+   * Open this flow, and only this one.
    *
-   * Where the producer tagged a video flow and an audio flow with one source,
-   * the canonical preview is the pair. It is not an alternative offered beside
-   * a picture-only one: two affordances would be two paths on the media
-   * server, so the same picture would be decoded and encoded twice, at about
-   * 1.4 cores each against roughly one percent for the sound. A viewer who
-   * does not want to hear it mutes the element.
+   * A picture its producer tagged with sound is previewed with that sound from
+   * the group's head, which is the only place that can see both. This button
+   * stays what it says it is, so a grouped picture can still be watched alone.
    */
   protected preview(): void {
-    const f = this.flow();
-    const audio = this.audioSibling();
-    this.preview$.open({
-      id: f.id,
-      label: audio ? `${f.label} + ${audio.label}` : f.label,
-      format: this.format() as 'video' | 'audio' | 'data',
-      channels: (audio ?? f).detail?.media?.channels ?? DEFAULT_CHANNELS,
-      audioId: audio?.id,
-    });
+    this.preview$.open(requestFor(this.flow()));
   }
 }

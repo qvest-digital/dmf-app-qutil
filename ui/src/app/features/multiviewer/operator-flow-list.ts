@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { OperatorFlow } from '../../core/api/models';
-import { audioSiblingOf, groupedFlowRows } from '../preview/flow-groups';
+import { groupedFlowRows } from '../preview/flow-groups';
+import { FlowGroupHead } from './flow-group-head';
 import { OperatorFlowRow } from './operator-flow-row';
 
 /**
@@ -10,17 +11,20 @@ import { OperatorFlowRow } from './operator-flow-row';
 @Component({
   selector: 'mv-operator-flow-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [OperatorFlowRow],
+  imports: [FlowGroupHead, OperatorFlowRow],
   template: `
     <div class="gwbar">
       <h2>
         Operator flows <span class="of-count">{{ count() }}</span>
       </h2>
       <div class="flows">
-        @for (group of groups(); track group[0].id) {
+        @for (row of rows(); track row.flows[0].id) {
           <div class="flow-group">
-            @for (flow of group; track flow.id) {
-              <mv-operator-flow-row [flow]="flow" [audioSibling]="siblingOf(flow)" />
+            @if (row.group) {
+              <mv-flow-group-head [group]="row.group" />
+            }
+            @for (flow of row.flows; track flow.id) {
+              <mv-operator-flow-row [flow]="flow" />
             }
           </div>
         } @empty {
@@ -38,25 +42,8 @@ export class OperatorFlowList {
   );
 
   /**
-   * The flows of one NMOS group render as one box, so they have to be
-   * adjacent. An ungrouped flow is a group of one and keeps the box it had.
+   * The flows of one NMOS group render as one box under the group's name, so
+   * they have to be adjacent. An ungrouped flow is a box of one, with no head.
    */
-  protected readonly groups = computed(() => groupedFlowRows(this.flows()));
-
-  /**
-   * Computed once per render rather than per row: grouping walks the whole
-   * inventory, and a row cannot see its own siblings.
-   */
-  private readonly siblings = computed(() => {
-    const byVideo = new Map<string, OperatorFlow>();
-    for (const flow of this.flows()) {
-      const audio = audioSiblingOf(flow, this.flows());
-      if (audio) byVideo.set(flow.id, audio);
-    }
-    return byVideo;
-  });
-
-  protected siblingOf(flow: OperatorFlow): OperatorFlow | null {
-    return this.siblings().get(flow.id) ?? null;
-  }
+  protected readonly rows = computed(() => groupedFlowRows(this.flows()));
 }
