@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OperatorFlow } from '../../core/api/models';
 import { GrainStrip } from './grain-strip';
 
@@ -130,5 +130,62 @@ describe('GrainStrip', () => {
 
     const labels = [...el.querySelectorAll('.grain-btn')].map((b) => b.textContent!.trim());
     expect(labels).toEqual(['1', '2', '3']);
+  });
+
+  /**
+   * The wave canvas is painted from the callback that sets audio(), before
+   * the view has rendered anything that depends on it. A canvas inside the
+   * audio block was not in the DOM at that moment, so the first window
+   * showed its numbers and an empty frame; only the next click drew.
+   */
+  it('draws the waveform for the first window shown', async () => {
+    const strokes: string[] = [];
+    const ctx = {
+      clearRect: () => {},
+      beginPath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      stroke: () => strokes.push('stroke'),
+      strokeStyle: '',
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      () => ctx as unknown as CanvasRenderingContext2D,
+    );
+    const el = await render(AUDIO);
+    fixture.componentInstance['capture']();
+
+    http.expectOne(`/api/grains/${AUDIO.id}`).flush({
+      taken: '2026-01-01T00:00:00Z',
+      flow: AUDIO.id,
+      info: {
+        flow: AUDIO.id,
+        format: 'audio',
+        grainRate: { num: 48000, den: 1 },
+        headIndex: 1000,
+        firstIndex: 800,
+        channelCount: 2,
+        bufferLength: 200,
+        sampleRate: 48000,
+        windows: [{ index: 800, count: 100 }],
+      },
+    });
+    http.expectOne(`/api/samples/${AUDIO.id}/800/100`).flush({
+      flow: AUDIO.id,
+      index: 800,
+      count: 100,
+      sampleRate: 48000,
+      channels: [
+        { channel: 0, peak: 0.5, rms: 0.35, min: -0.5, samples: [0, 0.5, -0.5] },
+        { channel: 1, peak: 0.1, rms: 0.05, min: -0.1, samples: [0, 0.1, -0.1] },
+      ],
+    });
+    await fixture.whenStable();
+
+    const wave = [...el.querySelectorAll('canvas')].find(
+      (c) => !c.classList.contains('off'),
+    ) as HTMLCanvasElement;
+    // One row of 54px per channel, and at least the midline strokes.
+    expect(wave.height).toBe(108);
+    expect(strokes.length).toBeGreaterThan(0);
   });
 });
