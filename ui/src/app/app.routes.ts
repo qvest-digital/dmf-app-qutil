@@ -12,7 +12,7 @@ import { Routes } from '@angular/router';
 export const routes: Routes = [
   {
     path: '',
-    title: 'Qutil - Multiviewer',
+    title: 'Qutil - Diagnostics',
     loadComponent: () =>
       import('./features/multiviewer/multiviewer-page').then((m) => m.MultiviewerPage),
   },
