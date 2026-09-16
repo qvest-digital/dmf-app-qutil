@@ -868,3 +868,95 @@ footer {
     transform: rotate(360deg);
   }
 }
+/* Ring snapshot. The button row is a fixed grid of small squares: a ring is
+   tens of entries at most, so they all fit and none needs a label. */
+.grain-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+/* The capture control. Styled as a button rather than left to the browser
+   default, which on this background reads as a label. */
+.grain-capture {
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #eaf2ff;
+  cursor: pointer;
+  border: 1px solid rgba(78, 161, 255, 0.55);
+  border-radius: 4px;
+  background: rgba(78, 161, 255, 0.18);
+}
+.grain-capture:hover:not(:disabled) {
+  border-color: #4ea1ff;
+  background: rgba(78, 161, 255, 0.3);
+}
+.grain-capture:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.grain-capture:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.grain-taken,
+.grain-note {
+  font-size: 0.78rem;
+  opacity: 0.65;
+}
+.grain-note {
+  margin: 0.25rem 0 0.6rem;
+  max-width: 52ch;
+}
+.grain-error {
+  color: #ff8a7a;
+  font-size: 0.82rem;
+}
+.grain-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 0.7rem;
+}
+.grain-btn {
+  min-width: 2rem;
+  padding: 0.25rem 0.35rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 3px;
+}
+.grain-btn.sel {
+  border-color: #4ea1ff;
+  background: rgba(78, 161, 255, 0.22);
+}
+/* An incomplete or writer-flagged grain, so a gap in the ring is visible
+   before it is clicked. */
+.grain-btn.bad {
+  border-color: #ff8a7a;
+}
+.grain-canvas {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin: 0.5rem 0;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+/* Beats the display above on specificity, which [hidden] cannot do. */
+.grain-canvas.off {
+  display: none;
+}
+.grain-hex {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  max-height: 16rem;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0.5rem;
+}
