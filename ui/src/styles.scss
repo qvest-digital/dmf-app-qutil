@@ -81,6 +81,27 @@ header {
   width: auto;
   display: block;
 }
+/* The product mark, beside the corporate wordmark rather than instead of it.
+   A rule separates the two so neither reads as part of the other. */
+.brand .qutil-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  /* Ink at low alpha: the header is white, so a white rule is not there. */
+  border-left: 1px solid rgba(11, 9, 13, 0.15);
+}
+.brand .qutil-logo svg {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+.brand .qutil-logo b {
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.06em;
+  color: var(--qv-ink);
+}
 .brand .sub {
   font-weight: 600;
   font-size: 13px;
