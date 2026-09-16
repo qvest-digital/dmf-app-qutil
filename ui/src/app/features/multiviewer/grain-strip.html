@@ -85,7 +85,15 @@
       <span>rate</span><code>{{ a.sampleRate }}</code>
     </div>
   </div>
-  <canvas #wave class="grain-canvas"></canvas>
+}
+
+<!-- Always in the DOM, like the frame canvas above: the window is painted
+     from the same callback that sets audio(), before the view has rendered
+     a block that depends on it, so a canvas inside that block is not there
+     to paint on. -->
+<canvas #wave class="grain-canvas" [class.off]="!audio()"></canvas>
+
+@if (audio(); as a) {
   <div class="kv">
     @for (c of a.channels; track c.channel) {
       <div>
