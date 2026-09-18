@@ -148,24 +148,26 @@ header {
   box-shadow: 0 0 0 3px rgba(240, 80, 18, 0.3);
 }
 
-/* The metrics panel alone, until a preview is open: then it shares the width
-   with the preview column. Wide enough for the panel's own two-column stats
-   either way. */
+/* The metrics panel and the preview column, side by side from the start. The
+   column used to arrive with the first preview, which re-laid the page out
+   under the pointer that opened it: the panel lost a third of its width and
+   every row in it moved. Holding the column open costs an empty half on a
+   wide screen and keeps the panel still. */
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 22px;
   padding: 24px 28px;
-  max-width: 1180px;
-}
-main.previewing {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  max-width: none;
 }
 @media (max-width: 1100px) {
-  main.previewing {
+  main {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Stacked, an empty column is a blank block above the fold rather than a
+     space the eye skips, so it is left out until it holds something. */
+  .previews.idle {
+    display: none;
   }
 }
 
@@ -383,6 +385,14 @@ main.previewing {
   gap: 14px;
   min-width: 0;
   align-content: start;
+}
+.pv-idle {
+  margin: auto;
+  max-width: 24ch;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.55;
 }
 .pv-card {
   background: var(--qv-ink);
