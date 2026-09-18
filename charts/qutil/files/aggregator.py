@@ -877,6 +877,10 @@ MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
 # Reader for ANC data flows. An override for the port-forwarded dev loop; an
 # install resolves the booked claim instead.
 ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
+# Reader for addressed grains. Same shape as the ANC reader and for the same
+# reason: reading a grain out of the ring needs libmxl and the node's domain,
+# which is a media function's job rather than this process's.
+GRAIN_READER_API = os.environ.get("GRAIN_READER_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 
 # Where the claims live, and what they are called. The names come from chart
@@ -894,6 +898,8 @@ MCM_CLAIM = os.environ.get("MCM_CLAIM", "")
 MEDIAMTX_CLASS = os.environ.get("MEDIAMTX_CLASS", "mediamtx")
 COMPOSITOR_CLASS = os.environ.get("COMPOSITOR_CLASS", "compositor")
 ANC_READER_CLASS = os.environ.get("ANC_READER_CLASS", "mxl-anc-reader")
+GRAIN_READER_CLAIM = os.environ.get("GRAIN_READER_CLAIM", "")
+GRAIN_READER_CLASS = os.environ.get("GRAIN_READER_CLASS", "mxl-grain-reader")
 
 # A claim's address only changes when it is re-provisioned, so re-reading it per
 # request would spend an API call on an answer that is almost always the same.
@@ -1139,6 +1145,43 @@ def _anc_preview(path, method="GET"):
     if not base:
         return 503, {"error": "no ready ANC reader claim in " + CLAIM_NS}
     return _http_json(base, path, method)
+
+
+def _grain_reader(path, method="GET"):
+    """The grain reader, which serves one addressed grain of a flow.
+
+    Resolved from its claim like the other readers are. "grains" is the
+    endpoint name the class publishes: one reader answers for every flow on the
+    node, so it is named for what it serves rather than for being an API.
+    """
+    base = _resolve_base(GRAIN_READER_API, "grain-reader", GRAIN_READER_CLAIM,
+                         GRAIN_READER_CLASS, "grains")
+    if not base:
+        return 503, {"error": "no ready grain reader claim in " + CLAIM_NS}
+    return _http_json(base, path, method)
+
+
+def _grain_payload(uuid, index):
+    """The grain's bytes, passed through rather than parsed.
+
+    A payload is megabytes of v210 and the browser is what unpacks it, so this
+    is the one path here that does not go through _http_json: decoding it to
+    JSON would cost a copy and a base64 expansion to hand back what arrived.
+    """
+    base = _resolve_base(GRAIN_READER_API, "grain-reader", GRAIN_READER_CLAIM,
+                         GRAIN_READER_CLASS, "grains")
+    if not base:
+        return 503, b"", {}
+    url = f"{base}/grain.raw?flow={uuid}&index={index}"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            headers = {k: v for k, v in r.headers.items()
+                       if k.lower().startswith("x-grain-")}
+            return r.status, r.read(), headers
+    except urllib.error.HTTPError as e:
+        return e.code, b"", {}
+    except Exception:
+        return 502, b"", {}
 
 
 def _known_flow(uuid):
@@ -2012,6 +2055,30 @@ class H(BaseHTTPRequestHandler):
             # than serving the request had.
             pass
 
+    def _send_raw(self, code, body, content_type, headers=None):
+        """A body that is not JSON. Only the grain payload takes this path."""
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _grain_args(self):
+        """(uuid, index, rest) from /api/grain/<uuid>/<index>[/<rest>]."""
+        parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
+        # api, grain, <uuid>, <index>[, rest]
+        uuid = parts[2] if len(parts) > 2 else ""
+        index = parts[3] if len(parts) > 3 else ""
+        rest = parts[4] if len(parts) > 4 else ""
+        return uuid, index, rest
+
     def _preview_args(self):
         """(uuid, owner, channels, audio) from
         /api/preview/<uuid>[?owner=<token>][&channels=<l>[,<r>]][&audio=<uuid>].
@@ -2090,6 +2157,54 @@ class H(BaseHTTPRequestHandler):
                 self._send_body(200, snapshot("generators", generators))
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/grains/"):
+            # What the ring holds for this flow: how many grains, and which
+            # indices are still in it. The button row is built from this.
+            uuid = urllib.parse.unquote(
+                urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+            if not _UUID_RE.match(uuid):
+                return self._send(400, {"error": "not a flow id"})
+            try:
+                code, res = _grain_reader(f"/flow?flow={uuid}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
+        elif self.path.startswith("/api/grain/"):
+            uuid, index, rest = self._grain_args()
+            if not _UUID_RE.match(uuid) or not index.isdigit():
+                return self._send(400, {"error": "need /api/grain/<flow>/<index>"})
+            if rest == "raw":
+                # The payload itself, passed through. Megabytes of v210 that
+                # the browser unpacks, so it is neither parsed nor re-encoded.
+                try:
+                    code, body, headers = _grain_payload(uuid, index)
+                except Exception as e:
+                    return self._send(500, {"error": str(e)})
+                if code != 200:
+                    return self._send(code, {"error": "grain not in the ring"})
+                return self._send_raw(code, body, "application/octet-stream",
+                                      headers)
+            try:
+                code, res = _grain_reader(f"/grain?flow={uuid}&index={index}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
+        elif self.path.startswith("/api/samples/"):
+            # An audio flow has no grains: the ring is samples, so a snapshot
+            # is a window of them, summarised per channel.
+            parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
+            uuid = parts[2] if len(parts) > 2 else ""
+            index = parts[3] if len(parts) > 3 else ""
+            count = parts[4] if len(parts) > 4 else ""
+            if not _UUID_RE.match(uuid) or not index.isdigit() or not count.isdigit():
+                return self._send(
+                    400, {"error": "need /api/samples/<flow>/<index>/<count>"})
+            try:
+                code, res = _grain_reader(
+                    f"/samples?flow={uuid}&index={index}&count={count}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
         elif self.path.startswith("/api/anc/"):
             # The latest decoded ANC grain of a data flow. Polled, because a
             # data preview is a look at what a grain currently carries rather
@@ -2122,6 +2237,24 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def _do_capture(self):
+        """Copy the flow's whole ring and hold it.
+
+        The ring is a transport buffer: five grains of video and 405 ms of
+        audio on the domain this was built against. An index is overwritten
+        long before a person clicks the button naming it, so the row is drawn
+        from a copy taken when it opened rather than from the live ring.
+        """
+        uuid = urllib.parse.unquote(
+            urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+        if not _UUID_RE.match(uuid):
+            return self._send(400, {"error": "not a flow id"})
+        try:
+            code, res = _grain_reader(f"/capture?flow={uuid}", method="POST")
+        except Exception as e:
+            code, res = 500, {"error": str(e)}
+        self._send(code, res)
+
     def do_DELETE(self):
         if self.path.startswith("/api/preview/"):
             uuid, owner, _, _ = self._preview_args()
@@ -2138,6 +2271,8 @@ class H(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path.startswith("/api/grains/"):
+            return self._do_capture()
         if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/generators":
             # Only the collection: a POST to a named generator is not an edit,
             # and a claim's parameters are consumed at provision time anyway.
