@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-rc.45](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.44...v1.0.0-rc.45) (2026-09-18)
+
+
+### Features
+
+* **flows:** snapshot a flow's ring and show each grain ([f3fbee8](https://github.com/qvest-digital/dmf-app-qutil/commit/f3fbee812f00fae17f8b20e3b8aa9e4af115e7d4))
+* **ui:** carry the Qutil mark into the tab icon ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** name the app Qutil and give it a mark ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** name the first tab Diagnostics ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** scroll the panel and the previews apart ([8fe8357](https://github.com/qvest-digital/dmf-app-qutil/commit/8fe83572b57ebf69fe6b318d213f2aea8b9a5d0b))
+
+
+### Bug Fixes
+
+* **flows:** draw the waveform for the first window shown ([f3fbee8](https://github.com/qvest-digital/dmf-app-qutil/commit/f3fbee812f00fae17f8b20e3b8aa9e4af115e7d4))
+* **ui:** hold the preview column open from the start ([8fe8357](https://github.com/qvest-digital/dmf-app-qutil/commit/8fe83572b57ebf69fe6b318d213f2aea8b9a5d0b))
+
 ## [1.0.0-rc.44](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.43...v1.0.0-rc.44) (2026-09-06)
 
 
