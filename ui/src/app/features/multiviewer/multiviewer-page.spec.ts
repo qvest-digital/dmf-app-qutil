@@ -16,10 +16,6 @@ describe('MultiviewerPage preview column', () => {
   let controller: PreviewController;
   let http: HttpTestingController;
 
-  function main(): HTMLElement {
-    return fixture.nativeElement.querySelector('main');
-  }
-
   function cards(): HTMLElement[] {
     return Array.from(fixture.nativeElement.querySelectorAll('.pv-card'));
   }
@@ -48,16 +44,21 @@ describe('MultiviewerPage preview column', () => {
     fixture.detectChanges();
   }
 
-  it('carries no column while nothing is open', () => {
-    expect(fixture.nativeElement.querySelector('.previews')).toBeNull();
-    expect(main().classList.contains('previewing')).toBe(false);
+  // The column is held open whether or not it holds a card. A column that
+  // arrives with the first preview re-lays the page out under the pointer
+  // that opened it, which is what this reserves against.
+  it('holds the column open with nothing in it', () => {
+    expect(fixture.nativeElement.querySelector('.previews')).not.toBeNull();
+    expect(cards()).toHaveLength(0);
+    expect(fixture.nativeElement.querySelector('.pv-idle')).not.toBeNull();
   });
 
-  it('adds a card and the second column when a preview opens', () => {
+  it('adds a card to the column when a preview opens', () => {
     open(FLOW);
 
     expect(cards()).toHaveLength(1);
-    expect(main().classList.contains('previewing')).toBe(true);
+    // The hint gives way to the card it was standing in for.
+    expect(fixture.nativeElement.querySelector('.pv-idle')).toBeNull();
     expect(cards()[0].querySelector('.pv-head')?.textContent).toContain(FLOW);
   });
 
@@ -68,12 +69,15 @@ describe('MultiviewerPage preview column', () => {
     expect(cards()).toHaveLength(2);
   });
 
-  it('drops the column again when the last card is closed', () => {
+  it('keeps the column when the last card is closed', () => {
     open(FLOW);
     (cards()[0].querySelector('.pv-head .btn') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     expect(cards()).toHaveLength(0);
-    expect(main().classList.contains('previewing')).toBe(false);
+    // Closing the last card must not take the column with it, or the panel
+    // moves again on the way back.
+    expect(fixture.nativeElement.querySelector('.previews')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.pv-idle')).not.toBeNull();
   });
 });

@@ -148,24 +148,49 @@ header {
   box-shadow: 0 0 0 3px rgba(240, 80, 18, 0.3);
 }
 
-/* The metrics panel alone, until a preview is open: then it shares the width
-   with the preview column. Wide enough for the panel's own two-column stats
-   either way. */
+/* The metrics panel and the preview column, side by side from the start. The
+   column used to arrive with the first preview, which re-laid the page out
+   under the pointer that opened it: the panel lost a third of its width and
+   every row in it moved. Holding the column open costs an empty half on a
+   wide screen and keeps the panel still. */
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 22px;
   padding: 24px 28px;
-  max-width: 1180px;
-}
-main.previewing {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  max-width: none;
 }
 @media (max-width: 1100px) {
-  main.previewing {
+  main {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Stacked, an empty column is a blank block above the fold rather than a
+     space the eye skips, so it is left out until it holds something. */
+  .previews.idle {
+    display: none;
+  }
+}
+
+/* Two panes, each scrolling in its own right: the flow list is long and a
+   preview card is tall, and scrolling either one used to carry the other away
+   with it. Only where the two sit side by side -- stacked, one scrolling page
+   is what a stacked layout means.
+   The height is pinned on the shell rather than on the grid because a scroll
+   container needs a parent whose height is known, and only the multiviewer
+   wants one: the generators page below grows with its form. */
+@media (min-width: 1101px) {
+  mv-root:has(.mv-main) {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .mv-main {
+    min-height: 0;
+  }
+  .mv-main .panel,
+  .mv-main .previews {
+    min-height: 0;
+    overflow-y: auto;
   }
 }
 
@@ -373,16 +398,25 @@ main.previewing {
   white-space: nowrap;
 }
 
-/* Open previews, newest last, beside the metrics panel. They scroll with the
-   page rather than inside the column: a card is tall, and a column that scrolled
-   on its own would hide the ones below the fold behind a scrollbar nobody looks
-   for. */
+/* Open previews, newest last, beside the metrics panel. The column scrolls in
+   its own right where there is room for it to (see .mv-main below): the panel
+   is read while previews are opened out of it, and a page that scrolled as one
+   took the panel off screen as soon as a second card pushed the column past the
+   fold. */
 .previews {
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
   align-content: start;
+}
+.pv-idle {
+  margin: auto;
+  max-width: 24ch;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.55;
 }
 .pv-card {
   background: var(--qv-ink);
