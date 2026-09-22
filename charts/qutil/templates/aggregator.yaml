@@ -225,6 +225,10 @@ spec:
               value: {{ .Values.ancReader.claimName }}
             - name: ANC_READER_CLASS
               value: {{ .Values.ancReader.className }}
+            - name: GRAIN_READER_CLAIM
+              value: {{ .Values.grainReader.claimName }}
+            - name: GRAIN_READER_CLASS
+              value: {{ .Values.grainReader.className }}
             {{- with .Values.aggregator.ancPreviewApi }}
             # An address instead of the claim above, for a port-forwarded dev
             # loop. An install leaves it unset and resolves the booking.

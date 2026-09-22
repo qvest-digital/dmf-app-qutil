@@ -59,6 +59,9 @@ CASES = {
         "ancReader": {"enabled": True},
         "ancTestSource": {"enabled": True},
     },
+    # Off by default for the same reason as the ANC path. On, it is one more
+    # claim and nothing else: the reader takes its flow per request.
+    "grain-reader": {"grainReader": {"enabled": True}},
 }
 
 
