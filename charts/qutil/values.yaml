@@ -144,8 +144,11 @@ writers:
   #
   # CPU figures are measured at 1296x720 30000/1001 on both an AWS and a
   # bare-metal cluster, taken as the lifetime average of the pod's cgroup over
-  # hours. The class README measures the same patterns at 1080p50 at or below
-  # them, so they carry over as they are.
+  # hours. The class README measures the static patterns at 1080p50 at or
+  # below them, so those carry over; the animated one is measured at 1080p50.
+  #
+  # The overlay is blended on the writer's I420 fast path. On v210 it costs
+  # several times more at 1080p and pushed smpte and ball below 50 grains/s.
   #
   # Requests carry the higher of the two clusters plus room, since the same
   # pattern costs about twice as much on the AWS CPUs. Limits stay well clear of
@@ -173,11 +176,10 @@ writers:
       pattern: ball
       overlayText: MXL-2
       # The animated one, and the only writer that needs more than a core:
-      # 611m bare metal, 1132m AWS. The bare-metal figure is the cost of the
-      # ~25 grains/s it currently reaches, not of a full 30.
+      # 1686m on AWS at 1080p50, holding 50 grains/s.
       resources:
         requests:
-          cpu: 1400m
+          cpu: 1800m
           memory: 768Mi
         limits:
           cpu: "2500m"
