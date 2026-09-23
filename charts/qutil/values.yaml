@@ -285,6 +285,22 @@ ancReader:
   className: mxl-anc-reader
   parameters: {}
 
+# The reader behind the ring snapshot on a flow's detail. Off for the same
+# reason the ANC reader is: the class is not in every catalog, and a cluster
+# turns this on once its catalog pin carries mxl-grain-reader. Until then the
+# ring section says no reader is booked, which is what it did before the
+# section existed.
+#
+# One booking serves every flow the page lists, so this is not per flow. A
+# capture is the whole ring of one flow though, which is hundreds of megabytes
+# for a large one, and what the reader may hold is sized on the class rather
+# than here.
+grainReader:
+  enabled: false
+  claimName: grain-reader
+  className: mxl-grain-reader
+  parameters: {}
+
 # An ancillary-data producer, so the multiviewer has a video/smpte291 flow to
 # list and preview. Off by default: the class is not in every catalog, so a
 # cluster turns it on once its catalog pin carries mxl-anc-testsrc.
