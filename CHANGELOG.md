@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.46](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.45...v1.0.0-rc.46) (2026-09-23)
+
+
+### Features
+
+* **chart:** book the grain reader the ring section reads ([#186](https://github.com/qvest-digital/dmf-app-qutil/issues/186)) ([7269542](https://github.com/qvest-digital/dmf-app-qutil/commit/72695421993b2357aea213cf6837856e5a06ea9a))
+
 ## [1.0.0-rc.45](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.44...v1.0.0-rc.45) (2026-09-18)
 
 
