@@ -110,8 +110,8 @@ compositor:
   className: compositor
   # Tile geometry has to match what the writers produce and what the
   # multiviewer expects.
-  frameWidth: 1296
-  frameHeight: 720
+  frameWidth: 1920
+  frameHeight: 1080
   parameters: {}
 
 
@@ -132,24 +132,27 @@ mcm:
 writers:
   enabled: true
   className: mxl-writer
-  frameWidth: 1296
-  frameHeight: 720
+  frameWidth: 1920
+  frameHeight: 1080
   grainRate:
-    numerator: 30000
-    denominator: 1001
+    numerator: 50
+    denominator: 1
   # Per pattern, because the spread is wide: an animated pattern regenerates
   # every frame where a static one repeats it. The class ships one envelope for
   # all of them, sized for 1080p50, which reserves several times what any of
   # these needs at this geometry and makes a cluster look full while it idles.
   #
-  # Figures are measured at this geometry on both an AWS and a bare-metal
-  # cluster, taken as the lifetime average of the pod's cgroup over hours. The
-  # class README's 720p30 numbers are scaled rather than measured and read 3 to
-  # 5 times low, so they are not the basis here.
+  # CPU figures are measured at 1296x720 30000/1001 on both an AWS and a
+  # bare-metal cluster, taken as the lifetime average of the pod's cgroup over
+  # hours. The class README measures the same patterns at 1080p50 at or below
+  # them, so they carry over as they are.
   #
   # Requests carry the higher of the two clusters plus room, since the same
   # pattern costs about twice as much on the AWS CPUs. Limits stay well clear of
   # the peak: none of these has ever been throttled and none should start.
+  #
+  # Memory is the class envelope: a 1080p50 grain ring at the domain's 2s
+  # history is 563 MiB, which a 512Mi limit would OOM-kill.
   video:
     - name: writer-mxl-1
       groupHint: mxl-multiviewer-1
@@ -160,10 +163,10 @@ writers:
       resources:
         requests:
           cpu: 700m
-          memory: 256Mi
+          memory: 768Mi
         limits:
           cpu: "1500m"
-          memory: 512Mi
+          memory: 1536Mi
     - name: writer-mxl-2
       groupHint: mxl-multiviewer-2
       flowId: d4d00000-0000-0000-0000-000000000002
@@ -175,10 +178,10 @@ writers:
       resources:
         requests:
           cpu: 1400m
-          memory: 256Mi
+          memory: 768Mi
         limits:
           cpu: "2500m"
-          memory: 512Mi
+          memory: 1536Mi
     - name: writer-mxl-3
       groupHint: mxl-multiviewer-3
       flowId: d4d00000-0000-0000-0000-000000000003
@@ -188,10 +191,10 @@ writers:
       resources:
         requests:
           cpu: 250m
-          memory: 256Mi
+          memory: 768Mi
         limits:
           cpu: "800m"
-          memory: 512Mi
+          memory: 1536Mi
     - name: writer-mxl-4
       groupHint: mxl-multiviewer-4
       flowId: d4d00000-0000-0000-0000-000000000004
@@ -201,10 +204,10 @@ writers:
       resources:
         requests:
           cpu: 250m
-          memory: 256Mi
+          memory: 768Mi
         limits:
           cpu: "800m"
-          memory: 512Mi
+          memory: 1536Mi
   audio:
     enabled: true
     name: audio-testsrc
@@ -299,8 +302,8 @@ ancTestSource:
   # a0d2 = ancillary demo 1, next to the audio source's a0d1.
   flowId: a0d20000-0000-0000-0000-000000000001
   grainRate:
-    numerator: 30000
-    denominator: 1001
+    numerator: 50
+    denominator: 1
   ancLine: 9
   parameters: {}
 
@@ -418,16 +421,16 @@ testSources:
       # sierpinski animates indefinitely at a constant cost. Measured on sc:
       # a steady 1.82 cores for the full paced pipeline, freezedetect clean
       # over 300s of content, and the ingest at late=0 dup=0 resync=0.
-      pattern: "sierpinski=size=1296x720:rate=30"
+      pattern: "sierpinski=size=1920x1080:rate=50"
       # This source regenerates every pixel of every frame, where smptebars
       # repeats a static one, so it costs several times the default envelope
       # and states its own.
       #
-      # Measured on sc for the whole paced pipeline -- generation, both drawtext
-      # overlays, x264 veryfast and the AES-encrypted SRT send: a steady 1.82
-      # cores, flat over three and a half minutes. Measuring the encode alone
-      # to /dev/null reads 1.14 and would size this at close to half what it
-      # needs; the SRT and encryption path is the rest.
+      # Measured on sc at 1296x720 30/1 for the whole paced pipeline --
+      # generation, both drawtext overlays, x264 veryfast and the AES-encrypted
+      # SRT send: a steady 1.82 cores, flat over three and a half minutes.
+      # Measuring the encode alone to /dev/null reads 1.14 and would size this
+      # at close to half what it needs; the SRT and encryption path is the rest.
       #
       # The limit clears that peak by a wide margin because CFS accounts per
       # 100ms period and x264 bursts inside one even while the ten-second
@@ -444,7 +447,7 @@ testSources:
       claim: srt-ingest-3
       port: 9002
       label: ZUSPIELER 3
-      pattern: "smptebars=size=1296x720:rate=30"
+      pattern: "smptebars=size=1920x1080:rate=50"
   # Envelope for a source that does not state its own. Sized for a static
   # pattern: smptebars measured 0.61 cores for the full paced pipeline on sc.
   #

@@ -16,7 +16,10 @@ const LIMITS: GeneratorsResponse = {
     { width: 1296, height: 720 },
     { width: 1920, height: 1080 },
   ],
-  grainRates: [{ numerator: 30000, denominator: 1001 }],
+  grainRates: [
+    { numerator: 30000, denominator: 1001 },
+    { numerator: 50, denominator: 1 },
+  ],
   sampleRates: [48000],
   generators: [],
 };
@@ -92,9 +95,9 @@ describe('GeneratorForm', () => {
         id: VIDEO_ID,
         pattern: 'smpte',
         overlayText: '',
-        frameWidth: 1296,
-        frameHeight: 720,
-        grainRate: { numerator: 30000, denominator: 1001 },
+        frameWidth: 1920,
+        frameHeight: 1080,
+        grainRate: { numerator: 50, denominator: 1 },
       },
       audio: { enabled: false, id: AUDIO_ID, sampleRate: 48000, channelCount: 2 },
     });
