@@ -220,8 +220,8 @@ export class GeneratorForm {
   protected readonly label = signal('');
   protected readonly pattern = signal('smpte');
   protected readonly overlayText = signal('');
-  protected readonly frameSize = signal('1296x720');
-  protected readonly grainRate = signal('30000/1001');
+  protected readonly frameSize = signal('1920x1080');
+  protected readonly grainRate = signal('50/1');
   protected readonly videoOn = signal(true);
   protected readonly audioOn = signal(false);
   protected readonly sampleRate = signal(48000);

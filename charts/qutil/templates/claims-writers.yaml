@@ -4,10 +4,9 @@
        volume holding the MXL runtime root, node tolerations -- comes from the
        MediaFunctionClass and is deliberately absent here.
 
-       Geometry is stated per claim rather than inherited from the class:
-       animated videotestsrc patterns stall the test source at v210 1080p, and
-       one of these runs `ball`. It also has to match what the compositor tiles
-       and what the multiviewer expects. */ -}}
+       Geometry is stated per claim rather than inherited from the class: it
+       has to match what the compositor tiles and what the multiviewer
+       expects. */ -}}
 {{- $root := . }}
 {{- range .Values.writers.video }}
 ---
@@ -36,11 +35,6 @@ spec:
         grain_rate:
           numerator: {{ $root.Values.writers.grainRate.numerator }}
           denominator: {{ $root.Values.writers.grainRate.denominator }}
-    # Blend the overlay directly on 10-bit packed v210 instead of the I420
-    # fast path, so the tiles show what a v210 overlay costs.
-    extraEnv:
-      - name: MXL_OVERLAY_FORMAT
-        value: v210
     # The class sizes every writer alike, for 1080p50. What a writer costs is
     # mostly its pattern, so each states its own.
     resources:

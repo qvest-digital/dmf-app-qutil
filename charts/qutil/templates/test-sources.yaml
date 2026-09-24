@@ -73,7 +73,7 @@ spec:
                   -f lavfi -i "$PATTERN" \
                   -vf "drawtext=fontfile=$FONT:text='$LABEL':fontcolor=white:fontsize=64:box=1:boxcolor=black@0.6:boxborderw=16:x=(w-text_w)/2:y=60,drawtext=fontfile=$FONT:text='%{localtime\:%T}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=12:x=(w-text_w)/2:y=h-130" \
                   -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p \
-                  -b:v 3000k -g 30 \
+                  -b:v 8000k -g 50 \
                   -mode caller -pbkeylen 16 -passphrase "$SRT_PASSPHRASE" \
                   -f mpegts "srt://$TARGET" || true
                 echo "feed to $TARGET ended, reconnecting in 5s"

@@ -62,10 +62,10 @@ N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 # so, rather than deriving numbers that look live but never move.
 #
 # These constants are the fallback for when the compositor is unreachable or
-# does not carry a flow: a Ready mirror transfers every 720p v210 grain at the
+# does not carry a flow: a Ready mirror transfers every 1080p50 v210 grain at the
 # grain rate, so the shape is right even though the value cannot change.
-GRAIN_RATE = 30000.0 / 1001.0   # 29.97 fps
-GRAIN_BYTES = 2488320           # 720p v210 (1296 px wide -> 3456 B/row * 720)
+GRAIN_RATE = 50.0
+GRAIN_BYTES = 5529600           # 1080p v210 (1920 px wide -> 5120 B/row * 1080)
 # Resolved from the compositor claim like every other booked address; see
 # _resolve_base. An explicit value still wins, for a port-forwarded dev loop.
 COMPOSITOR = os.environ.get("COMPOSITOR_STATS")
