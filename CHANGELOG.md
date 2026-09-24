@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.47](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.46...v1.0.0-rc.47) (2026-09-24)
+
+
+### Features
+
+* **chart:** run the demo sources at 1080p50 ([#187](https://github.com/qvest-digital/dmf-app-qutil/issues/187)) ([fed9339](https://github.com/qvest-digital/dmf-app-qutil/commit/fed93397482767d51341e4d3702db2c97e5c167b))
+
 ## [1.0.0-rc.46](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.45...v1.0.0-rc.46) (2026-09-23)
 
 
