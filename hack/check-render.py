@@ -62,6 +62,14 @@ CASES = {
     # Off by default for the same reason as the ANC path. On, it is one more
     # claim and nothing else: the reader takes its flow per request.
     "grain-reader": {"grainReader": {"enabled": True}},
+    # On, the chart grows the same claim-writing Role the generators need.
+    "bookings": {"bookings": {"enabled": True}},
+    # The Role and GEN_MANAGER come from either page, so the case where only
+    # bookings are on has to render them too.
+    "bookings-only": {
+        "bookings": {"enabled": True},
+        "generators": {"enabled": False},
+    },
 }
 
 

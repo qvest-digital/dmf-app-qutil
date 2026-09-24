@@ -284,6 +284,23 @@ generators:
 # cluster turns it on once its catalog pin carries mxl-anc-reader. Until then a
 # data preview says no reader is booked, which is what it did before this
 # existed.
+# Booking any class the catalog carries, from the Bookings tab. The generators
+# block above books one class through a form that knows its parameters; this
+# books whatever a cluster registered, with the parameters typed in as YAML, so
+# nothing here validates them and a mistyped key reaches the provisioner as
+# typed. Off by default: an install whose page is reachable by people who should
+# not book media functions leaves it off.
+bookings:
+  enabled: false
+  jobRef: qutil/bookings
+  # Every claim the page books starts with this, and it refuses to delete one
+  # that does not. The claims this chart renders cannot match it, and neither can
+  # a generator: the two carry different component labels.
+  namePrefix: booked-
+  # A ceiling on what one form can allocate. A booked function is a pod with
+  # whatever the class reserves, which is RAM on a node.
+  maxCount: 8
+
 ancReader:
   enabled: false
   claimName: anc-reader

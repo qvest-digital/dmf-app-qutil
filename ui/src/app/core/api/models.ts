@@ -339,6 +339,32 @@ export interface Generator {
 }
 
 /** The page's whole state: what is booked, and what the server will accept. */
+/**
+ * One claim the Bookings page created. Unlike a generator this carries no shape
+ * of its own: the class decides what the parameters meant, and the page only
+ * ever reads back what the claim reports.
+ */
+export interface Booking {
+  name: string;
+  className?: string | null;
+  created?: string | null;
+  /** Planned | Pending | Bound | Expired | Released | Failed. */
+  phase?: string | null;
+  ready?: boolean | null;
+  /** Published by the claim once bound. A writer publishes none. */
+  endpoints?: { name: string; url: string }[];
+  /** Any *_output.id the parameters carried, so a booked flow can be spotted. */
+  flowIds?: string[];
+}
+
+export interface BookingsResponse {
+  namespace: string;
+  enabled: boolean;
+  max: number;
+  bookings: Booking[];
+  error?: string | null;
+}
+
 export interface GeneratorsResponse {
   namespace: string;
   className: string;
