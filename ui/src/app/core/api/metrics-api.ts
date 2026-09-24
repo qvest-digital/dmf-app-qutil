@@ -4,6 +4,8 @@ import { Observable } from 'rxjs';
 import {
   AncGrain,
   AudioSnapshot,
+  Booking,
+  BookingsResponse,
   FlowIds,
   FlowsResponse,
   Generator,
@@ -12,9 +14,9 @@ import {
   GrainMeta,
   GrainRing,
   OperatorFlowsResponse,
-  RingCapture,
   PreviewSession,
   PreviewStatus,
+  RingCapture,
   ServicesResponse,
 } from './models';
 
@@ -71,6 +73,21 @@ export class MetricsApi {
    * pattern, frame size, grain rate and expiry lists come from there so the form
    * cannot offer a value the aggregator would refuse.
    */
+  /** The claims the Bookings page created, and what the server will accept. */
+  bookings(): Observable<BookingsResponse> {
+    return this.http.get<BookingsResponse>('/api/bookings');
+  }
+
+  /** Book any class. The response is the created claim, so the list does not
+   *  have to wait for the next poll to show it. */
+  createBooking(request: { className: string; label: string; parameters: unknown }) {
+    return this.http.post<Booking>('/api/bookings', request);
+  }
+
+  deleteBooking(name: string) {
+    return this.http.delete(`/api/bookings/${encodeURIComponent(name)}`);
+  }
+
   generators(): Observable<GeneratorsResponse> {
     return this.http.get<GeneratorsResponse>('/api/generators');
   }

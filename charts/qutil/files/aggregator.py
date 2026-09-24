@@ -25,6 +25,9 @@
 #   GET    /api/generators/flow-ids-> two unused MXL flow ids
 #   POST   /api/generators         -> book a writer claim
 #   DELETE /api/generators/<name>  -> release one
+#   GET    /api/bookings           -> the claims the booking page created
+#   POST   /api/bookings           -> book any class, parameters as sent
+#   DELETE /api/bookings/<name>    -> release one
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
@@ -949,6 +952,22 @@ except ValueError:
 _GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
 _GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
 _GEN_COMPONENT = "generator"
+
+# Booking any class the catalog carries. The generator form books one class with
+# a form that knows its parameters; this books whatever the cluster registered,
+# so the parameters arrive as the caller typed them and nothing here understands
+# them. The guards that do not depend on understanding them still apply: its own
+# name prefix and component label, a ceiling, and the flow-id check.
+BOOKING_ENABLED = os.environ.get("BOOKING_ENABLED", "") == "true"
+BOOKING_PREFIX = os.environ.get("BOOKING_PREFIX", "booked-")
+BOOKING_JOB_REF = os.environ.get("BOOKING_JOB_REF", "qutil/bookings")
+BOOKING_MAX = int(os.environ.get("BOOKING_MAX") or "8")
+# A component of its own: a booking and a generator must never be in reach of
+# each other's delete, and the label is what decides that.
+_BOOKING_COMPONENT = "booking"
+# A class name is a Kubernetes object name and nothing else is accepted, so a
+# typed value cannot become a path segment or a selector fragment.
+_BOOKING_CLASS_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _GEN_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _GEN_MAX_BODY = 8192
 # videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
@@ -1879,6 +1898,164 @@ def generators():
             "generators": rows or [], "error": err}
 
 
+def _booking_name(label, class_name):
+    """booked-<slug>-<4 hex>, on the same shape as a generator's name: the prefix
+    is half the delete guard and the suffix makes a second booking of one label a
+    separate claim."""
+    stem = _gen_slug(label) or _gen_slug(class_name) or "function"
+    return f"{BOOKING_PREFIX}{stem}-{secrets.token_hex(2)}"
+
+
+def _booking_claim(name, class_name, params):
+    """The claim to POST. spec.parameters is whatever the caller sent: the CRD
+    preserves unknown fields and no class publishes a schema to check them
+    against, so a mistyped key reaches the provisioner exactly as typed."""
+    return {
+        "apiVersion": "dmf.qvest-digital.com/v1alpha1",
+        "kind": "MediaFunctionClaim",
+        "metadata": {
+            "name": name,
+            "namespace": CLAIM_NS,
+            "labels": {_GEN_LABEL_MANAGED: GEN_MANAGER,
+                       _GEN_LABEL_COMPONENT: _BOOKING_COMPONENT},
+        },
+        "spec": {
+            "className": class_name,
+            "booking": {"jobRef": BOOKING_JOB_REF},
+            "parameters": params,
+        },
+    }
+
+
+def _is_booking(claim):
+    labels = (claim.get("metadata", {}) or {}).get("labels") or {}
+    return (labels.get(_GEN_LABEL_MANAGED) == GEN_MANAGER
+            and labels.get(_GEN_LABEL_COMPONENT) == _BOOKING_COMPONENT)
+
+
+def _booking_row(claim):
+    meta = claim.get("metadata", {}) or {}
+    spec = claim.get("spec", {}) or {}
+    status = claim.get("status", {}) or {}
+    handle = status.get("handle") or {}
+    return {
+        "name": meta.get("name"),
+        "className": spec.get("className"),
+        "created": meta.get("creationTimestamp"),
+        "phase": status.get("phase") or "",
+        "ready": bool(handle.get("name")),
+        "endpoints": [{"name": e.get("name"), "url": e.get("url")}
+                      for e in (handle.get("endpoints") or [])],
+        "flowIds": _claim_flow_ids(claim),
+    }
+
+
+def _booking_list():
+    """Only what this page booked, by label selector, so a chart-rendered claim is
+    never in this process's hands."""
+    selector = urllib.parse.quote(
+        f"{_GEN_LABEL_MANAGED}={GEN_MANAGER},{_GEN_LABEL_COMPONENT}={_BOOKING_COMPONENT}",
+        safe="=,")
+    res = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims"
+                   f"?labelSelector={selector}")
+    if "_error" in res:
+        return None, res["_error"]
+    rows = [_booking_row(c) for c in res.get("items", []) or []]
+    rows.sort(key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
+    return rows, None
+
+
+def _validate_booking(req):
+    class_name = (req.get("className") or "").strip()
+    if not class_name:
+        return "a class name is required"
+    if len(class_name) > 253 or not _BOOKING_CLASS_RE.match(class_name):
+        return "that is not a usable class name"
+    params = req.get("parameters")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return "parameters must be a mapping"
+    return None
+
+
+def bookings():
+    rows, err = _booking_list() if BOOKING_ENABLED else ([], None)
+    return {"namespace": CLAIM_NS, "enabled": BOOKING_ENABLED, "max": BOOKING_MAX,
+            "bookings": rows or [], "error": err}
+
+
+def booking_create(req):
+    if not BOOKING_ENABLED:
+        return 403, {"error": "booking is disabled on this install"}
+    bad = _validate_booking(req)
+    if bad:
+        return 400, {"error": bad}
+
+    rows, err = _booking_list()
+    if err:
+        return 503, {"error": f"cannot list bookings in {CLAIM_NS}: {err}"}
+    if len(rows) >= BOOKING_MAX:
+        return 409, {"error": f"at most {BOOKING_MAX} bookings at once; delete one first"}
+
+    params = req.get("parameters") or {}
+    # Fail closed on a flow id already being written, the one mistake here that
+    # destroys somebody else's grains. The walk finds any *_output.id, so it
+    # holds for a class this app has never heard of.
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
+    for flow_id in _claim_flow_ids({"spec": {"parameters": params}}):
+        if flow_id in used:
+            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
+
+    class_name = req["className"].strip()
+    for attempt in (1, 2):
+        name = _booking_name(req.get("label") or "", class_name)
+        if not _GEN_NAME_RE.match(name) or len(name) > 63:
+            return 400, {"error": "that label does not make a usable claim name"}
+        code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
+                             "POST", _booking_claim(name, class_name, params))
+        if code in (200, 201):
+            snapshot_drop("bookings")
+            return 201, _booking_row(res)
+        if res.get("reason") != "AlreadyExists" or attempt == 2:
+            if code == 403:
+                return 403, {"error": f"not allowed to create claims in {CLAIM_NS}"}
+            return code, {"error": res.get("error") or "claim create failed"}
+    return 409, {"error": "could not find a free claim name"}
+
+
+def booking_delete(name):
+    if not BOOKING_ENABLED:
+        return 403, {"error": "booking is disabled on this install"}
+    if not name or not _GEN_NAME_RE.match(name) or not name.startswith(BOOKING_PREFIX):
+        return 400, {"error": "not a booking name"}
+
+    # Read before deleting: a label selector bounds a list, it does not bound a
+    # delete by name.
+    claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}")
+    if "_error" in claim:
+        return 404, {"error": f"no booking named {name}"}
+    if not _is_booking(claim):
+        return 403, {"error": f"{name} was not booked from this page"}
+
+    code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}",
+                         "DELETE")
+    if code not in (200, 202):
+        return code, {"error": res.get("error") or "claim delete failed"}
+
+    # A mediamtx path pointing at a flow that is going away retries the open
+    # every 5s for as long as the server lives.
+    for flow_id in _claim_flow_ids(claim):
+        for path_name in _preview_paths_for(flow_id):
+            _preview_delete(path_name)
+            with _idle_lock:
+                _idle_since.pop(path_name, None)
+    snapshot_drop("bookings")
+    return 200, {"deleted": name}
+
+
 def generator_flow_ids():
     if not GEN_ENABLED:
         return 403, {"error": "generator booking is disabled on this install"}
@@ -2157,6 +2334,11 @@ class H(BaseHTTPRequestHandler):
                 self._send_body(200, snapshot("generators", generators))
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/bookings"):
+            try:
+                self._send_body(200, snapshot("bookings", bookings))
+            except Exception as e:
+                self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/grains/"):
             # What the ring holds for this flow: how many grains, and which
             # indices are still in it. The button row is built from this.
@@ -2260,6 +2442,14 @@ class H(BaseHTTPRequestHandler):
             uuid, owner, _, _ = self._preview_args()
             code, res = preview_del(uuid, owner)
             return self._send(code, res)
+        if self.path.startswith("/api/bookings/"):
+            name = urllib.parse.unquote(
+                urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+            try:
+                code, res = booking_delete(name)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
         if self.path.startswith("/api/generators/"):
             name = urllib.parse.unquote(
                 urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
@@ -2273,6 +2463,15 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/api/grains/"):
             return self._do_capture()
+        if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/bookings":
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+            try:
+                code, res = booking_create(body)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
         if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/generators":
             # Only the collection: a POST to a named generator is not an edit,
             # and a claim's parameters are consumed at provision time anyway.
