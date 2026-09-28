@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.48](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.47...v1.0.0-rc.48) (2026-09-28)
+
+
+### Features
+
+* **chart:** run a standing SRT listener for the Ross SSG ([#191](https://github.com/qvest-digital/dmf-app-qutil/issues/191)) ([b498df7](https://github.com/qvest-digital/dmf-app-qutil/commit/b498df78f7cf5fbd3f5d15d6e2a769a8c139b324))
+
 ## [1.0.0-rc.47](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.46...v1.0.0-rc.47) (2026-09-24)
 
 
