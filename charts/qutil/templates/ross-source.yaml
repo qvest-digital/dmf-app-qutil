@@ -1,0 +1,89 @@
+{{- if .Values.rossSource.enabled }}
+{{- /* A standing SRT source for the Ross SSG. The SSG only dials (its chart
+       rejects srt.mode listener), so this one listens, where the test sources
+       above call a booked ingest. The DataMiner resource points its srtUrl at
+       the Service name: a pod IP dies with the pod.
+
+       Three things the SSG needs, each of which otherwise leaves it at
+       "pipeline paused" with no error: H.264 with VUI timing (libx264, not
+       openh264, whose frame rate reads 0/1), video on PID 65 and audio on
+       PID 66 (ffmpeg defaults to 256/257), and an audio track at all.
+
+       No passphrase: the SSG chart carries none. The Service is ClusterIP
+       only, so the stream never leaves the cluster.
+
+       ffmpeg serves one caller and exits when it hangs up; the loop listens
+       again. */ -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ross-source
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ross-source
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "qutil.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ross-source
+  template:
+    metadata:
+      labels:
+        {{- include "qutil.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ross-source
+    spec:
+      containers:
+        - name: ffmpeg
+          image: {{ .Values.testSources.image }}
+          env:
+            - name: LABEL
+              value: {{ .Values.rossSource.label | quote }}
+            - name: PATTERN
+              value: {{ .Values.rossSource.pattern | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+              while true; do
+                ffmpeg -hide_banner -loglevel warning -re \
+                  -f lavfi -i "$PATTERN" \
+                  -f lavfi -i "sine=frequency=1000:sample_rate=48000" \
+                  -vf "drawtext=fontfile=$FONT:text='$LABEL':fontcolor=white:fontsize=64:box=1:boxcolor=black@0.6:boxborderw=16:x=(w-text_w)/2:y=60,drawtext=fontfile=$FONT:text='%{localtime\:%T}':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:boxborderw=12:x=(w-text_w)/2:y=h-130" \
+                  -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p \
+                  -b:v 8000k -g 50 -bf 0 \
+                  -c:a aac -b:a 128k -ar 48000 \
+                  -streamid 0:65 -streamid 1:66 \
+                  -f mpegts "srt://0.0.0.0:{{ .Values.rossSource.port }}?mode=listener" || true
+                echo "caller left, listening again in 2s"
+                sleep 2
+              done
+          ports:
+            - name: srt
+              containerPort: {{ .Values.rossSource.port }}
+              protocol: UDP
+          resources:
+            {{- toYaml .Values.rossSource.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ross-source
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ross-source
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "qutil.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ross-source
+  ports:
+    - name: srt
+      port: {{ .Values.rossSource.port }}
+      targetPort: srt
+      protocol: UDP
+{{- end }}

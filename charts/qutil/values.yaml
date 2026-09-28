@@ -486,3 +486,22 @@ testSources:
     limits:
       cpu: "1500m"
       memory: 512Mi
+
+# A standing SRT listener for the Ross SSG, which only dials. Off by default:
+# only a cluster that books the SSG against it turns it on, and its DataMiner
+# resource then dials ross-source.<release namespace>:<port>. The image is
+# testSources.image.
+rossSource:
+  enabled: false
+  port: 9000
+  label: ROSS QUELLE
+  # Static, so its cost stays flat: smptebars measured 0.61 cores for the
+  # paced test-source pipeline on sc.
+  pattern: "smptebars=size=1920x1080:rate=50"
+  resources:
+    requests:
+      cpu: 750m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 512Mi
