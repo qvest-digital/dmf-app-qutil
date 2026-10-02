@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.49](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.48...v1.0.0-rc.49) (2026-10-02)
+
+
+### Bug Fixes
+
+* **chart:** give the second test source the CPU it now draws ([#194](https://github.com/qvest-digital/dmf-app-qutil/issues/194)) ([def84a2](https://github.com/qvest-digital/dmf-app-qutil/commit/def84a26d7186de8b0a04757bbde6aa6eeec042c))
+
 ## [1.0.0-rc.48](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.47...v1.0.0-rc.48) (2026-09-28)
 
 
