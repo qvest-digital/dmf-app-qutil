@@ -457,12 +457,17 @@ testSources:
       #
       # At 1920x1080 50/1 on AWS it draws a steady 3.7 cores and a limit of 4
       # throttles 4.3% of periods, so both move up by the same margin.
+      #
+      # It has since grown to 5.8 cores on AWS, and a limit of 6 throttled
+      # 10.2% of periods (78s over 2.4h): each throttled period is a stall at
+      # the source, seen on the ingest as late and duplicated grains. The
+      # limit takes the whole of a c5n.2xlarge, which is where it lands.
       resources:
         requests:
           cpu: "4"
           memory: 256Mi
         limits:
-          cpu: "6"
+          cpu: "8"
           memory: 512Mi
     - name: srt-test-source-3
       claim: srt-ingest-3
