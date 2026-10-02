@@ -1218,6 +1218,8 @@ _PREVIEW_PREFIX = "preview-"
 # established before any read succeeds. Ten seconds killed the source first, so
 # a preview of a flow originating on another node never started.
 SOURCE_START_TIMEOUT = "60s"
+# The frame rate a preview is encoded at, at most (mediamtx mxlH264MaxRate).
+PREVIEW_MAX_RATE = 25
 
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
@@ -1415,11 +1417,14 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # turns CABAC and the deblocking filter off: the stream comes out
         # Constrained Baseline whatever mxlH264Profile asks for, and the
         # average QP goes from 28 to 37 at the same bitrate.
+        # 25 fps whatever the flow's rate: previews share one media server,
+        # and at the 50 fps house format their encodes filled its node and
+        # made every preview drop frames. The flow keeps its own rate.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1464,7 +1469,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
