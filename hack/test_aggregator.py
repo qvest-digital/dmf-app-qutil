@@ -146,6 +146,15 @@ class PreviewPathConfig(unittest.TestCase):
         self.assertEqual(conf["mxlH264Profile"], "high")
         self.assertEqual(conf["mxlH264Bitrate"], 5000000)
 
+    def test_caps_the_preview_at_twenty_five_frames_a_second(self):
+        """Previews share one media server; at 50 fps they filled its node.
+
+        The cap is a preview's, not the flow's: the flow keeps its own rate.
+        """
+        agg.preview_add(self.uuid)
+        conf = self.mtx.added()
+        self.assertEqual(conf["mxlH264MaxRate"], 25)
+
     def test_creates_the_path_on_demand(self):
         """An encode with no reader on it is an encode nobody asked for.
 
