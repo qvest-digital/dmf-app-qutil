@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.50](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.49...v1.0.0-rc.50) (2026-10-02)
+
+
+### Bug Fixes
+
+* **aggregator:** encode previews at 25 frames a second ([#196](https://github.com/qvest-digital/dmf-app-qutil/issues/196)) ([b5a6190](https://github.com/qvest-digital/dmf-app-qutil/commit/b5a61904e01b832acd80a7b943423322bb6e3643))
+
 ## [1.0.0-rc.49](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.48...v1.0.0-rc.49) (2026-10-02)
 
 
