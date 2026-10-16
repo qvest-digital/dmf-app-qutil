@@ -187,7 +187,14 @@ main {
   .mv-main {
     min-height: 0;
   }
-  .mv-main .panel,
+  .mv-main .panel {
+    min-height: 0;
+  }
+  .mv-main .panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: scroll;
+  }
   .mv-main .previews {
     min-height: 0;
     overflow-y: auto;
@@ -203,6 +210,19 @@ main {
   flex-direction: column;
   gap: 16px;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 5%);
+}
+.mv-main .panel {
+  padding: 8px 6px 8px 0;
+  overflow: hidden;
+}
+.mv-main .panel-scroll {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 16px;
+  padding: 12px 13px 12px 20px;
+  scrollbar-color: rgb(255 255 255 / 80%) transparent;
+  scrollbar-width: thin;
 }
 .panel h2 {
   font-size: 15px;
