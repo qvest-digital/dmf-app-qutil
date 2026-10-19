@@ -1,7 +1,7 @@
 <main class="gen-main">
   <aside class="panel">
     @if (enabled()) {
-      <mv-generator-form [limits]="limits()" [full]="full()" (created)="onCreated($event)" />
+      <mv-generator-form [limits]="limits()" (created)="onCreated($event)" />
     } @else {
       <div class="gwbar">
         <h2>Book a generator</h2>

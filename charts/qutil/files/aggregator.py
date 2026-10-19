@@ -23,7 +23,7 @@
 #                                    addresses they publish, external where any
 #   GET    /api/generators         -> the writer claims the UI booked
 #   GET    /api/generators/flow-ids-> two unused MXL flow ids
-#   POST   /api/generators         -> book a writer claim
+#   POST   /api/generators         -> book one or more writer claims
 #   DELETE /api/generators/<name>  -> release one
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
@@ -62,10 +62,10 @@ N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 # so, rather than deriving numbers that look live but never move.
 #
 # These constants are the fallback for when the compositor is unreachable or
-# does not carry a flow: a Ready mirror transfers every 720p v210 grain at the
+# does not carry a flow: a Ready mirror transfers every 1080p50 v210 grain at the
 # grain rate, so the shape is right even though the value cannot change.
-GRAIN_RATE = 30000.0 / 1001.0   # 29.97 fps
-GRAIN_BYTES = 2488320           # 720p v210 (1296 px wide -> 3456 B/row * 720)
+GRAIN_RATE = 50.0
+GRAIN_BYTES = 5529600           # 1080p v210 (1920 px wide -> 5120 B/row * 1080)
 # Resolved from the compositor claim like every other booked address; see
 # _resolve_base. An explicit value still wins, for a port-forwarded dev loop.
 COMPOSITOR = os.environ.get("COMPOSITOR_STATS")
@@ -877,6 +877,10 @@ MEDIAMTX_API = os.environ.get("MEDIAMTX_API")
 # Reader for ANC data flows. An override for the port-forwarded dev loop; an
 # install resolves the booked claim instead.
 ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
+# Reader for addressed grains. Same shape as the ANC reader and for the same
+# reason: reading a grain out of the ring needs libmxl and the node's domain,
+# which is a media function's job rather than this process's.
+GRAIN_READER_API = os.environ.get("GRAIN_READER_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
 
 # Where the claims live, and what they are called. The names come from chart
@@ -894,6 +898,8 @@ MCM_CLAIM = os.environ.get("MCM_CLAIM", "")
 MEDIAMTX_CLASS = os.environ.get("MEDIAMTX_CLASS", "mediamtx")
 COMPOSITOR_CLASS = os.environ.get("COMPOSITOR_CLASS", "compositor")
 ANC_READER_CLASS = os.environ.get("ANC_READER_CLASS", "mxl-anc-reader")
+GRAIN_READER_CLAIM = os.environ.get("GRAIN_READER_CLAIM", "")
+GRAIN_READER_CLASS = os.environ.get("GRAIN_READER_CLASS", "mxl-grain-reader")
 
 # A claim's address only changes when it is re-provisioned, so re-reading it per
 # request would spend an API call on an answer that is almost always the same.
@@ -934,7 +940,6 @@ GEN_JOB_REF = os.environ.get("GEN_JOB_REF", "qutil/generators")
 # prefix, and delete refuses anything missing either.
 GEN_PREFIX = os.environ.get("GEN_PREFIX", "generator-")
 GEN_MANAGER = os.environ.get("GEN_MANAGER", "qutil-aggregator")
-GEN_MAX = int(os.environ.get("GEN_MAX") or "8")
 try:
     GEN_RESOURCES = json.loads(os.environ.get("GEN_RESOURCES") or "{}")
 except ValueError:
@@ -961,6 +966,13 @@ _GEN_FRAME_SIZES = ((640, 360), (1296, 720), (1920, 1080))
 _GEN_GRAIN_RATES = ((30000, 1001), (25, 1), (50, 1), (60000, 1001))
 _GEN_SAMPLE_RATES = (44100, 48000, 96000)
 _GEN_MAX_CHANNELS = 16
+# Copies per submission. Each one is a claim POST inside a single request, so
+# the bound keeps a mistyped count from booking writers by the hundred.
+_GEN_MAX_COPIES = 16
+# A node name is a DNS-1123 subdomain. It lands in a node affinity term rather
+# than a shell, so the pattern is about refusing a name no node can carry.
+_GEN_NODE_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+_GEN_MAX_NODE = 253
 _GEN_MAX_OVERLAY = 32
 # How long a booking may last. Nothing else prunes a claim created at runtime:
 # helm prunes what its release owns and Flux what its source declares, so a
@@ -1141,6 +1153,43 @@ def _anc_preview(path, method="GET"):
     return _http_json(base, path, method)
 
 
+def _grain_reader(path, method="GET"):
+    """The grain reader, which serves one addressed grain of a flow.
+
+    Resolved from its claim like the other readers are. "grains" is the
+    endpoint name the class publishes: one reader answers for every flow on the
+    node, so it is named for what it serves rather than for being an API.
+    """
+    base = _resolve_base(GRAIN_READER_API, "grain-reader", GRAIN_READER_CLAIM,
+                         GRAIN_READER_CLASS, "grains")
+    if not base:
+        return 503, {"error": "no ready grain reader claim in " + CLAIM_NS}
+    return _http_json(base, path, method)
+
+
+def _grain_payload(uuid, index):
+    """The grain's bytes, passed through rather than parsed.
+
+    A payload is megabytes of v210 and the browser is what unpacks it, so this
+    is the one path here that does not go through _http_json: decoding it to
+    JSON would cost a copy and a base64 expansion to hand back what arrived.
+    """
+    base = _resolve_base(GRAIN_READER_API, "grain-reader", GRAIN_READER_CLAIM,
+                         GRAIN_READER_CLASS, "grains")
+    if not base:
+        return 503, b"", {}
+    url = f"{base}/grain.raw?flow={uuid}&index={index}"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            headers = {k: v for k, v in r.headers.items()
+                       if k.lower().startswith("x-grain-")}
+            return r.status, r.read(), headers
+    except urllib.error.HTTPError as e:
+        return e.code, b"", {}
+    except Exception:
+        return 502, b"", {}
+
+
 def _known_flow(uuid):
     for fl in safe_k8s(
             "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []):
@@ -1175,6 +1224,8 @@ _PREVIEW_PREFIX = "preview-"
 # established before any read succeeds. Ten seconds killed the source first, so
 # a preview of a flow originating on another node never started.
 SOURCE_START_TIMEOUT = "60s"
+# The frame rate a preview is encoded at, at most (mediamtx mxlH264MaxRate).
+PREVIEW_MAX_RATE = 25
 
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
@@ -1372,11 +1423,14 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # turns CABAC and the deblocking filter off: the stream comes out
         # Constrained Baseline whatever mxlH264Profile asks for, and the
         # average QP goes from 28 to 37 at the same bitrate.
+        # 25 fps whatever the flow's rate: previews share one media server,
+        # and at the 50 fps house format their encodes filled its node and
+        # made every preview drop frames. The flow keeps its own rate.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1421,7 +1475,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1646,6 +1700,18 @@ def _validate_generator(req):
     if req.get("ttl", "1h") not in _GEN_TTLS:
         return "expiry must be one of " + ", ".join(_GEN_TTLS)
 
+    count = _gen_int(req, "count", 1)
+    if count is None or not 1 <= count <= _GEN_MAX_COPIES:
+        return f"count must be between 1 and {_GEN_MAX_COPIES}"
+
+    node = req.get("node")
+    if node is None:
+        node = ""
+    if not isinstance(node, str) or (node.strip() and (
+            len(node.strip()) > _GEN_MAX_NODE or not _GEN_NODE_RE.match(node.strip()))):
+        return ("node must be a Kubernetes node name: lowercase letters, digits, "
+                "'-' and '.', at most 253 characters")
+
     for on, block, what in ((video_on, video, "video"), (audio_on, audio, "audio")):
         if not on:
             continue
@@ -1730,6 +1796,13 @@ def _gen_claim(name, req):
     # test pattern at these sizes needs.
     if GEN_RESOURCES:
         parameters["resources"] = GEN_RESOURCES
+    # Affinity on metadata.name rather than a nodeSelector: it matches the node
+    # name itself, not a hostname label that may differ from it.
+    node = (req.get("node") or "").strip()
+    if node:
+        parameters["affinity"] = {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [{"matchFields": [
+                {"key": "metadata.name", "operator": "In", "values": [node]}]}]}}}
 
     spec = {
         "className": GEN_CLASS,
@@ -1769,11 +1842,24 @@ def _is_generator(claim):
             and labels.get(_GEN_LABEL_COMPONENT) == _GEN_COMPONENT)
 
 
+def _gen_node(parameters):
+    """The node _gen_claim pinned the writer to, or None."""
+    terms = ((((parameters.get("affinity") or {}).get("nodeAffinity") or {})
+              .get("requiredDuringSchedulingIgnoredDuringExecution") or {})
+             .get("nodeSelectorTerms") or [])
+    for term in terms:
+        for field in term.get("matchFields") or []:
+            if field.get("key") == "metadata.name" and field.get("values"):
+                return field["values"][0]
+    return None
+
+
 def _gen_row(claim):
     meta = claim.get("metadata", {}) or {}
     status = claim.get("status", {}) or {}
     handle = status.get("handle") or {}
-    flow = ((claim.get("spec") or {}).get("parameters") or {}).get("flow") or {}
+    parameters = (claim.get("spec") or {}).get("parameters") or {}
+    flow = parameters.get("flow") or {}
     video = flow.get("video_output") or {}
     audio = flow.get("audio_output") or {}
     reachable = _cond(claim, "Reachable")
@@ -1798,6 +1884,7 @@ def _gen_row(claim):
         "created": meta.get("creationTimestamp"),
         "ageSeconds": _age_secs(meta.get("creationTimestamp")),
         "groupHint": flow.get("group_hint"),
+        "node": _gen_node(parameters),
         "video": {"id": video.get("id"), "pattern": video.get("flow_pattern"),
                   "overlayText": video.get("overlay_text"),
                   "frameWidth": video.get("frame_width"),
@@ -1828,7 +1915,7 @@ def _gen_list():
 def generators():
     rows, err = _gen_list() if GEN_ENABLED else ([], None)
     return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
-            "max": GEN_MAX, "ttls": [t for t in _GEN_TTLS],
+            "maxCopies": _GEN_MAX_COPIES, "ttls": [t for t in _GEN_TTLS],
             "patterns": list(_GEN_PATTERNS), "animated": list(_GEN_ANIMATED),
             "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
             "grainRates": [{"numerator": n, "denominator": d} for n, d in _GEN_GRAIN_RATES],
@@ -1846,31 +1933,9 @@ def generator_flow_ids():
     return 200, {"videoFlowId": video_id, "audioFlowId": audio_id}
 
 
-def generator_create(req):
-    if not GEN_ENABLED:
-        return 403, {"error": "generator booking is disabled on this install"}
-    bad = _validate_generator(req)
-    if bad:
-        return 400, {"error": bad}
-
-    rows, err = _gen_list()
-    if err:
-        return 503, {"error": f"cannot list generators in {CLAIM_NS}: {err}"}
-    if len(rows) >= GEN_MAX:
-        return 409, {"error": f"at most {GEN_MAX} generators at once; delete one first"}
-
-    # Fail closed: booking a writer whose id might already be written is the one
-    # mistake here that destroys somebody else's grains.
-    used, err = _flow_ids_in_use()
-    if err:
-        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
-    for block in (req.get("video") or {}, req.get("audio") or {}):
-        if not block.get("enabled"):
-            continue
-        flow_id = (block.get("id") or "").lower()
-        if flow_id in used:
-            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
-
+def _gen_book(req):
+    """POST one claim for req. (code, row) on success, (code, {"error": ...})
+    otherwise."""
     label = req.get("label") or ""
     pattern = (req.get("video") or {}).get("pattern") or ""
     for attempt in (1, 2):
@@ -1880,7 +1945,6 @@ def generator_create(req):
         code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                              "POST", _gen_claim(name, req))
         if code in (200, 201):
-            snapshot_drop("generators")
             return 201, _gen_row(res)
         # A fresh suffix is the whole fix for a name that is taken; anything else
         # is the operator's to see.
@@ -1889,6 +1953,55 @@ def generator_create(req):
                 return 403, {"error": f"not allowed to create claims in {CLAIM_NS}"}
             return code, {"error": res.get("error") or "claim create failed"}
     return 409, {"error": "could not find a free claim name"}
+
+
+def generator_create(req):
+    """Book req["count"] writers. The first carries the ids the operator
+    submitted; every further copy gets ids minted here, since two writers on one
+    flow delete each other's grains.
+
+    201 with {"generators": [...], "error": ...} once at least one claim exists:
+    a copy that fails after others were booked must not hide the ones that run.
+    """
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    bad = _validate_generator(req)
+    if bad:
+        return 400, {"error": bad}
+
+    # Fail closed: booking a writer whose id might already be written is the one
+    # mistake here that destroys somebody else's grains.
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
+    video = req.get("video") or {}
+    audio = req.get("audio") or {}
+    for block in (video, audio):
+        if not block.get("enabled"):
+            continue
+        flow_id = (block.get("id") or "").lower()
+        if flow_id in used:
+            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
+
+    rows = []
+    for copy in range(_gen_int(req, "count", 1)):
+        if copy:
+            video_id, audio_id = _gen_new_ids(used)
+            req = dict(req, video=dict(video, id=video_id), audio=dict(audio, id=audio_id))
+        for block in (req.get("video") or {}, req.get("audio") or {}):
+            if block.get("enabled"):
+                used[(block.get("id") or "").lower()] = "this booking"
+        code, res = _gen_book(req)
+        if code != 201:
+            if not rows:
+                return code, res
+            snapshot_drop("generators")
+            return 201, {"generators": rows,
+                         "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}: "
+                                  f"{res['error']}"}
+        rows.append(res)
+    snapshot_drop("generators")
+    return 201, {"generators": rows, "error": None}
 
 
 def generator_delete(name):
@@ -2012,6 +2125,30 @@ class H(BaseHTTPRequestHandler):
             # than serving the request had.
             pass
 
+    def _send_raw(self, code, body, content_type, headers=None):
+        """A body that is not JSON. Only the grain payload takes this path."""
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _grain_args(self):
+        """(uuid, index, rest) from /api/grain/<uuid>/<index>[/<rest>]."""
+        parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
+        # api, grain, <uuid>, <index>[, rest]
+        uuid = parts[2] if len(parts) > 2 else ""
+        index = parts[3] if len(parts) > 3 else ""
+        rest = parts[4] if len(parts) > 4 else ""
+        return uuid, index, rest
+
     def _preview_args(self):
         """(uuid, owner, channels, audio) from
         /api/preview/<uuid>[?owner=<token>][&channels=<l>[,<r>]][&audio=<uuid>].
@@ -2090,6 +2227,54 @@ class H(BaseHTTPRequestHandler):
                 self._send_body(200, snapshot("generators", generators))
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/grains/"):
+            # What the ring holds for this flow: how many grains, and which
+            # indices are still in it. The button row is built from this.
+            uuid = urllib.parse.unquote(
+                urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+            if not _UUID_RE.match(uuid):
+                return self._send(400, {"error": "not a flow id"})
+            try:
+                code, res = _grain_reader(f"/flow?flow={uuid}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
+        elif self.path.startswith("/api/grain/"):
+            uuid, index, rest = self._grain_args()
+            if not _UUID_RE.match(uuid) or not index.isdigit():
+                return self._send(400, {"error": "need /api/grain/<flow>/<index>"})
+            if rest == "raw":
+                # The payload itself, passed through. Megabytes of v210 that
+                # the browser unpacks, so it is neither parsed nor re-encoded.
+                try:
+                    code, body, headers = _grain_payload(uuid, index)
+                except Exception as e:
+                    return self._send(500, {"error": str(e)})
+                if code != 200:
+                    return self._send(code, {"error": "grain not in the ring"})
+                return self._send_raw(code, body, "application/octet-stream",
+                                      headers)
+            try:
+                code, res = _grain_reader(f"/grain?flow={uuid}&index={index}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
+        elif self.path.startswith("/api/samples/"):
+            # An audio flow has no grains: the ring is samples, so a snapshot
+            # is a window of them, summarised per channel.
+            parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
+            uuid = parts[2] if len(parts) > 2 else ""
+            index = parts[3] if len(parts) > 3 else ""
+            count = parts[4] if len(parts) > 4 else ""
+            if not _UUID_RE.match(uuid) or not index.isdigit() or not count.isdigit():
+                return self._send(
+                    400, {"error": "need /api/samples/<flow>/<index>/<count>"})
+            try:
+                code, res = _grain_reader(
+                    f"/samples?flow={uuid}&index={index}&count={count}")
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            self._send(code, res)
         elif self.path.startswith("/api/anc/"):
             # The latest decoded ANC grain of a data flow. Polled, because a
             # data preview is a look at what a grain currently carries rather
@@ -2122,6 +2307,24 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def _do_capture(self):
+        """Copy the flow's whole ring and hold it.
+
+        The ring is a transport buffer: five grains of video and 405 ms of
+        audio on the domain this was built against. An index is overwritten
+        long before a person clicks the button naming it, so the row is drawn
+        from a copy taken when it opened rather than from the live ring.
+        """
+        uuid = urllib.parse.unquote(
+            urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+        if not _UUID_RE.match(uuid):
+            return self._send(400, {"error": "not a flow id"})
+        try:
+            code, res = _grain_reader(f"/capture?flow={uuid}", method="POST")
+        except Exception as e:
+            code, res = 500, {"error": str(e)}
+        self._send(code, res)
+
     def do_DELETE(self):
         if self.path.startswith("/api/preview/"):
             uuid, owner, _, _ = self._preview_args()
@@ -2138,6 +2341,8 @@ class H(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path.startswith("/api/grains/"):
+            return self._do_capture()
         if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/generators":
             # Only the collection: a POST to a named generator is not an edit,
             # and a claim's parameters are consumed at provision time anyway.

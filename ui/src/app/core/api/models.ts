@@ -281,6 +281,10 @@ export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
   ttl: string;
+  /** Writers to book. Copies after the first get flow ids minted by the server. */
+  count: number;
+  /** Node name to pin every copy to. Empty leaves placement to the scheduler. */
+  node: string;
   video: {
     enabled: boolean;
     id: string;
@@ -334,6 +338,8 @@ export interface Generator {
   created?: string | null;
   ageSeconds?: number | null;
   groupHint?: string | null;
+  /** The node the booking pinned the writer to, or null when it pinned none. */
+  node?: string | null;
   video?: GeneratorVideo | null;
   audio?: GeneratorAudio | null;
 }
@@ -343,7 +349,8 @@ export interface GeneratorsResponse {
   namespace: string;
   className: string;
   enabled: boolean;
-  max: number;
+  /** Most copies one submission may book. */
+  maxCopies: number;
   ttls: string[];
   patterns: string[];
   /** Patterns that stall the test source above 1296x720. */
@@ -351,6 +358,15 @@ export interface GeneratorsResponse {
   frameSizes: { width: number; height: number }[];
   grainRates: { numerator: number; denominator: number }[];
   sampleRates: number[];
+  generators: Generator[];
+  error?: string | null;
+}
+
+/**
+ * What one submission booked. `error` is set when a later copy failed after
+ * earlier ones were created: those run, so they are returned all the same.
+ */
+export interface GeneratorBatch {
   generators: Generator[];
   error?: string | null;
 }
@@ -385,4 +401,88 @@ export interface BookedService {
 
 export interface ServicesResponse {
   services: BookedService[];
+}
+
+// ── GET /api/grains, /api/grain, /api/samples ───────────────────────────────
+//
+// What the ring actually holds, as opposed to what the media server makes of
+// it. Served by the grain reader: a media function, because reading a grain
+// needs libmxl and the node's MXL domain.
+
+/** One window of an audio ring. Audio is continuous, so a snapshot is a span
+ *  of samples rather than a grain. */
+export interface SampleWindow {
+  index: number;
+  count: number;
+}
+
+/** The ring behind one flow: how many entries it holds and which are still in
+ *  it. A discrete flow reports grainCount, a continuous one reports windows. */
+export interface GrainRing {
+  flow: string;
+  format: string;
+  grainRate: { num: number; den: number };
+  /** Discrete flows only. The number of buttons. */
+  grainCount?: number;
+  /** Newest committed index, and the oldest the ring still holds. */
+  headIndex: number;
+  firstIndex: number;
+  width?: number;
+  height?: number;
+  mediaType?: string;
+  /** Continuous flows only. */
+  channelCount?: number;
+  bufferLength?: number;
+  sampleRate?: number;
+  windows?: SampleWindow[];
+  error?: string | null;
+}
+
+/** One addressed grain, without its payload. */
+export interface GrainMeta {
+  flow: string;
+  index: number;
+  flags: number;
+  grainSize: number;
+  totalSlices: number;
+  validSlices: number;
+  complete: boolean;
+  /** The writer committed this grain but marked its payload untrustworthy. */
+  invalid: boolean;
+  bytes: number;
+  width?: number;
+  height?: number;
+  mediaType?: string;
+  /** v210 pads each row to 128 bytes, so this is not width * 8 / 3. */
+  stride?: number;
+  error?: string | null;
+}
+
+/** One channel of an audio window: what a meter needs, plus points to draw. */
+export interface ChannelStats {
+  channel: number;
+  peak: number;
+  rms: number;
+  min: number;
+  /** Decimated for drawing, not the whole window. */
+  samples: number[];
+}
+
+/** A copy of the whole ring, taken at one moment. What the button row browses. */
+export interface RingCapture {
+  taken: string;
+  flow: string;
+  info: GrainRing;
+  /** Discrete flows only; audio carries its windows on info instead. */
+  grains?: GrainMeta[];
+  error?: string | null;
+}
+
+export interface AudioSnapshot {
+  flow: string;
+  index: number;
+  count: number;
+  sampleRate: number;
+  channels: ChannelStats[];
+  error?: string | null;
 }

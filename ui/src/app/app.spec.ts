@@ -22,7 +22,12 @@ describe('App', () => {
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
 
-    expect(el.querySelector('.brand .sub')?.textContent).toContain('Qutil - the DMF/MXL Utility');
+    // The product name is carried by its own mark now, so the subtitle is the
+    // tagline alone and the name is asserted where it actually renders.
+    expect(el.querySelector('.qutil-logo b')?.textContent).toBe('QUTIL');
+    expect(el.querySelector('.qutil-logo svg')).toBeTruthy();
+    expect(el.querySelector('.brand .sub')?.textContent).toContain('the DMF/MXL utility');
+    // The corporate wordmark stays beside it.
     expect(el.querySelector('.logo svg')).toBeTruthy();
     expect(el.querySelector('.pill b')?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
@@ -32,7 +37,7 @@ describe('App', () => {
     await fixture.whenStable();
     const tabs = [...fixture.nativeElement.querySelectorAll('.tab')] as HTMLAnchorElement[];
 
-    expect(tabs.map((t) => t.textContent!.trim())).toEqual(['Multiviewer', 'Generators']);
+    expect(tabs.map((t) => t.textContent!.trim())).toEqual(['Diagnostics', 'Generators']);
     expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen']);
   });
 });

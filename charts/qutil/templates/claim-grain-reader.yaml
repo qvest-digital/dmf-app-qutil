@@ -1,0 +1,32 @@
+{{- if .Values.grainReader.enabled }}
+{{- /* The reader behind the ring snapshot on a flow's detail. What a player
+       shows is what the media server re-encoded; what the ring holds is what
+       the writer committed, and only this hands those entries over.
+
+       Booked rather than deployed, like every other function here: the image,
+       the MXL runtime volume, the intent shim and the node tolerations belong
+       to the MediaFunctionClass and are deliberately absent from the claim.
+
+       No parameters, for the reason the ANC reader has none. The flow arrives
+       per request over the API rather than at provision time, so one booking
+       serves every flow the page lists; naming one here would put this back to
+       a booking per flow, and a bound claim does not read its parameters
+       again anyway. */ -}}
+apiVersion: dmf.qvest-digital.com/v1alpha1
+kind: MediaFunctionClaim
+metadata:
+  name: {{ .Values.grainReader.claimName }}
+  namespace: {{ include "qutil.productionNamespace" . }}
+  labels:
+    {{- include "qutil.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.grainReader.className }}
+  lifecycle:
+    reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
+  booking:
+    jobRef: {{ .Values.booking.jobRef | quote }}
+  {{- with .Values.grainReader.parameters }}
+  parameters:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

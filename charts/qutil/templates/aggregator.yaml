@@ -225,6 +225,10 @@ spec:
               value: {{ .Values.ancReader.claimName }}
             - name: ANC_READER_CLASS
               value: {{ .Values.ancReader.className }}
+            - name: GRAIN_READER_CLAIM
+              value: {{ .Values.grainReader.claimName }}
+            - name: GRAIN_READER_CLASS
+              value: {{ .Values.grainReader.className }}
             {{- with .Values.aggregator.ancPreviewApi }}
             # An address instead of the claim above, for a port-forwarded dev
             # loop. An install leaves it unset and resolves the booking.
@@ -247,8 +251,6 @@ spec:
             # separates one from the claims this chart renders.
             - name: GEN_MANAGER
               value: {{ include "qutil.fullname" . }}-aggregator
-            - name: GEN_MAX
-              value: {{ .Values.generators.maxCount | quote }}
             # Stamped onto every page-booked claim: the class envelope is sized
             # for 1080p50, and an animated pattern needs a limit a still one
             # does not. See the generators.resources comment in values.yaml.

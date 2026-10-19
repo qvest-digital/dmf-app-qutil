@@ -12,13 +12,13 @@ import { Routes } from '@angular/router';
 export const routes: Routes = [
   {
     path: '',
-    title: 'Multiviewer - MXL RDMA',
+    title: 'Qutil - Diagnostics',
     loadComponent: () =>
       import('./features/multiviewer/multiviewer-page').then((m) => m.MultiviewerPage),
   },
   {
     path: 'gen',
-    title: 'Generators - MXL RDMA',
+    title: 'Qutil - Generators',
     loadComponent: () =>
       import('./features/generators/generators-page').then((m) => m.GeneratorsPage),
   },
