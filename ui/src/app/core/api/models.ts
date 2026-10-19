@@ -281,6 +281,10 @@ export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
   ttl: string;
+  /** Writers to book. Copies after the first get flow ids minted by the server. */
+  count: number;
+  /** Node name to pin every copy to. Empty leaves placement to the scheduler. */
+  node: string;
   video: {
     enabled: boolean;
     id: string;
@@ -334,6 +338,8 @@ export interface Generator {
   created?: string | null;
   ageSeconds?: number | null;
   groupHint?: string | null;
+  /** The node the booking pinned the writer to, or null when it pinned none. */
+  node?: string | null;
   video?: GeneratorVideo | null;
   audio?: GeneratorAudio | null;
 }
@@ -343,7 +349,8 @@ export interface GeneratorsResponse {
   namespace: string;
   className: string;
   enabled: boolean;
-  max: number;
+  /** Most copies one submission may book. */
+  maxCopies: number;
   ttls: string[];
   patterns: string[];
   /** Patterns that stall the test source above 1296x720. */
@@ -351,6 +358,15 @@ export interface GeneratorsResponse {
   frameSizes: { width: number; height: number }[];
   grainRates: { numerator: number; denominator: number }[];
   sampleRates: number[];
+  generators: Generator[];
+  error?: string | null;
+}
+
+/**
+ * What one submission booked. `error` is set when a later copy failed after
+ * earlier ones were created: those run, so they are returned all the same.
+ */
+export interface GeneratorBatch {
   generators: Generator[];
   error?: string | null;
 }

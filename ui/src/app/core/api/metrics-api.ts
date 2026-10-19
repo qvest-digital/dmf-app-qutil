@@ -6,7 +6,7 @@ import {
   AudioSnapshot,
   FlowIds,
   FlowsResponse,
-  Generator,
+  GeneratorBatch,
   GeneratorRequest,
   GeneratorsResponse,
   GrainMeta,
@@ -84,10 +84,10 @@ export class MetricsApi {
     return this.http.get<FlowIds>('/api/generators/flow-ids');
   }
 
-  /** Book a writer. The response is the created generator, so the list does not
-   *  have to wait for the next poll. */
-  createGenerator(request: GeneratorRequest): Observable<Generator> {
-    return this.http.post<Generator>('/api/generators', request);
+  /** Book one or more writers. The response carries the created generators, so
+   *  the list does not have to wait for the next poll. */
+  createGenerator(request: GeneratorRequest): Observable<GeneratorBatch> {
+    return this.http.post<GeneratorBatch>('/api/generators', request);
   }
 
   /** Release one. The aggregator refuses any name it did not book. */

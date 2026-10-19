@@ -50,6 +50,9 @@ import { generatorState } from './generator-state';
         @if (generator().audio; as audio) {
           · {{ audio.id }}
         }
+        @if (generator().node; as node) {
+          · <span class="loc">on {{ node }}</span>
+        }
         @if (expiry()) {
           · <span class="loc">{{ expiry() }}</span>
         }

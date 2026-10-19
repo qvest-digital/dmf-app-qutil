@@ -250,9 +250,6 @@ generators:
   # Every claim the page books starts with this, and it refuses to delete one
   # that does not. The claims this chart renders cannot match it.
   namePrefix: generator-
-  # A ceiling on what one form can allocate: each generator is a writer pod with
-  # a grain ring in the node's MXL domain, which is RAM.
-  maxCount: 8
   # Stamped onto every page-booked claim, because the class envelope is sized for
   # 1080p50 and would reserve several times what a test pattern needs.
   #

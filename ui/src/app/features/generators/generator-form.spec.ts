@@ -8,7 +8,7 @@ const LIMITS: GeneratorsResponse = {
   namespace: 'production-demo-app',
   className: 'mxl-writer',
   enabled: true,
-  max: 8,
+  maxCopies: 16,
   ttls: ['1h', '8h', '24h', 'none'],
   patterns: ['smpte', 'ball', 'gamut'],
   animated: ['ball'],
@@ -49,7 +49,7 @@ describe('GeneratorForm', () => {
 
   function bookButton(): HTMLButtonElement {
     return [...fixture.nativeElement.querySelectorAll('button')].find((b) =>
-      (b as HTMLButtonElement).textContent?.includes('Book generator'),
+      /^\s*Book (\d+ )?generators?\s*$/.test((b as HTMLButtonElement).textContent ?? ''),
     ) as HTMLButtonElement;
   }
 
@@ -90,6 +90,8 @@ describe('GeneratorForm', () => {
     expect(req.request.body).toEqual({
       label: 'Bars 1',
       ttl: '1h',
+      count: 1,
+      node: '',
       video: {
         enabled: true,
         id: VIDEO_ID,
@@ -101,16 +103,57 @@ describe('GeneratorForm', () => {
       },
       audio: { enabled: false, id: AUDIO_ID, sampleRate: 48000, channelCount: 2 },
     });
-    req.flush({ name: 'generator-bars-1-7f3a' });
+    req.flush({ generators: [{ name: 'generator-bars-1-7f3a' }], error: null });
+  });
+
+  it('posts the copy count and the node name, trimmed', () => {
+    flushIds();
+    type(field('gen-count'), '3');
+    type(field('gen-node'), ' worker-3 ');
+    expect(bookButton().textContent).toContain('Book 3 generators');
+    bookButton().click();
+
+    const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/generators');
+    expect(req.request.body.count).toBe(3);
+    expect(req.request.body.node).toBe('worker-3');
+    req.flush({ generators: [], error: null });
+  });
+
+  it('emits every copy and says why a batch stopped short', () => {
+    flushIds();
+    const created: string[] = [];
+    fixture.componentInstance.created.subscribe((list) => created.push(...list.map((g) => g.name)));
+    type(field('gen-count'), '3');
+
+    bookButton().click();
+    http
+      .expectOne((r) => r.method === 'POST')
+      .flush(
+        {
+          generators: [{ name: 'generator-x-0001' }, { name: 'generator-x-0002' }],
+          error: 'booked 2 of 3: claim create failed',
+        },
+        { status: 201, statusText: 'Created' },
+      );
+    fixture.detectChanges();
+    // The re-roll after a booking edits the ids, which must not wipe the notice.
+    http.expectOne('/api/generators/flow-ids').flush({
+      videoFlowId: 'aaaaaaaa-1111-4222-8333-444455556666',
+      audioFlowId: 'bbbbbbbb-2222-4333-8444-555566667777',
+    });
+    fixture.detectChanges();
+
+    expect(created).toEqual(['generator-x-0001', 'generator-x-0002']);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('booked 2 of 3');
   });
 
   it('emits the created generator and re-rolls the ids', () => {
     flushIds();
     const created: string[] = [];
-    fixture.componentInstance.created.subscribe((g) => created.push(g.name));
+    fixture.componentInstance.created.subscribe((list) => created.push(...list.map((g) => g.name)));
 
     bookButton().click();
-    http.expectOne('/api/generators').flush({ name: 'generator-x-0001' });
+    http.expectOne('/api/generators').flush({ generators: [{ name: 'generator-x-0001' }] });
     fixture.detectChanges();
 
     expect(created).toEqual(['generator-x-0001']);
