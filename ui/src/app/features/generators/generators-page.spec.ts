@@ -28,7 +28,7 @@ function response(over: Partial<GeneratorsResponse> = {}): GeneratorsResponse {
     namespace: 'production-demo-app',
     className: 'mxl-writer',
     enabled: true,
-    max: 8,
+    maxCopies: 16,
     ttls: ['1h', 'none'],
     patterns: ['smpte'],
     animated: [],
@@ -160,6 +160,11 @@ describe('GeneratorsPage', () => {
     await load(response({ generators: [generator({ deleting: true })] }));
     expect(text()).toContain('deleting');
     expect((rows()[0].querySelector('.btn.kill') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('names the node a generator was pinned to', async () => {
+    await load(response({ generators: [generator({ node: 'worker-3' })] }));
+    expect(text()).toContain('on worker-3');
   });
 
   it('offers no form where booking is switched off', async () => {

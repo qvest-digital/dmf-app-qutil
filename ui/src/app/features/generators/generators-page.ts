@@ -44,11 +44,6 @@ export class GeneratorsPage {
     this.generators().length ? `(${this.generators().length})` : '',
   );
 
-  protected readonly full = computed(() => {
-    const max = this.data()?.max ?? 0;
-    return max > 0 && this.generators().length >= max;
-  });
-
   private readonly fresh = signal<Generator[]>([]);
   private readonly deleting = signal<string[]>([]);
   protected readonly deleteError = signal('');
@@ -57,8 +52,8 @@ export class GeneratorsPage {
     return this.deleting().includes(name);
   }
 
-  protected onCreated(generator: Generator): void {
-    this.fresh.update((list) => [generator, ...list]);
+  protected onCreated(generators: Generator[]): void {
+    this.fresh.update((list) => [...generators, ...list]);
   }
 
   protected remove(name: string): void {

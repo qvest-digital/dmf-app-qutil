@@ -671,6 +671,165 @@ class GeneratorDeletePreviewPaths(unittest.TestCase):
         self.assertEqual(res["deleted"], self.NAME)
 
 
+class GeneratorBooking(unittest.TestCase):
+    """Copies and node pinning on the booking path.
+
+    Every copy is a writer on the shared MXL domain, and the writer chart clears
+    its flow id's grains with a root `rm -rf` glob on start, so two copies on one
+    id delete each other's grains. Only the first copy may carry the submitted
+    ids.
+    """
+
+    VIDEO = "3f2c8a1e-1111-4222-8333-444455556666"
+    AUDIO = "9b1d0000-2222-4333-8444-555566667777"
+
+    def _req(self, **over):
+        req = {
+            "label": "Bars", "ttl": "1h", "count": 1, "node": "",
+            "video": {"enabled": True, "id": self.VIDEO, "pattern": "smpte",
+                      "overlayText": "", "frameWidth": 1296, "frameHeight": 720,
+                      "grainRate": {"numerator": 30000, "denominator": 1001}},
+            "audio": {"enabled": True, "id": self.AUDIO, "sampleRate": 48000,
+                      "channelCount": 2},
+        }
+        req.update(over)
+        return req
+
+    def setUp(self):
+        self.posted = []
+        self.fail_at = None
+
+        def k8s_json(path, method="GET", body=None):
+            self.posted.append(body)
+            if self.fail_at is not None and len(self.posted) == self.fail_at:
+                return 500, {"error": "apiserver said no"}
+            return 201, body
+
+        def no_list(*a, **k):
+            raise AssertionError("booking must not list generators: there is no cap")
+
+        patches = [
+            mock.patch.object(agg, "GEN_ENABLED", True),
+            mock.patch.object(agg, "_flow_ids_in_use", lambda: ({}, None)),
+            mock.patch.object(agg, "k8s_json", k8s_json),
+            mock.patch.object(agg, "_gen_list", no_list),
+            mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _ids(self, body):
+        flow = body["spec"]["parameters"]["flow"]
+        return flow["video_output"]["id"], flow["audio_output"]["id"]
+
+    def test_books_one_claim_per_copy(self):
+        code, res = agg.generator_create(self._req(count=3))
+        self.assertEqual(code, 201)
+        self.assertEqual(len(self.posted), 3)
+        self.assertEqual(len(res["generators"]), 3)
+        self.assertIsNone(res["error"])
+
+    def test_only_the_first_copy_carries_the_submitted_ids(self):
+        agg.generator_create(self._req(count=3))
+        ids = [self._ids(b) for b in self.posted]
+        self.assertEqual(ids[0], (self.VIDEO, self.AUDIO))
+        every = [i for pair in ids for i in pair]
+        self.assertEqual(len(set(every)), 6)
+
+    def test_each_copy_mints_around_every_id_booked_before_it(self):
+        minted = [["11111111-1111-4111-8111-111111111111",
+                   "22222222-2222-4222-8222-222222222222"],
+                  ["33333333-3333-4333-8333-333333333333",
+                   "44444444-4444-4444-8444-444444444444"]]
+        seen = []
+
+        def new_ids(used):
+            seen.append(set(used))
+            return minted[len(seen) - 1]
+
+        with mock.patch.object(agg, "_gen_new_ids", new_ids):
+            agg.generator_create(self._req(count=3))
+        self.assertLessEqual({self.VIDEO, self.AUDIO}, seen[0])
+        # The second mint has to see the first mint's ids, or copies 2 and 3
+        # could land on one flow.
+        self.assertLessEqual({self.VIDEO, self.AUDIO, *minted[0]}, seen[1])
+        self.assertEqual([self._ids(b) for b in self.posted[1:]],
+                         [tuple(m) for m in minted])
+
+    def test_audio_only_copies_get_distinct_audio_ids_and_no_video(self):
+        req = self._req(count=3)
+        req["video"] = dict(req["video"], enabled=False)
+        agg.generator_create(req)
+        flows = [b["spec"]["parameters"]["flow"] for b in self.posted]
+        audio_ids = [f["audio_output"]["id"] for f in flows]
+        self.assertEqual(audio_ids[0], self.AUDIO)
+        self.assertEqual(len(set(audio_ids)), 3)
+        for f in flows:
+            self.assertEqual(f["video_output"], {"enabled": False})
+
+    def test_video_only_copies_carry_no_audio_output(self):
+        req = self._req(count=2)
+        req["audio"] = dict(req["audio"], enabled=False)
+        agg.generator_create(req)
+        for b in self.posted:
+            self.assertNotIn("audio_output", b["spec"]["parameters"]["flow"])
+
+    def test_a_later_failure_still_returns_what_was_booked(self):
+        self.fail_at = 3
+        code, res = agg.generator_create(self._req(count=4))
+        self.assertEqual(code, 201)
+        self.assertEqual(len(res["generators"]), 2)
+        self.assertIn("booked 2 of 4", res["error"])
+        self.assertEqual(len(self.posted), 3)
+
+    def test_a_first_failure_is_the_error(self):
+        self.fail_at = 1
+        code, res = agg.generator_create(self._req(count=2))
+        self.assertEqual(code, 500)
+        self.assertEqual(res["error"], "apiserver said no")
+
+    def test_refuses_a_count_outside_the_bound(self):
+        for count in (0, agg._GEN_MAX_COPIES + 1, True, "2"):
+            code, res = agg.generator_create(self._req(count=count))
+            self.assertEqual(code, 400, count)
+            self.assertIn("count must be between 1 and", res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_pins_the_writer_to_the_named_node(self):
+        agg.generator_create(self._req(node=" worker-3 "))
+        affinity = self.posted[0]["spec"]["parameters"]["affinity"]
+        term = affinity["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"][0]
+        self.assertEqual(term["matchFields"],
+                         [{"key": "metadata.name", "operator": "In", "values": ["worker-3"]}])
+        # By name, not by a hostname label that need not match it.
+        self.assertNotIn("nodeSelector", self.posted[0]["spec"]["parameters"])
+
+    def test_leaves_placement_alone_without_a_node(self):
+        agg.generator_create(self._req())
+        self.assertNotIn("affinity", self.posted[0]["spec"]["parameters"])
+
+    def test_the_row_reports_the_pinned_node(self):
+        _, res = agg.generator_create(self._req(node="worker-3"))
+        self.assertEqual(res["generators"][0]["node"], "worker-3")
+        _, res = agg.generator_create(self._req())
+        self.assertIsNone(res["generators"][0]["node"])
+
+    def test_refuses_a_name_no_node_can_carry(self):
+        for node in ("Worker_1", "-lead", "a" * 254, "x;rm -rf /", 5, 0, False, []):
+            code, res = agg.generator_create(self._req(node=node))
+            self.assertEqual(code, 400, node)
+            self.assertIn("node must be a Kubernetes node name", res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_the_listing_no_longer_reports_a_cap(self):
+        with mock.patch.object(agg, "_gen_list", lambda: ([], None)):
+            res = agg.generators()
+        self.assertNotIn("max", res)
+        self.assertEqual(res["maxCopies"], agg._GEN_MAX_COPIES)
+
+
 class AncReader(unittest.TestCase):
     """The ANC reader is a booked function, reached through its claim.
 
