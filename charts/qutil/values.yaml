@@ -255,7 +255,10 @@ generators:
   # that does not. The claims this chart renders cannot match it.
   namePrefix: generator-
   # Stamped onto every page-booked claim, because the class envelope is sized for
-  # 1080p50 and would reserve several times what a test pattern needs.
+  # 1080p50 and would reserve several times what a test pattern needs. Memory is
+  # the floor: a booking whose grain rings need more (UHD, or a high rate) gets
+  # its request raised to them and its limit to a quarter above, see
+  # historySeconds.
   #
   # Requests are the measured smpte figures from writers.video above, since most
   # bookings are still patterns and a request is what a node reserves. The limit
@@ -271,6 +274,11 @@ generators:
     limits:
       cpu: "2500m"
       memory: "1Gi"
+  # The history the node's MXL domain keeps, in seconds, which is the depth of
+  # every writer's grain ring and so most of its memory: a UHD grain is 21 MiB,
+  # and 2s of it at 60/1 is 2.5 GiB. Match the MxlDomain's historyDuration. 0
+  # means the domain sets none, where libmxl keeps 10 grains at any rate.
+  historySeconds: 2
 
 # The reader behind the data previews. Previewing SMPTE 291 means decoding
 # grains, which needs libmxl and the node's MXL domain, so it is a media

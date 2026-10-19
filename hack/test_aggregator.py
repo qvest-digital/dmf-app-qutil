@@ -1207,6 +1207,80 @@ class ReaderDelivering(unittest.TestCase):
             self.assertIsNone(agg._reader_delivering(self._claim(url=None)))
 
 
+class GeneratorRatesAndMemory(unittest.TestCase):
+    """UHD and rates up to 240/1, with memory sized from the grain ring.
+
+    A writer's ring is grain rate x domain history grains and is held in the
+    writer's own memory, so the fixed 1 GiB envelope OOM-kills a UHD or a
+    high-rate writer as soon as its ring fills.
+    """
+
+    BASE = {"requests": {"cpu": "700m", "memory": "256Mi"},
+            "limits": {"cpu": "2500m", "memory": "1Gi"}}
+
+    def _req(self, w, h, num, den, audio=False):
+        return {"label": "", "ttl": "1h", "count": 1, "node": "",
+                "video": {"enabled": True, "id": "3f2c8a1e-1111-4222-8333-444455556666",
+                          "pattern": "smpte", "overlayText": "", "frameWidth": w,
+                          "frameHeight": h, "grainRate": {"numerator": num, "denominator": den}},
+                "audio": {"enabled": audio, "id": "9b1d0000-2222-4333-8444-555566667777",
+                          "sampleRate": 48000, "channelCount": 16}}
+
+    def setUp(self):
+        for p in (mock.patch.object(agg, "GEN_RESOURCES", self.BASE),
+                  mock.patch.object(agg, "GEN_HISTORY_SECONDS", 2.0)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_accepts_uhd_and_the_new_rates(self):
+        for num in (30, 60, 120, 240):
+            self.assertIsNone(agg._validate_generator(self._req(3840, 2160, num, 1)), num)
+
+    def test_still_refuses_a_rate_off_the_list(self):
+        self.assertIn("grain rate must be one of",
+                      agg._validate_generator(self._req(1920, 1080, 100, 1)))
+
+    def test_a_small_booking_keeps_the_configured_envelope(self):
+        res = agg._gen_resources(self._req(1296, 720, 30000, 1001))
+        self.assertEqual(res, self.BASE)
+
+    def test_uhd_at_60_reserves_its_ring(self):
+        # 3840 / 48 * 128 bytes a row, 2160 rows, 120 grains in 2s, plus 64 MiB.
+        need = 10240 * 2160 * 120 + (64 << 20)
+        res = agg._gen_resources(self._req(3840, 2160, 60, 1))
+        self.assertGreaterEqual(agg._bytes(res["requests"]["memory"]), need)
+        self.assertGreaterEqual(agg._bytes(res["limits"]["memory"]), int(need * 1.25))
+        # CPU is left as configured: the ring decides memory, not cores.
+        self.assertEqual(res["requests"]["cpu"], "700m")
+
+    def test_the_configured_envelope_is_not_mutated(self):
+        agg._gen_resources(self._req(3840, 2160, 240, 1))
+        self.assertEqual(agg.GEN_RESOURCES["limits"]["memory"], "1Gi")
+
+    def test_a_domain_without_history_keeps_ten_grains_at_any_rate(self):
+        with mock.patch.object(agg, "GEN_HISTORY_SECONDS", 0.0):
+            fast = agg._gen_memory_bytes(self._req(3840, 2160, 240, 1))
+            slow = agg._gen_memory_bytes(self._req(3840, 2160, 30, 1))
+        self.assertEqual(fast, slow)
+        self.assertEqual(fast, 10240 * 2160 * 10 + (64 << 20))
+
+    def test_audio_adds_its_own_ring(self):
+        self.assertGreater(agg._gen_memory_bytes(self._req(1296, 720, 25, 1, audio=True)),
+                           agg._gen_memory_bytes(self._req(1296, 720, 25, 1)))
+
+    def test_the_claim_carries_the_sized_resources(self):
+        claim = agg._gen_claim("generator-x-0001", self._req(3840, 2160, 60, 1))
+        self.assertGreater(agg._bytes(claim["spec"]["parameters"]["resources"]["limits"]["memory"]),
+                           1 << 30)
+
+    def test_reads_the_quantities_a_values_file_writes(self):
+        self.assertEqual(agg._bytes("1Gi"), 1 << 30)
+        self.assertEqual(agg._bytes("256Mi"), 256 << 20)
+        self.assertEqual(agg._bytes("1.5Gi"), 3 << 29)
+        self.assertEqual(agg._bytes("500M"), 500 * 10 ** 6)
+        self.assertEqual(agg._bytes(None), 0)
+
+
 class AncReader(unittest.TestCase):
     """The ANC reader is a booked function, reached through its claim.
 

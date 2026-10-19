@@ -186,6 +186,29 @@ describe('GeneratorForm', () => {
     expect(field('gen-video-id').value).toBe('aaaaaaaa-1111-4222-8333-444455556666');
   });
 
+  it('warns beside a UHD or high-rate choice and names the memory it reserves', () => {
+    fixture.componentRef.setInput('limits', {
+      ...LIMITS,
+      historySeconds: 2,
+      frameSizes: [...LIMITS.frameSizes, { width: 3840, height: 2160 }],
+      grainRates: [...LIMITS.grainRates, { numerator: 60, denominator: 1 }],
+    });
+    flushIds();
+    const text = () => (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text()).not.toContain('may fall behind its rate');
+
+    const size = fixture.nativeElement.querySelector('#gen-size') as HTMLSelectElement;
+    size.value = '3840x2160';
+    size.dispatchEvent(new Event('change'));
+    const rate = fixture.nativeElement.querySelector('#gen-rate') as HTMLSelectElement;
+    rate.value = '60/1';
+    rate.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    // 10240 bytes a row x 2160 rows x 120 grains.
+    expect(text()).toContain('may fall behind its rate');
+    expect(text()).toContain('2.5 GiB');
+  });
+
   it('will not post while a rule fails, and says which', () => {
     flushIds();
     type(field('gen-video-id'), 'd4d00000-0000-0000-0000-0000000000');

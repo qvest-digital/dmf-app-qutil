@@ -419,6 +419,8 @@ export interface GeneratorsResponse {
   /** Most copies one submission may book, and most readers one request may. */
   maxCopies: number;
   readerClass?: string;
+  /** The domain history the server sizes a writer's memory by; 0 means 10 grains. */
+  historySeconds?: number;
   /** libmxl-fabrics providers a reader may ask for. */
   providers?: string[];
   ttls: string[];

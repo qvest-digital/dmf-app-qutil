@@ -258,6 +258,10 @@ spec:
             # does not. See the generators.resources comment in values.yaml.
             - name: GEN_RESOURCES
               value: {{ toJson .Values.generators.resources | quote }}
+            # Sizes each booking's memory from its grain ring. See the
+            # generators.historySeconds comment in values.yaml.
+            - name: GEN_HISTORY_SECONDS
+              value: {{ .Values.generators.historySeconds | quote }}
             {{- end }}
             {{- if .Values.bookings.enabled }}
             # The Bookings page books any class the catalog carries. Off means

@@ -952,6 +952,10 @@ try:
     GEN_RESOURCES = json.loads(os.environ.get("GEN_RESOURCES") or "{}")
 except ValueError:
     GEN_RESOURCES = {}
+# The history the node's MXL domain keeps, in seconds: a writer's grain ring is
+# grain rate x history grains, and that ring is the writer's memory. 0 means the
+# domain sets none, where libmxl keeps 10 grains whatever the rate.
+GEN_HISTORY_SECONDS = float(os.environ.get("GEN_HISTORY_SECONDS") or "2")
 
 _GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
 _GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
@@ -996,10 +1000,18 @@ _GEN_PATTERNS = ("smpte", "ball", "gamut", "checkers-8", "snow", "zone-plate")
 # operator's call. The page says so beside the pattern.
 _GEN_ANIMATED = ("ball", "snow", "zone-plate")
 # Fixed sets rather than free numbers: v210 packs two pixels per group, so an odd
-# width fails the function chart's own render, and a rate the source cannot hold
-# is a writer that never reaches its grain rate.
-_GEN_FRAME_SIZES = ((640, 360), (1296, 720), (1920, 1080))
-_GEN_GRAIN_RATES = ((30000, 1001), (25, 1), (50, 1), (60000, 1001))
+# width fails the function chart's own render, and every width here is a
+# multiple of 48, so a v210 row carries no padding, which the compositor's
+# videoconvert refuses. Above 1080p or 60 frames a second the test source is
+# likely to fall behind its rate on most nodes; that is reported beside the
+# choice rather than refused, as with an animated pattern.
+_GEN_FRAME_SIZES = ((640, 360), (1296, 720), (1920, 1080), (3840, 2160))
+_GEN_GRAIN_RATES = ((25, 1), (30000, 1001), (30, 1), (50, 1), (60000, 1001), (60, 1),
+                    (120, 1), (240, 1))
+# libmxl's ring depth in a domain that sets no history.
+_GEN_DEFAULT_RING_GRAINS = 10
+# Process and libraries beside the ring, rounded up from the measured ~35 MiB.
+_GEN_PROCESS_BYTES = 64 << 20
 _GEN_SAMPLE_RATES = (44100, 48000, 96000)
 _GEN_MAX_CHANNELS = 16
 # Copies per submission. Each one is a claim POST inside a single request, so
@@ -1841,6 +1853,58 @@ def _ttl_window(req):
     return {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
+_QUANTITY_UNITS = {"Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40,
+                   "k": 10 ** 3, "M": 10 ** 6, "G": 10 ** 9, "T": 10 ** 12}
+
+
+def _bytes(quantity):
+    """A Kubernetes memory quantity in bytes, or 0 for one this cannot read."""
+    text = str(quantity or "").strip()
+    for unit, factor in _QUANTITY_UNITS.items():
+        if text.endswith(unit) and text[:-len(unit)].replace(".", "", 1).isdigit():
+            return int(float(text[:-len(unit)]) * factor)
+    return int(float(text)) if text.replace(".", "", 1).isdigit() else 0
+
+
+def _ring_grains(rate_num, rate_den):
+    if GEN_HISTORY_SECONDS <= 0:
+        return _GEN_DEFAULT_RING_GRAINS
+    return -(-int(rate_num * GEN_HISTORY_SECONDS) // rate_den)
+
+
+def _gen_memory_bytes(req):
+    """What a writer of req holds: its grain rings plus the process.
+
+    A v210 row packs 48 pixels into 128 bytes. Audio is float32 per channel at
+    the sample rate, for the same history.
+    """
+    total = _GEN_PROCESS_BYTES
+    video = req.get("video") or {}
+    if video.get("enabled"):
+        rate = video.get("grainRate") or {}
+        grain = -(-video["frameWidth"] // 48) * 128 * video["frameHeight"]
+        total += grain * _ring_grains(rate["numerator"], rate["denominator"])
+    audio = req.get("audio") or {}
+    if audio.get("enabled"):
+        seconds = GEN_HISTORY_SECONDS if GEN_HISTORY_SECONDS > 0 else 1
+        total += int(audio["sampleRate"] * audio["channelCount"] * 4 * seconds)
+    return total
+
+
+def _gen_resources(req):
+    """generators.resources, with memory raised to what this booking's rings
+    need. The configured envelope fits a 1080p still pattern; a UHD or
+    high-rate writer under it would be OOM-killed the moment its ring fills."""
+    resources = json.loads(json.dumps(GEN_RESOURCES or {}))
+    need = _gen_memory_bytes(req)
+    for kind, factor in (("requests", 1.0), ("limits", 1.25)):
+        block = resources.setdefault(kind, {})
+        wanted = int(need * factor)
+        if _bytes(block.get("memory")) < wanted:
+            block["memory"] = f"{-(-wanted // (1 << 20))}Mi"
+    return resources
+
+
 def _gen_claim(name, req):
     """The claim to POST. Deliberately shaped like the blocks
     charts/qutil/templates/claims-writers.yaml renders, so the two can be read
@@ -1878,9 +1942,9 @@ def _gen_claim(name, req):
 
     parameters = {"flow": flow}
     # The class envelope is sized for 1080p50, which reserves several times what a
-    # test pattern at these sizes needs.
-    if GEN_RESOURCES:
-        parameters["resources"] = GEN_RESOURCES
+    # still pattern at the smaller sizes needs and too little for UHD or a high
+    # rate, so every booking carries resources sized for its own rings.
+    parameters["resources"] = _gen_resources(req)
     node = (req.get("node") or "").strip()
     if node:
         parameters["affinity"] = _node_affinity(node)
@@ -2105,6 +2169,7 @@ def generators():
     rows, standalone, orphans, err = _gen_list() if GEN_ENABLED else ([], [], [], None)
     return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
             "maxCopies": _GEN_MAX_COPIES, "ttls": [t for t in _GEN_TTLS],
+            "historySeconds": GEN_HISTORY_SECONDS,
             "readerClass": READER_CLASS, "providers": list(_READER_PROVIDERS),
             "patterns": list(_GEN_PATTERNS), "animated": list(_GEN_ANIMATED),
             "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
