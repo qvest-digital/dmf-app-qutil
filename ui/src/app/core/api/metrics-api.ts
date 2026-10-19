@@ -10,6 +10,7 @@ import {
   FlowsResponse,
   FlowReaderRequest,
   GeneratorBatch,
+  MonitorResponse,
   GeneratorRequest,
   ReaderBatch,
   ReaderRequest,
@@ -121,6 +122,11 @@ export class MetricsApi {
   /** Book readers of flows chosen by id. The aggregator refuses a flow it cannot find. */
   createFlowReaders(request: FlowReaderRequest): Observable<ReaderBatch> {
     return this.http.post<ReaderBatch>('/api/readers', request);
+  }
+
+  /** Every reader's own status, its node, and the replication behind its flows. */
+  monitor(): Observable<MonitorResponse> {
+    return this.http.get<MonitorResponse>('/api/monitor');
   }
 
   /** Release one reader. The aggregator refuses any claim that is not one it booked. */

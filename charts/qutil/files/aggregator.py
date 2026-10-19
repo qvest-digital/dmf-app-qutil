@@ -29,6 +29,8 @@
 #   POST   /api/generators/<name>/readers -> book readers of one generator
 #   POST   /api/readers            -> book readers of any flows by id
 #   DELETE /api/readers/<name>     -> release one reader
+#   GET    /api/monitor            -> every reader's status, its node, and the
+#                                    replication behind each flow it reads
 #   GET    /api/bookings           -> the claims the booking page created
 #   POST   /api/bookings           -> book any class, parameters as sent
 #   DELETE /api/bookings/<name>    -> release one
@@ -40,7 +42,7 @@
 # production namespace only. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 import uuid as uuid_mod
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1752,6 +1754,8 @@ def _validate_readers(req, allow_none=False):
         return "reader " + bad
     if req.get("provider", "auto") not in _READER_PROVIDERS:
         return "provider must be one of " + ", ".join(_READER_PROVIDERS)
+    if not isinstance(req.get("checkValues", False), bool):
+        return "checkValues must be true or false"
     return None
 
 
@@ -1992,11 +1996,14 @@ def _is_reader(claim):
             and labels.get(_GEN_LABEL_COMPONENT) == _READER_COMPONENT)
 
 
-def _reader_claim(name, flows, req, window=None, generator=None):
+def _reader_claim(name, flows, req, window=None, generator=None, expect=None):
     """A claim of READER_CLASS reading flows. A reader of a generator carries
-    its name and expires with it: a reader outliving its flows reads nothing."""
+    its name and expires with it: a reader outliving its flows reads nothing.
+    expect, keyed by flow id, is what the reader checks each flow against."""
     parameters = {"flows": flows,
                   "receiver": {"provider": req.get("provider", "auto")}}
+    if expect:
+        parameters["expect"] = expect
     node = (req.get("node") or "").strip()
     if node:
         parameters["affinity"] = _node_affinity(node)
@@ -2043,6 +2050,91 @@ def _reader_delivering(claim):
 
 # Readers answer in parallel: one slow pod must not hold the whole listing.
 _reader_probe_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="reader-probe")
+
+
+def _reader_status(claim):
+    """A reader's own account of its flows, from the status endpoint its claim
+    publishes: (status, error). The reader answers whatever its flows are
+    doing, so a reader that cannot be asked is an error of its own."""
+    handle = (claim.get("status") or {}).get("handle") or {}
+    url = next((ep.get("url") for ep in handle.get("endpoints") or [] if ep.get("name") == "status"), None)
+    if not handle.get("ready"):
+        return None, "not provisioned yet"
+    if not url:
+        return None, "the reader class publishes no status endpoint"
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            return json.loads(r.read().decode() or "{}"), None
+    except Exception as e:
+        return None, f"cannot ask the reader: {e}"
+
+
+# Its own pool, so a monitor rebuild never waits behind the generators
+# listing's delivery probes, and a deadline over the whole round, so a few
+# readers that do not answer cannot hold the page's poll for long.
+_monitor_pool = ThreadPoolExecutor(max_workers=32, thread_name_prefix="monitor")
+_MONITOR_DEADLINE = 2.0
+
+
+def _ask_readers(claims):
+    futures = [_monitor_pool.submit(_reader_status, c) for c in claims]
+    done, _ = wait(futures, timeout=_MONITOR_DEADLINE)
+    return [f.result() if f in done else (None, f"no answer within {_MONITOR_DEADLINE:g} s")
+            for f in futures]
+
+
+def monitor():
+    """Every reader claim in the production namespace, whoever booked it, with
+    what it reports per flow, the node its pod runs on, and for each flow it
+    reads where the flow originates and the mirrors that carry it."""
+    listing = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims")
+    if "_error" in listing:
+        return {"readers": [], "flows": {}, "error": f"cannot list claims in {CLAIM_NS}: {listing['_error']}"}
+    claims = [c for c in listing.get("items", []) or []
+              if (c.get("spec") or {}).get("className") == READER_CLASS]
+
+    pods = safe_k8s(f"/api/v1/namespaces/{CLAIM_NS}/pods").get("items", []) or []
+    by_instance = {}
+    for pod in pods:
+        instance = ((pod.get("metadata") or {}).get("labels") or {}).get("app.kubernetes.io/instance")
+        if instance:
+            statuses = (pod.get("status") or {}).get("containerStatuses") or []
+            by_instance.setdefault(instance, []).append({
+                "name": pod["metadata"]["name"],
+                "node": (pod.get("spec") or {}).get("nodeName"),
+                "phase": (pod.get("status") or {}).get("phase"),
+                "restarts": sum(c.get("restartCount", 0) for c in statuses),
+            })
+
+    readers = []
+    wanted = set()
+    for claim, (status, err) in zip(claims, _ask_readers(claims)):
+        row = _reader_row(claim)
+        row["pods"] = by_instance.get(row["name"], [])
+        row["status"] = status
+        row["statusError"] = err
+        readers.append(row)
+        wanted.update(row["flows"])
+    readers.sort(key=lambda r: (r["generator"] or "", r["name"] or ""))
+
+    flows = {}
+    if wanted:
+        leases = origin_leases()
+        mirrors = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", []) or []
+        for fl in safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []) or []:
+            d = (fl.get("spec") or {}).get("definition") or {}
+            uuid = (fl.get("metadata") or {}).get("name") or (fl.get("spec") or {}).get("id")
+            if uuid not in wanted:
+                continue
+            origin = origin_health(fl, leases)
+            flows[uuid] = {
+                "label": d.get("label") or uuid,
+                "mediaType": d.get("media_type"),
+                "originNode": origin.get("originNode"),
+                "originFresh": origin.get("originFresh"),
+                "mirrors": flow_detail(fl, d, uuid, [], mirrors)["mirrors"],
+            }
+    return {"readerClass": READER_CLASS, "readers": readers, "flows": flows, "error": None}
 
 
 def _reader_row(claim):
@@ -2369,14 +2461,44 @@ def _gen_book(req):
     return 409, {"error": "could not find a free claim name"}
 
 
+def _generator_expectations(generator, check_legal):
+    """What a reader of a generator's flows should find, from the parameters
+    the generator was booked with: the writer declares v210 video and float32
+    audio of the geometry, rate and channels it was asked for."""
+    flow = (((generator.get("spec") or {}).get("parameters") or {}).get("flow")) or {}
+    def known(fields):
+        # A field the claim leaves to the chart's default is not known here,
+        # so it is not checked rather than checked against nothing.
+        return {k: v for k, v in fields.items() if v is not None}
+
+    out = {}
+    video = flow.get("video_output") or {}
+    if video.get("enabled") and video.get("id"):
+        rate = video.get("grain_rate") or {}
+        num, den = rate.get("numerator"), rate.get("denominator")
+        out[video["id"].lower()] = known({
+            "mediaType": "video/v210", "width": video.get("frame_width"),
+            "height": video.get("frame_height"),
+            "rate": f"{num}/{den}" if num and den else None,
+            "checkLegal": check_legal})
+    audio = flow.get("audio_output") or {}
+    if audio.get("enabled") and audio.get("id"):
+        out[audio["id"].lower()] = known({
+            "mediaType": "audio/float32", "sampleRate": audio.get("sample_rate"),
+            "channels": audio.get("channel_count"), "checkLegal": check_legal})
+    return out
+
+
 def _book_readers(generator, req):
-    """POST req["count"] reader claims of generator."""
+    """POST req["count"] reader claims of generator, each told what the
+    generator's flows should carry."""
     gen_name = (generator.get("metadata") or {}).get("name") or ""
     window = ((generator.get("spec") or {}).get("booking") or {}).get("window")
-    return _post_readers(f"{gen_name}-r", _claim_flow_ids(generator), req, window, gen_name)
+    expect = _generator_expectations(generator, bool(req.get("checkValues")))
+    return _post_readers(f"{gen_name}-r", _claim_flow_ids(generator), req, window, gen_name, expect)
 
 
-def _post_readers(stem, flows, req, window=None, generator=None):
+def _post_readers(stem, flows, req, window=None, generator=None, expect=None):
     """POST req["count"] reader claims named <stem><4 hex>. (rows, error) where
     error names the first failure, after which nothing more is booked."""
     rows = []
@@ -2386,7 +2508,7 @@ def _post_readers(stem, flows, req, window=None, generator=None):
             if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
                 return rows, "that label or prefix does not make a usable reader name"
             code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
-                                 "POST", _reader_claim(name, flows, req, window, generator))
+                                 "POST", _reader_claim(name, flows, req, window, generator, expect))
             if code in (200, 201):
                 rows.append(_reader_row(res))
                 break
@@ -2466,7 +2588,9 @@ def flow_readers_create(req):
             return 404, {"error": f"flow {flow_id} is not known to the cluster"}
 
     stem = f"{GEN_PREFIX}r-{_gen_slug(req.get('label')) or 'flow'}-"
-    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req))
+    expect = ({flow_id: {"checkLegal": True} for flow_id in req["flows"]}
+              if req.get("checkValues") else None)
+    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req), None, expect)
     if rows:
         snapshot_drop("generators")
     if not rows:
@@ -2780,6 +2904,11 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/operator-flows"):
             try:
                 self._send_body(200, snapshot("operator-flows", operator_flows))
+            except Exception as e:
+                self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/monitor"):
+            try:
+                self._send_body(200, snapshot("monitor", monitor))
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/generators/flow-ids"):

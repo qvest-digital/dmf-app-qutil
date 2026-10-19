@@ -27,5 +27,10 @@ export const routes: Routes = [
     title: 'Qutil - Bookings',
     loadComponent: () => import('./features/bookings/bookings-page').then((m) => m.BookingsPage),
   },
+  {
+    path: 'mon',
+    title: 'Qutil - Monitor',
+    loadComponent: () => import('./features/monitor/monitor-page').then((m) => m.MonitorPage),
+  },
   { path: '**', redirectTo: '' },
 ];

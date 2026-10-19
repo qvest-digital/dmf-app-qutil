@@ -1173,6 +1173,143 @@ class FlowReaders(unittest.TestCase):
             self.assertEqual(agg.reader_delete(name)[0], 200)
 
 
+class ReaderExpectations(unittest.TestCase):
+    """A reader of a generator is told what the generator's flows carry, so it
+    can count a flow that declares something else as wrong_format."""
+
+    def _generator(self, video=True, audio=True):
+        flow = {"group_hint": "g"}
+        flow["video_output"] = ({"enabled": True, "id": "3F2C8A1E-1111-4222-8333-444455556666",
+                                 "frame_width": 3840, "frame_height": 2160,
+                                 "grain_rate": {"numerator": 60, "denominator": 1}}
+                                if video else {"enabled": False})
+        if audio:
+            flow["audio_output"] = {"enabled": True, "id": "9b1d0000-2222-4333-8444-555566667777",
+                                    "sample_rate": 96000, "channel_count": 16}
+        return {"metadata": {"name": "generator-x-0001"},
+                "spec": {"parameters": {"flow": flow}}}
+
+    def test_video_and_audio_carry_what_the_writer_was_asked_for(self):
+        out = agg._generator_expectations(self._generator(), False)
+        self.assertEqual(out["3f2c8a1e-1111-4222-8333-444455556666"],
+                         {"mediaType": "video/v210", "width": 3840, "height": 2160,
+                          "rate": "60/1", "checkLegal": False})
+        self.assertEqual(out["9b1d0000-2222-4333-8444-555566667777"],
+                         {"mediaType": "audio/float32", "sampleRate": 96000, "channels": 16,
+                          "checkLegal": False})
+
+    def test_a_disabled_output_expects_nothing(self):
+        out = agg._generator_expectations(self._generator(video=False), True)
+        self.assertEqual(list(out), ["9b1d0000-2222-4333-8444-555566667777"])
+        self.assertTrue(out["9b1d0000-2222-4333-8444-555566667777"]["checkLegal"])
+
+    def test_the_claim_carries_them(self):
+        claim = agg._reader_claim("generator-x-0001-r0001", ["a"], {}, None, "generator-x-0001",
+                                  {"a": {"width": 1}})
+        self.assertEqual(claim["spec"]["parameters"]["expect"], {"a": {"width": 1}})
+        self.assertNotIn("expect", agg._reader_claim("r", ["a"], {})["spec"]["parameters"])
+
+    def test_a_field_left_to_the_chart_default_is_not_checked(self):
+        gen = self._generator(audio=False)
+        del gen["spec"]["parameters"]["flow"]["video_output"]["grain_rate"]
+        out = agg._generator_expectations(gen, False)
+        self.assertNotIn("rate", out["3f2c8a1e-1111-4222-8333-444455556666"])
+
+    def test_check_values_must_be_a_boolean(self):
+        self.assertEqual(agg._validate_readers({"count": 1, "checkValues": "yes"}),
+                         "checkValues must be true or false")
+
+
+class Monitor(unittest.TestCase):
+    """Every reader claim in the namespace, whoever booked it, with what it
+    reports, where its pod runs, and the replication behind each flow."""
+
+    FLOW = "d4d00000-0000-0000-0000-000000000001"
+
+    def _reader(self, name, ready=True, cls=None):
+        return {"metadata": {"name": name, "labels": {}},
+                "spec": {"className": cls or agg.READER_CLASS,
+                         "parameters": {"flows": [self.FLOW], "receiver": {"provider": "tcp"}}},
+                "status": {"handle": {"ready": ready, "endpoints": [
+                    {"name": "status", "url": f"http://{name}.ns:9102/status"}]}}}
+
+    def setUp(self):
+        self.claims = [self._reader("booked-reader-0001"), self._reader("generator-x-r0001", ready=False),
+                       self._reader("writer-mxl-1", cls="mxl-writer")]
+        pods = {"items": [{"metadata": {"name": "booked-reader-0001-abc",
+                                        "labels": {"app.kubernetes.io/instance": "booked-reader-0001"}},
+                           "spec": {"nodeName": "worker-7"},
+                           "status": {"phase": "Running", "containerStatuses": [{"restartCount": 2}]}}]}
+        flows = {"items": [{"metadata": {"name": self.FLOW},
+                            "spec": {"definition": {"label": "MXL-1", "media_type": "video/v210"}}}]}
+        mirrors = {"items": [{"metadata": {"name": "m1"},
+                              "spec": {"flowID": self.FLOW, "sourceNode": "worker-1",
+                                       "targetNode": "worker-7", "provider": "tcp"},
+                              "status": {"phase": "Ready", "attemptCount": 1}}]}
+
+        def safe_k8s(path):
+            if path.endswith("/mediafunctionclaims"):
+                return {"items": self.claims}
+            if path.endswith("/pods"):
+                return pods
+            if path.endswith("/mxlflows"):
+                return flows
+            if path.endswith("/mxlflowmirrors"):
+                return mirrors
+            return {"items": []}
+
+        def urlopen(url, timeout=None):
+            body = json.dumps({"flows": [{"id": self.FLOW, "state": "open"}]}).encode()
+            return mock.MagicMock(__enter__=lambda s: mock.Mock(read=lambda: body),
+                                  __exit__=lambda *a: False)
+
+        for p in (mock.patch.object(agg, "safe_k8s", safe_k8s),
+                  mock.patch.object(agg, "origin_leases", lambda: {}),
+                  mock.patch.object(agg, "origin_health", lambda fl, l: {"originNode": "worker-1",
+                                                                         "originFresh": True}),
+                  mock.patch.object(agg.urllib.request, "urlopen", urlopen)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_lists_reader_claims_of_any_booking_and_nothing_else(self):
+        names = [r["name"] for r in agg.monitor()["readers"]]
+        self.assertEqual(sorted(names), ["booked-reader-0001", "generator-x-r0001"])
+
+    def test_carries_the_readers_own_status_and_its_pod(self):
+        reader = next(r for r in agg.monitor()["readers"] if r["name"] == "booked-reader-0001")
+        self.assertEqual(reader["status"]["flows"][0]["state"], "open")
+        self.assertEqual(reader["pods"], [{"name": "booked-reader-0001-abc", "node": "worker-7",
+                                           "phase": "Running", "restarts": 2}])
+
+    def test_an_unprovisioned_reader_says_so_instead_of_being_asked(self):
+        reader = next(r for r in agg.monitor()["readers"] if r["name"] == "generator-x-r0001")
+        self.assertIsNone(reader["status"])
+        self.assertEqual(reader["statusError"], "not provisioned yet")
+
+    def test_names_the_origin_and_mirrors_of_each_flow_read(self):
+        flow = agg.monitor()["flows"][self.FLOW]
+        self.assertEqual(flow["originNode"], "worker-1")
+        self.assertEqual([(m["sourceNode"], m["targetNode"], m["phase"]) for m in flow["mirrors"]],
+                         [("worker-1", "worker-7", "Ready")])
+
+    def test_a_reader_that_does_not_answer_in_time_is_named(self):
+        def slow(url, timeout=None):
+            import time as t
+            t.sleep(0.3)
+            raise OSError("late")
+        with mock.patch.object(agg.urllib.request, "urlopen", slow), \
+                mock.patch.object(agg, "_MONITOR_DEADLINE", 0.05):
+            reader = next(r for r in agg.monitor()["readers"] if r["name"] == "booked-reader-0001")
+        self.assertEqual(reader["statusError"], "no answer within 0.05 s")
+
+    def test_a_reader_that_cannot_be_asked_is_an_error_of_its_own(self):
+        def refuse(url, timeout=None):
+            raise OSError("connection refused")
+        with mock.patch.object(agg.urllib.request, "urlopen", refuse):
+            reader = next(r for r in agg.monitor()["readers"] if r["name"] == "booked-reader-0001")
+        self.assertIn("connection refused", reader["statusError"])
+
+
 class ReaderDelivering(unittest.TestCase):
     """A reader's workload is ready once it serves, flows or not, so delivery
     is read from the endpoint its claim publishes."""

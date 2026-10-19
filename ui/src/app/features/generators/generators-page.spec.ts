@@ -225,7 +225,12 @@ describe('GeneratorsPage', () => {
     const req = http.expectOne(
       (r) => r.method === 'POST' && r.url === '/api/generators/generator-bars-1-7f3a/readers',
     );
-    expect(req.request.body).toEqual({ count: 1, node: 'worker-7', provider: 'auto' });
+    expect(req.request.body).toEqual({
+      count: 1,
+      node: 'worker-7',
+      provider: 'auto',
+      checkValues: false,
+    });
     req.flush({
       readers: [{ name: 'generator-bars-1-7f3a-r00aa', node: 'worker-7', provider: 'auto' }],
       error: null,
@@ -329,6 +334,7 @@ describe('GeneratorsPage', () => {
       count: 1,
       node: 'worker-9',
       provider: 'auto',
+      checkValues: false,
       ttl: '1h',
     });
     req.flush({

@@ -103,6 +103,17 @@ export interface AddReaders {
               <option [value]="p">{{ p }}</option>
             }
           </select>
+          <label
+            class="gen-check"
+            title="SMPTE bars write super-black as luma code 0, which v210 reserves, so this flags every grain of that pattern."
+          >
+            <input
+              type="checkbox"
+              [checked]="addCheckValues()"
+              (change)="addCheckValues.set(checked($event))"
+            />
+            values
+          </label>
           <button class="btn" type="button" [disabled]="!!addError()" (click)="submitReaders()">
             Add
           </button>
@@ -142,11 +153,13 @@ export class GeneratorRow {
   protected readonly addCount = signal(1);
   protected readonly addNode = signal('');
   protected readonly addProvider = signal('auto');
+  protected readonly addCheckValues = signal(false);
 
   private readonly readerRequest = computed<ReaderRequest>(() => ({
     count: this.addCount(),
     node: this.addNode().trim(),
     provider: this.addProvider(),
+    checkValues: this.addCheckValues(),
   }));
 
   protected readonly addError = computed(() =>
@@ -156,6 +169,10 @@ export class GeneratorRow {
   protected readonly hasFlows = computed(
     () => !!(this.generator().video || this.generator().audio),
   );
+
+  protected checked(event: Event): boolean {
+    return (event.target as HTMLInputElement).checked;
+  }
 
   protected value(event: Event): string {
     return (event.target as HTMLInputElement | HTMLSelectElement).value;

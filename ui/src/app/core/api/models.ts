@@ -275,8 +275,84 @@ export interface PreviewStatus {
 
 // ── /api/generators ─────────────────────────────────────────────────────────
 
-/** What the form sends. The aggregator translates these into claim parameters:
- *  no browser names a parameter key, because nothing validates one. */
+// -- GET /api/monitor -------------------------------------------------------
+
+/** Read outcomes a reader counts per flow, in grains or samples. */
+export interface ReaderReads {
+  ok: number;
+  too_early: number;
+  too_late: number;
+  missing: number;
+  invalid: number;
+  incomplete: number;
+  wrong_size: number;
+  wrong_format: number;
+  illegal_values: number;
+  permission_error: number;
+  other_error: number;
+}
+
+/** Attempts to reach a flow that failed, by reason. */
+export interface ReaderOpenFailures {
+  domain: number;
+  not_found: number;
+  permission: number;
+  other: number;
+}
+
+/** One flow as its reader reports it on /status. */
+export interface ReaderFlowStatus {
+  id: string;
+  /** starting | domain_unavailable | flow_not_found | permission_denied | flow_error | open */
+  state: string;
+  delivering: boolean;
+  /** null until the flow has been opened: before that the reader cannot tell. */
+  unit: 'grains' | 'samples' | null;
+  mediaType: string;
+  format: string;
+  /** How the flow differs from what the reader was told to expect, or ''. */
+  formatMismatch: string;
+  ageSeconds: number | null;
+  reads: ReaderReads;
+  openFailures: ReaderOpenFailures;
+  skipped: number;
+  stalls: number;
+  opens: number;
+  lost: number;
+  lastError: { message: string; secondsAgo: number } | null;
+}
+
+export interface MonitorPod {
+  name: string;
+  node?: string | null;
+  phase?: string | null;
+  restarts?: number;
+}
+
+/** A reader claim with what it reports and where it runs. */
+export interface MonitorReader extends GeneratorReader {
+  pods: MonitorPod[];
+  status: { flows: ReaderFlowStatus[] } | null;
+  /** Why the reader's own status is missing: not provisioned, or unreachable. */
+  statusError: string | null;
+}
+
+/** Where a flow read by a reader originates and the mirrors that carry it. */
+export interface MonitorFlow {
+  label: string;
+  mediaType?: string | null;
+  originNode?: string | null;
+  originFresh?: boolean | null;
+  mirrors: DetailMirror[];
+}
+
+export interface MonitorResponse {
+  readerClass?: string;
+  readers: MonitorReader[];
+  flows: Record<string, MonitorFlow>;
+  error?: string | null;
+}
+
 /** Readers to book for a generator: each holds all its flows open on a node. */
 export interface ReaderRequest {
   count: number;
@@ -284,6 +360,8 @@ export interface ReaderRequest {
   node: string;
   /** libmxl-fabrics provider the receiver asks for: one of the server's list. */
   provider: string;
+  /** Also check sample values against the legal range. */
+  checkValues?: boolean;
 }
 
 /** Readers of flows chosen by id, whoever writes them. */
@@ -295,6 +373,8 @@ export interface FlowReaderRequest extends ReaderRequest {
   ttl: string;
 }
 
+/** What the form sends. The aggregator translates these into claim parameters:
+ *  no browser names a parameter key, because nothing validates one. */
 export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
