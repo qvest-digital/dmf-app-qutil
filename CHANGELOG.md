@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.0.0-rc.52](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.51...v1.0.0-rc.52) (2026-10-19)
+
+
+### Features
+
+* **generators:** book readers that pull a generator's flows to a node ([#207](https://github.com/qvest-digital/dmf-app-qutil/issues/207)) ([5374254](https://github.com/qvest-digital/dmf-app-qutil/commit/53742542126e2576d45e2e0da3d50ffe226629eb))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump hono from 4.13.1 to 4.13.7 in /ui ([#179](https://github.com/qvest-digital/dmf-app-qutil/issues/179)) ([8baaffa](https://github.com/qvest-digital/dmf-app-qutil/commit/8baaffa805793e27139b74a40d7a1ad94cfd554a))
+
+## [1.0.0-rc.51](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.50...v1.0.0-rc.51) (2026-10-19)
+
+
+### Features
+
+* **generators:** book several copies and pin to a node by name ([#201](https://github.com/qvest-digital/dmf-app-qutil/issues/201)) ([f30bc99](https://github.com/qvest-digital/dmf-app-qutil/commit/f30bc991c990f52cfc553154c3538e6c8bba55c8))
+
+
+### Miscellaneous
+
+* **deps:** bump fast-uri from 3.1.5 to 3.1.7 in /ui ([#174](https://github.com/qvest-digital/dmf-app-qutil/issues/174)) ([abc9dac](https://github.com/qvest-digital/dmf-app-qutil/commit/abc9dac5b0a3465c7c3d9fef6acc239abc1f6262))
+
+## [1.0.0-rc.50](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.49...v1.0.0-rc.50) (2026-10-02)
+
+
+### Bug Fixes
+
+* **aggregator:** encode previews at 25 frames a second ([#196](https://github.com/qvest-digital/dmf-app-qutil/issues/196)) ([b5a6190](https://github.com/qvest-digital/dmf-app-qutil/commit/b5a61904e01b832acd80a7b943423322bb6e3643))
+
+## [1.0.0-rc.49](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.48...v1.0.0-rc.49) (2026-10-02)
+
+
+### Bug Fixes
+
+* **chart:** give the second test source the CPU it now draws ([#194](https://github.com/qvest-digital/dmf-app-qutil/issues/194)) ([def84a2](https://github.com/qvest-digital/dmf-app-qutil/commit/def84a26d7186de8b0a04757bbde6aa6eeec042c))
+
+## [1.0.0-rc.48](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.47...v1.0.0-rc.48) (2026-09-28)
+
+
+### Features
+
+* **chart:** run a standing SRT listener for the Ross SSG ([#191](https://github.com/qvest-digital/dmf-app-qutil/issues/191)) ([b498df7](https://github.com/qvest-digital/dmf-app-qutil/commit/b498df78f7cf5fbd3f5d15d6e2a769a8c139b324))
+
+## [1.0.0-rc.47](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.46...v1.0.0-rc.47) (2026-09-24)
+
+
+### Features
+
+* **chart:** run the demo sources at 1080p50 ([#187](https://github.com/qvest-digital/dmf-app-qutil/issues/187)) ([fed9339](https://github.com/qvest-digital/dmf-app-qutil/commit/fed93397482767d51341e4d3702db2c97e5c167b))
+
+## [1.0.0-rc.46](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.45...v1.0.0-rc.46) (2026-09-23)
+
+
+### Features
+
+* **chart:** book the grain reader the ring section reads ([#186](https://github.com/qvest-digital/dmf-app-qutil/issues/186)) ([7269542](https://github.com/qvest-digital/dmf-app-qutil/commit/72695421993b2357aea213cf6837856e5a06ea9a))
+
+## [1.0.0-rc.45](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.44...v1.0.0-rc.45) (2026-09-18)
+
+
+### Features
+
+* **flows:** snapshot a flow's ring and show each grain ([f3fbee8](https://github.com/qvest-digital/dmf-app-qutil/commit/f3fbee812f00fae17f8b20e3b8aa9e4af115e7d4))
+* **ui:** carry the Qutil mark into the tab icon ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** name the app Qutil and give it a mark ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** name the first tab Diagnostics ([5f38e97](https://github.com/qvest-digital/dmf-app-qutil/commit/5f38e97758e2470e2969464693417f4862bdcefc))
+* **ui:** scroll the panel and the previews apart ([8fe8357](https://github.com/qvest-digital/dmf-app-qutil/commit/8fe83572b57ebf69fe6b318d213f2aea8b9a5d0b))
+
+
+### Bug Fixes
+
+* **flows:** draw the waveform for the first window shown ([f3fbee8](https://github.com/qvest-digital/dmf-app-qutil/commit/f3fbee812f00fae17f8b20e3b8aa9e4af115e7d4))
+* **ui:** hold the preview column open from the start ([8fe8357](https://github.com/qvest-digital/dmf-app-qutil/commit/8fe83572b57ebf69fe6b318d213f2aea8b9a5d0b))
+
 ## [1.0.0-rc.44](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.43...v1.0.0-rc.44) (2026-09-06)
 
 

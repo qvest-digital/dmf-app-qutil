@@ -172,6 +172,7 @@ describe('OperatorFlowDetail', () => {
       'Receivers',
       'Mirrors (RDMA transfer)',
       'Tags',
+      'Ring',
     ]);
   });
 
@@ -250,7 +251,9 @@ describe('OperatorFlowDetail', () => {
 
   it('survives a flow with no detail block at all', async () => {
     const { find, sections } = await render(BARE);
-    expect(sections).toHaveLength(8);
+    // Ring is rendered for any flow: what the ring holds is read from the
+    // flow itself, not from the detail block the control plane may not carry.
+    expect(sections).toHaveLength(9);
     expect(find('locations')).toMatchObject({ text: 'not materialized anywhere', state: 'bad' });
     expect(find('media type')!.text).toBe('--');
     expect(find('registered')!.text).toBe('--');

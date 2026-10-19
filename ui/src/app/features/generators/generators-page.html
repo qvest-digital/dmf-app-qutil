@@ -1,7 +1,7 @@
 <main class="gen-main">
   <aside class="panel">
     @if (enabled()) {
-      <mv-generator-form [limits]="limits()" [full]="full()" (created)="onCreated($event)" />
+      <mv-generator-form [limits]="limits()" (created)="onCreated($event)" />
     } @else {
       <div class="gwbar">
         <h2>Book a generator</h2>
@@ -21,6 +21,9 @@
       @if (deleteError(); as text) {
         <div class="gen-errors" aria-live="polite">{{ text }}</div>
       }
+      @if (readerError(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
       @if (listError(); as text) {
         <div class="gen-errors">{{ text }}</div>
       }
@@ -29,7 +32,11 @@
           <mv-generator-row
             [generator]="generator"
             [busy]="isDeleting(generator.name)"
+            [limits]="limits()"
+            [busyReaders]="deleting()"
             (remove)="remove($event)"
+            (addReaders)="addReaders($event)"
+            (removeReader)="removeReader($event)"
           />
         } @empty {
           <div class="flow empty">
@@ -38,6 +45,30 @@
           </div>
         }
       </div>
+      @if (orphans().length) {
+        <h2>Readers without a generator</h2>
+        <div class="flows">
+          @for (reader of orphans(); track reader.name) {
+            <div class="flow">
+              <div class="gen-reader">
+                <span class="dot"></span>
+                <span class="gen-reader-name">{{ reader.name }}</span>
+                <span class="gen-reader-meta">{{
+                  reader.node ? 'on ' + reader.node : 'any node'
+                }}</span>
+                <button
+                  class="btn kill"
+                  type="button"
+                  [disabled]="isDeleting(reader.name) || reader.deleting"
+                  (click)="removeReader(reader.name)"
+                >
+                  {{ isDeleting(reader.name) ? 'Deleting...' : 'Delete' }}
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      }
     </div>
   </aside>
 </main>

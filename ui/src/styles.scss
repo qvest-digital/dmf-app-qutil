@@ -81,6 +81,27 @@ header {
   width: auto;
   display: block;
 }
+/* The product mark, beside the corporate wordmark rather than instead of it.
+   A rule separates the two so neither reads as part of the other. */
+.brand .qutil-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  /* Ink at low alpha: the header is white, so a white rule is not there. */
+  border-left: 1px solid rgba(11, 9, 13, 0.15);
+}
+.brand .qutil-logo svg {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+.brand .qutil-logo b {
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.06em;
+  color: var(--qv-ink);
+}
 .brand .sub {
   font-weight: 600;
   font-size: 13px;
@@ -127,24 +148,56 @@ header {
   box-shadow: 0 0 0 3px rgba(240, 80, 18, 0.3);
 }
 
-/* The metrics panel alone, until a preview is open: then it shares the width
-   with the preview column. Wide enough for the panel's own two-column stats
-   either way. */
+/* The metrics panel and the preview column, side by side from the start. The
+   column used to arrive with the first preview, which re-laid the page out
+   under the pointer that opened it: the panel lost a third of its width and
+   every row in it moved. Holding the column open costs an empty half on a
+   wide screen and keeps the panel still. */
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 22px;
   padding: 24px 28px;
-  max-width: 1180px;
-}
-main.previewing {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  max-width: none;
 }
 @media (max-width: 1100px) {
-  main.previewing {
+  main {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Stacked, an empty column is a blank block above the fold rather than a
+     space the eye skips, so it is left out until it holds something. */
+  .previews.idle {
+    display: none;
+  }
+}
+
+/* Two panes, each scrolling in its own right: the flow list is long and a
+   preview card is tall, and scrolling either one used to carry the other away
+   with it. Only where the two sit side by side -- stacked, one scrolling page
+   is what a stacked layout means.
+   The height is pinned on the shell rather than on the grid because a scroll
+   container needs a parent whose height is known, and only the multiviewer
+   wants one: the generators page below grows with its form. */
+@media (min-width: 1101px) {
+  mv-root:has(.mv-main) {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .mv-main {
+    min-height: 0;
+  }
+  .mv-main .panel {
+    min-height: 0;
+  }
+  .mv-main .panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: scroll;
+  }
+  .mv-main .previews {
+    min-height: 0;
+    overflow-y: auto;
   }
 }
 
@@ -157,6 +210,19 @@ main.previewing {
   flex-direction: column;
   gap: 16px;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 5%);
+}
+.mv-main .panel {
+  padding: 8px 6px 8px 0;
+  overflow: hidden;
+}
+.mv-main .panel-scroll {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 16px;
+  padding: 12px 13px 12px 20px;
+  scrollbar-color: rgb(255 255 255 / 80%) transparent;
+  scrollbar-width: thin;
 }
 .panel h2 {
   font-size: 15px;
@@ -352,16 +418,25 @@ main.previewing {
   white-space: nowrap;
 }
 
-/* Open previews, newest last, beside the metrics panel. They scroll with the
-   page rather than inside the column: a card is tall, and a column that scrolled
-   on its own would hide the ones below the fold behind a scrollbar nobody looks
-   for. */
+/* Open previews, newest last, beside the metrics panel. The column scrolls in
+   its own right where there is room for it to (see .mv-main below): the panel
+   is read while previews are opened out of it, and a page that scrolled as one
+   took the panel off screen as soon as a second card pushed the column past the
+   fold. */
 .previews {
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
   align-content: start;
+}
+.pv-idle {
+  margin: auto;
+  max-width: 24ch;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.55;
 }
 .pv-card {
   background: var(--qv-ink);
@@ -821,6 +896,29 @@ main.previewing {
 .gen-actions .gen-input {
   flex: 1;
 }
+/* A reader under the generator it reads: one line, so a generator with several
+   stays a row rather than becoming a card of its own. */
+.gen-reader {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.gen-reader-name {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-weight: 700;
+}
+.gen-reader-meta {
+  opacity: 0.7;
+}
+.gen-reader-add {
+  margin-top: 8px;
+}
+.gen-actions .gen-input.gen-count {
+  flex: 0 0 4.5em;
+}
 
 footer {
   padding: 12px 28px;
@@ -867,4 +965,96 @@ footer {
   to {
     transform: rotate(360deg);
   }
+}
+/* Ring snapshot. The button row is a fixed grid of small squares: a ring is
+   tens of entries at most, so they all fit and none needs a label. */
+.grain-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+/* The capture control. Styled as a button rather than left to the browser
+   default, which on this background reads as a label. */
+.grain-capture {
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #eaf2ff;
+  cursor: pointer;
+  border: 1px solid rgba(78, 161, 255, 0.55);
+  border-radius: 4px;
+  background: rgba(78, 161, 255, 0.18);
+}
+.grain-capture:hover:not(:disabled) {
+  border-color: #4ea1ff;
+  background: rgba(78, 161, 255, 0.3);
+}
+.grain-capture:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.grain-capture:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.grain-taken,
+.grain-note {
+  font-size: 0.78rem;
+  opacity: 0.65;
+}
+.grain-note {
+  margin: 0.25rem 0 0.6rem;
+  max-width: 52ch;
+}
+.grain-error {
+  color: #ff8a7a;
+  font-size: 0.82rem;
+}
+.grain-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 0.7rem;
+}
+.grain-btn {
+  min-width: 2rem;
+  padding: 0.25rem 0.35rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 3px;
+}
+.grain-btn.sel {
+  border-color: #4ea1ff;
+  background: rgba(78, 161, 255, 0.22);
+}
+/* An incomplete or writer-flagged grain, so a gap in the ring is visible
+   before it is clicked. */
+.grain-btn.bad {
+  border-color: #ff8a7a;
+}
+.grain-canvas {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin: 0.5rem 0;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+/* Beats the display above on specificity, which [hidden] cannot do. */
+.grain-canvas.off {
+  display: none;
+}
+.grain-hex {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  max-height: 16rem;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0.5rem;
 }

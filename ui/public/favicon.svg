@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Qutil">
+  <!-- Literal colours, not the theme tokens the header mark uses: a favicon is
+       fetched on its own and has no stylesheet to resolve them against.
+       A filled tile rather than a bare glyph, so the mark keeps its contrast on
+       a light and a dark tab strip alike. -->
+  <rect width="64" height="64" rx="14" fill="#f05012" />
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="30" cy="29" r="16" stroke-width="6" />
+    <!-- A stub, barely past the ring. Anything longer turns the mark into a
+         magnifying glass at this size, where the ring is small enough that a
+         tail of its own length reads as a handle. -->
+    <path d="M41 40 L46 45" stroke-width="6" />
+    <!-- Three strokes, not the header mark's seven: at 16px the full pulse
+         closes into a bar. -->
+    <path d="M22 29 L26 29 L30 20 L34 39 L38 29 L41 29" stroke-width="4" />
+  </g>
+</svg>

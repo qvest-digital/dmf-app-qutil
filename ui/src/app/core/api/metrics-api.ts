@@ -3,12 +3,18 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
   AncGrain,
+  AudioSnapshot,
   FlowIds,
   FlowsResponse,
-  Generator,
+  GeneratorBatch,
   GeneratorRequest,
+  ReaderBatch,
+  ReaderRequest,
   GeneratorsResponse,
+  GrainMeta,
+  GrainRing,
   OperatorFlowsResponse,
+  RingCapture,
   PreviewSession,
   PreviewStatus,
   ServicesResponse,
@@ -80,10 +86,23 @@ export class MetricsApi {
     return this.http.get<FlowIds>('/api/generators/flow-ids');
   }
 
-  /** Book a writer. The response is the created generator, so the list does not
-   *  have to wait for the next poll. */
-  createGenerator(request: GeneratorRequest): Observable<Generator> {
-    return this.http.post<Generator>('/api/generators', request);
+  /** Book one or more writers. The response carries the created generators, so
+   *  the list does not have to wait for the next poll. */
+  createGenerator(request: GeneratorRequest): Observable<GeneratorBatch> {
+    return this.http.post<GeneratorBatch>('/api/generators', request);
+  }
+
+  /** Book readers of one generator: claims that hold its flows open on a node. */
+  createReaders(generator: string, request: ReaderRequest): Observable<ReaderBatch> {
+    return this.http.post<ReaderBatch>(
+      `/api/generators/${encodeURIComponent(generator)}/readers`,
+      request,
+    );
+  }
+
+  /** Release one reader. The aggregator refuses any claim that is not one it booked. */
+  deleteReader(name: string): Observable<unknown> {
+    return this.http.delete(`/api/readers/${encodeURIComponent(name)}`);
   }
 
   /** Release one. The aggregator refuses any name it did not book. */
@@ -97,6 +116,49 @@ export class MetricsApi {
    */
   ancGrain(uuid: string): Observable<AncGrain> {
     return this.http.get<AncGrain>(`/api/anc/${encodeURIComponent(uuid)}`);
+  }
+
+  /**
+   * What the flow's ring holds: how many entries, and which indices are still
+   * in it. Read per open rather than polled -- the head moves every grain, and
+   * a row of buttons that renumbered itself thirty times a second would be
+   * unusable.
+   */
+  grainRing(uuid: string): Observable<GrainRing> {
+    return this.http.get<GrainRing>(`/api/grains/${encodeURIComponent(uuid)}`);
+  }
+
+  /**
+   * Copy the whole ring and hold it, returning what was caught.
+   *
+   * The ring is overwritten continuously -- a few hundred milliseconds of it
+   * exist at any moment -- so an index cannot survive being listed, read by a
+   * person and then clicked. The copy can.
+   */
+  captureRing(uuid: string): Observable<RingCapture> {
+    return this.http.post<RingCapture>(`/api/grains/${encodeURIComponent(uuid)}`, null);
+  }
+
+  /** One addressed grain's metadata, without its payload. */
+  grain(uuid: string, index: number): Observable<GrainMeta> {
+    return this.http.get<GrainMeta>(`/api/grain/${encodeURIComponent(uuid)}/${index}`);
+  }
+
+  /**
+   * The grain's bytes. Megabytes of v210 that this app unpacks itself, so it
+   * asks for an ArrayBuffer rather than letting Angular parse it.
+   */
+  grainPayload(uuid: string, index: number): Observable<ArrayBuffer> {
+    return this.http.get(`/api/grain/${encodeURIComponent(uuid)}/${index}/raw`, {
+      responseType: 'arraybuffer',
+    });
+  }
+
+  /** One window of an audio ring, summarised per channel. */
+  audioSnapshot(uuid: string, index: number, count: number): Observable<AudioSnapshot> {
+    return this.http.get<AudioSnapshot>(
+      `/api/samples/${encodeURIComponent(uuid)}/${index}/${count}`,
+    );
   }
 
   /**

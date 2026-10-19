@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { OperatorFlow } from '../../core/api/models';
 import { AgoSPipe, FmtPipe } from '../../shared/format-pipes';
 import { KvRow } from '../../shared/kv-row';
+import { GrainStrip } from './grain-strip';
 
 /**
  * Everything the control plane knows about one flow: the MxlFlow CR plus the
@@ -11,7 +12,7 @@ import { KvRow } from '../../shared/kv-row';
 @Component({
   selector: 'mv-operator-flow-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [KvRow, AgoSPipe, FmtPipe],
+  imports: [KvRow, AgoSPipe, FmtPipe, GrainStrip],
   templateUrl: './operator-flow-detail.html',
 })
 export class OperatorFlowDetail {

@@ -1,11 +1,12 @@
 import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
-import { validateGenerator } from './generator-validation';
+import { validateGenerator, validateReaders } from './generator-validation';
 
 const LIMITS: GeneratorsResponse = {
   namespace: 'production-demo-app',
   className: 'mxl-writer',
   enabled: true,
-  max: 8,
+  maxCopies: 16,
+  providers: ['auto', 'tcp', 'verbs', 'efa', 'shm'],
   ttls: ['1h', '8h', '24h', 'none'],
   patterns: ['smpte', 'ball', 'gamut', 'checkers-8', 'snow', 'zone-plate'],
   animated: ['ball', 'snow', 'zone-plate'],
@@ -27,6 +28,9 @@ const AUDIO_ID = '9b1d0000-2222-4333-8444-555566667777';
 
 type Over = {
   ttl?: string;
+  count?: number;
+  node?: string;
+  readers?: Partial<GeneratorRequest['readers']>;
   video?: Partial<GeneratorRequest['video']>;
   audio?: Partial<GeneratorRequest['audio']>;
 };
@@ -35,6 +39,9 @@ function request(over: Over = {}): GeneratorRequest {
   return {
     label: 'Bars 1',
     ttl: over.ttl ?? '1h',
+    count: over.count ?? 1,
+    node: over.node ?? '',
+    readers: { count: 0, node: '', provider: 'auto', ...over.readers },
     video: {
       enabled: true,
       id: VIDEO_ID,
@@ -159,10 +166,58 @@ describe('validateGenerator', () => {
     );
   });
 
+  it('refuses a count outside 1 to the server ceiling', () => {
+    expect(validateGenerator(request({ count: 16 }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ count: 0 }), LIMITS)).toBe('count must be between 1 and 16');
+    expect(validateGenerator(request({ count: 17 }), LIMITS)).toBe(
+      'count must be between 1 and 16',
+    );
+    expect(validateGenerator(request({ count: 2.5 }), LIMITS)).toContain('count must be');
+  });
+
+  it('accepts a node name and refuses what no node can be called', () => {
+    expect(
+      validateGenerator(request({ node: 'ip-10-0-1-23.eu-central-1.compute.internal' }), LIMITS),
+    ).toBeNull();
+    expect(validateGenerator(request({ node: 'Worker_1' }), LIMITS)).toContain(
+      'node must be a Kubernetes node name',
+    );
+    expect(validateGenerator(request({ node: 'a'.repeat(254) }), LIMITS)).toContain(
+      'node must be a Kubernetes node name',
+    );
+  });
+
+  it('lets the booking form ask for no readers, and bounds how many it asks for', () => {
+    expect(validateGenerator(request({ readers: { count: 0 } }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ readers: { count: 16 } }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ readers: { count: 17 } }), LIMITS)).toBe(
+      'reader count must be between 0 and 16',
+    );
+  });
+
+  it('checks the reader node and transport against what the server takes', () => {
+    expect(validateGenerator(request({ readers: { count: 1, node: 'Worker_1' } }), LIMITS)).toBe(
+      "reader node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
+        'at most 253 characters',
+    );
+    expect(
+      validateGenerator(request({ readers: { count: 1, provider: 'carrier-pigeon' } }), LIMITS),
+    ).toBe('provider must be one of auto, tcp, verbs, efa, shm');
+  });
+
+  /** Adding readers to a booked generator books at least one, unlike the form. */
+  it('requires at least one reader when adding to a generator', () => {
+    expect(validateReaders({ count: 0, node: '', provider: 'auto' }, LIMITS)).toBe(
+      'reader count must be between 1 and 16',
+    );
+    expect(validateReaders({ count: 2, node: 'worker-3', provider: 'tcp' }, LIMITS)).toBeNull();
+  });
+
   /** Before the first poll there is nothing to check a value against, and a form
    *  that refused everything until then would look broken. */
   it('checks what it can before the server has said what it accepts', () => {
     expect(validateGenerator(request(), null)).toBeNull();
+    expect(validateGenerator(request({ count: 5 }), null)).toBeNull();
     expect(validateGenerator(request({ video: { id: 'nope' } }), null)).toContain(
       'must be a full UUID',
     );

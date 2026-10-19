@@ -183,6 +183,84 @@ import { validateGenerator } from './generator-validation';
       }
 
       <div class="gen-field">
+        <label class="gen-label" for="gen-count">Copies</label>
+        <input
+          id="gen-count"
+          class="gen-input"
+          type="number"
+          min="1"
+          [max]="limits()?.maxCopies ?? 1"
+          [value]="count()"
+          (input)="count.set(+value($event))"
+        />
+        <div class="gen-hint">
+          Copies after the first get flow ids of their own, minted by the server.
+        </div>
+      </div>
+
+      <div class="gen-field">
+        <label class="gen-label" for="gen-node">Node</label>
+        <input
+          id="gen-node"
+          class="gen-input gen-mono"
+          type="text"
+          [value]="node()"
+          (input)="node.set(value($event))"
+          placeholder="any"
+          spellcheck="false"
+        />
+        <div class="gen-hint">
+          Pins the writer to the node of this name. A name no node carries leaves it pending.
+        </div>
+      </div>
+
+      <div class="gen-field">
+        <label class="gen-label" for="gen-readers">Readers per generator</label>
+        <input
+          id="gen-readers"
+          class="gen-input"
+          type="number"
+          min="0"
+          [max]="limits()?.maxCopies ?? 0"
+          [value]="readerCount()"
+          (input)="readerCount.set(+value($event))"
+        />
+        <div class="gen-hint">
+          Each reader holds every flow of its generator open on its node, which mirrors the flows
+          there. More can be added per generator once it is booked.
+        </div>
+      </div>
+
+      @if (readerCount() > 0) {
+        <div class="gen-field">
+          <label class="gen-label" for="gen-reader-node">Reader node</label>
+          <input
+            id="gen-reader-node"
+            class="gen-input gen-mono"
+            type="text"
+            [value]="readerNode()"
+            (input)="readerNode.set(value($event))"
+            placeholder="any"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="gen-field">
+          <label class="gen-label" for="gen-reader-provider">Transport</label>
+          <select
+            id="gen-reader-provider"
+            class="gen-select"
+            [value]="readerProvider()"
+            (change)="readerProvider.set(value($event))"
+          >
+            @for (p of limits()?.providers ?? ['auto']; track p) {
+              <option [value]="p">{{ p }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      <div class="gen-field">
         <label class="gen-label" for="gen-ttl">Expires</label>
         <select id="gen-ttl" class="gen-select" [value]="ttl()" (change)="ttl.set(value($event))">
           @for (choice of limits()?.ttls ?? []; track choice) {
@@ -197,14 +275,20 @@ import { validateGenerator } from './generator-validation';
       @if (error(); as text) {
         <div class="gen-errors" aria-live="polite">{{ text }}</div>
       }
+      @if (partial(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
 
       <div class="gen-actions">
         <button class="btn" type="button" [disabled]="!submittable()" (click)="submit()">
-          {{ busy() ? 'Booking…' : 'Book generator' }}
+          {{
+            busy()
+              ? 'Booking...'
+              : count() > 1
+                ? 'Book ' + count() + ' generators'
+                : 'Book generator'
+          }}
         </button>
-        @if (full()) {
-          <span class="gen-hint">At the limit of {{ limits()?.max }}; delete one first.</span>
-        }
       </div>
     </div>
   `,
@@ -212,16 +296,15 @@ import { validateGenerator } from './generator-validation';
 export class GeneratorForm {
   /** What the server accepts, straight from the page's poll. */
   readonly limits = input<GeneratorsResponse | null>(null);
-  readonly full = input(false);
-  readonly created = output<Generator>();
+  readonly created = output<Generator[]>();
 
   private readonly api = inject(MetricsApi);
 
   protected readonly label = signal('');
   protected readonly pattern = signal('smpte');
   protected readonly overlayText = signal('');
-  protected readonly frameSize = signal('1296x720');
-  protected readonly grainRate = signal('30000/1001');
+  protected readonly frameSize = signal('1920x1080');
+  protected readonly grainRate = signal('50/1');
   protected readonly videoOn = signal(true);
   protected readonly audioOn = signal(false);
   protected readonly sampleRate = signal(48000);
@@ -229,10 +312,21 @@ export class GeneratorForm {
   protected readonly videoId = signal('');
   protected readonly audioId = signal('');
   protected readonly ttl = signal('1h');
+  protected readonly count = signal(1);
+  protected readonly node = signal('');
+  protected readonly readerCount = signal(0);
+  protected readonly readerNode = signal('');
+  protected readonly readerProvider = signal('auto');
   protected readonly busy = signal(false);
   protected readonly rolling = signal(false);
   /** What the server said, which outranks anything this form worked out itself. */
   protected readonly serverError = signal('');
+  /**
+   * Why the last multi-copy booking stopped short. An outcome of that booking,
+   * not a verdict on the fields, so it lasts until the next submit -- in
+   * serverError the re-roll after the booking would clear it at once.
+   */
+  protected readonly partial = signal('');
 
   constructor() {
     this.reroll();
@@ -251,6 +345,13 @@ export class GeneratorForm {
     return {
       label: this.label(),
       ttl: this.ttl(),
+      count: this.count(),
+      node: this.node().trim(),
+      readers: {
+        count: this.readerCount(),
+        node: this.readerNode().trim(),
+        provider: this.readerProvider(),
+      },
       video: {
         enabled: this.videoOn(),
         id: this.videoId().trim(),
@@ -274,7 +375,7 @@ export class GeneratorForm {
   );
 
   protected readonly submittable = computed(
-    () => !this.busy() && !this.full() && !validateGenerator(this.request(), this.limits()),
+    () => !this.busy() && !validateGenerator(this.request(), this.limits()),
   );
 
   protected animated(pattern: string): boolean {
@@ -309,10 +410,12 @@ export class GeneratorForm {
   protected submit(): void {
     this.busy.set(true);
     this.serverError.set('');
+    this.partial.set('');
     this.api.createGenerator(this.request()).subscribe({
-      next: (generator) => {
+      next: (batch) => {
         this.busy.set(false);
-        this.created.emit(generator);
+        this.created.emit(batch.generators);
+        this.partial.set(batch.error ?? '');
         // Fresh ids and a clear label, so the next booking cannot reuse either.
         this.label.set('');
         this.overlayText.set('');

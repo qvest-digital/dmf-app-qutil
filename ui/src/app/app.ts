@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { QutilLogo } from './shared/qutil-logo';
 import { QvestLogo } from './shared/qvest-logo';
 
 /** Quarter-second ticks, so the clock reads as live rather than as a stamp. */
@@ -18,7 +19,7 @@ function wallClock(): string {
 @Component({
   selector: 'mv-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, QvestLogo],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, QvestLogo, QutilLogo],
   templateUrl: './app.html',
 })
 export class App {

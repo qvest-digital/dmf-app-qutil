@@ -1,6 +1,18 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import { Generator } from '../../core/api/models';
-import { generatorState } from './generator-state';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import {
+  Generator,
+  GeneratorReader,
+  GeneratorsResponse,
+  ReaderRequest,
+} from '../../core/api/models';
+import { generatorState, readerState } from './generator-state';
+import { validateReaders } from './generator-validation';
+
+/** A reader request for the generator it names, as the row hands it up. */
+export interface AddReaders {
+  generator: string;
+  request: ReaderRequest;
+}
 
 /**
  * One booked generator, in the same row shape the operator flow list uses: dot,
@@ -39,7 +51,7 @@ import { generatorState } from './generator-state';
             [disabled]="busy() || generator().deleting"
             (click)="remove.emit(generator().name)"
           >
-            {{ busy() ? 'Deleting…' : 'Delete' }}
+            {{ busy() ? 'Deleting...' : 'Delete' }}
           </button>
         </span>
       </div>
@@ -48,12 +60,83 @@ import { generatorState } from './generator-state';
           {{ video.id }}
         }
         @if (generator().audio; as audio) {
-          · {{ audio.id }}
+          | {{ audio.id }}
+        }
+        @if (generator().node; as node) {
+          | <span class="loc">on {{ node }}</span>
         }
         @if (expiry()) {
-          · <span class="loc">{{ expiry() }}</span>
+          | <span class="loc">{{ expiry() }}</span>
         }
       </div>
+      @for (reader of generator().readers ?? []; track reader.name) {
+        <div class="gen-reader">
+          <span class="dot" [class]="readerState(reader).cls" [title]="readerTip(reader)"></span>
+          <span class="gen-reader-name">{{ reader.name }}</span>
+          <span class="gen-reader-meta">
+            {{ reader.node ? 'on ' + reader.node : 'any node' }} | {{ reader.provider ?? 'auto' }} |
+            {{ readerState(reader).label }}
+          </span>
+          <button
+            class="btn kill"
+            type="button"
+            [disabled]="busyReaders().includes(reader.name) || reader.deleting"
+            (click)="removeReader.emit(reader.name)"
+          >
+            {{ busyReaders().includes(reader.name) ? 'Deleting...' : 'Delete' }}
+          </button>
+        </div>
+      }
+      @if (adding()) {
+        <div class="gen-actions gen-reader-add">
+          <input
+            class="gen-input gen-count"
+            type="number"
+            min="1"
+            [max]="limits()?.maxCopies ?? 1"
+            aria-label="Readers"
+            [value]="addCount()"
+            (input)="addCount.set(+value($event))"
+          />
+          <input
+            class="gen-input gen-mono"
+            type="text"
+            aria-label="Reader node"
+            placeholder="any node"
+            spellcheck="false"
+            [value]="addNode()"
+            (input)="addNode.set(value($event))"
+          />
+          <select
+            class="gen-select"
+            aria-label="Transport"
+            [value]="addProvider()"
+            (change)="addProvider.set(value($event))"
+          >
+            @for (p of limits()?.providers ?? ['auto']; track p) {
+              <option [value]="p">{{ p }}</option>
+            }
+          </select>
+          <button class="btn" type="button" [disabled]="!!addError()" (click)="submitReaders()">
+            Add
+          </button>
+          <button class="btn" type="button" (click)="adding.set(false)">Cancel</button>
+        </div>
+        @if (addError(); as text) {
+          <div class="gen-errors">{{ text }}</div>
+        }
+      } @else if (hasFlows()) {
+        <div class="gen-actions gen-reader-add">
+          <button
+            class="btn"
+            type="button"
+            [disabled]="generator().deleting"
+            (click)="adding.set(true)"
+          >
+            Add readers
+          </button>
+        </div>
+      }
     </div>
   `,
 })
@@ -62,6 +145,52 @@ export class GeneratorRow {
   /** A delete is in flight for this row. */
   readonly busy = input(false);
   readonly remove = output<string>();
+  /** What the server accepts, for the reader controls. */
+  readonly limits = input<GeneratorsResponse | null>(null);
+  /** Readers with a delete in flight. */
+  readonly busyReaders = input<string[]>([]);
+  readonly addReaders = output<AddReaders>();
+  readonly removeReader = output<string>();
+
+  protected readonly adding = signal(false);
+  protected readonly addCount = signal(1);
+  protected readonly addNode = signal('');
+  protected readonly addProvider = signal('auto');
+
+  private readonly readerRequest = computed<ReaderRequest>(() => ({
+    count: this.addCount(),
+    node: this.addNode().trim(),
+    provider: this.addProvider(),
+  }));
+
+  protected readonly addError = computed(() =>
+    validateReaders(this.readerRequest(), this.limits()),
+  );
+
+  protected readonly hasFlows = computed(
+    () => !!(this.generator().video || this.generator().audio),
+  );
+
+  protected readerState(reader: GeneratorReader) {
+    return readerState(reader);
+  }
+
+  protected readerTip(reader: GeneratorReader): string {
+    const phase = reader.phase ?? 'no phase yet';
+    const flows = (reader.flows ?? []).join(', ');
+    return [reader.reachable?.message ? `${phase}: ${reader.reachable.message}` : phase, flows]
+      .filter(Boolean)
+      .join(' | ');
+  }
+
+  protected value(event: Event): string {
+    return (event.target as HTMLInputElement | HTMLSelectElement).value;
+  }
+
+  protected submitReaders(): void {
+    this.addReaders.emit({ generator: this.generator().name, request: this.readerRequest() });
+    this.adding.set(false);
+  }
 
   protected readonly state = computed(() => generatorState(this.generator()));
 
@@ -80,7 +209,7 @@ export class GeneratorRow {
       parts.push(
         [video.pattern, `${video.frameWidth}x${video.frameHeight}`, video.grainRate]
           .filter(Boolean)
-          .join(' · '),
+          .join(' - '),
       );
     }
     if (generator.audio) {
