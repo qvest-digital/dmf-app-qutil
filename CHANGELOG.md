@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.51](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.50...v1.0.0-rc.51) (2026-10-19)
+
+
+### Features
+
+* **generators:** book several copies and pin to a node by name ([#201](https://github.com/qvest-digital/dmf-app-qutil/issues/201)) ([f30bc99](https://github.com/qvest-digital/dmf-app-qutil/commit/f30bc991c990f52cfc553154c3538e6c8bba55c8))
+
+
+### Miscellaneous
+
+* **deps:** bump fast-uri from 3.1.5 to 3.1.7 in /ui ([#174](https://github.com/qvest-digital/dmf-app-qutil/issues/174)) ([abc9dac](https://github.com/qvest-digital/dmf-app-qutil/commit/abc9dac5b0a3465c7c3d9fef6acc239abc1f6262))
+
 ## [1.0.0-rc.50](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.49...v1.0.0-rc.50) (2026-10-02)
 
 
