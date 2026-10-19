@@ -29,6 +29,7 @@ function response(over: Partial<GeneratorsResponse> = {}): GeneratorsResponse {
     className: 'mxl-writer',
     enabled: true,
     maxCopies: 16,
+    providers: ['auto', 'tcp'],
     ttls: ['1h', 'none'],
     patterns: ['smpte'],
     animated: [],
@@ -165,6 +166,127 @@ describe('GeneratorsPage', () => {
   it('names the node a generator was pinned to', async () => {
     await load(response({ generators: [generator({ node: 'worker-3' })] }));
     expect(text()).toContain('on worker-3');
+  });
+
+  it('lists the readers of a generator under it, with where they read', async () => {
+    await load(
+      response({
+        generators: [
+          generator({
+            readers: [
+              {
+                name: 'generator-bars-1-7f3a-r0001',
+                node: 'worker-7',
+                provider: 'tcp',
+                phase: 'Bound',
+                ready: false,
+                reachable: { type: 'Reachable', status: 'False', reason: 'WorkloadProgressing' },
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(text()).toContain('generator-bars-1-7f3a-r0001');
+    expect(text()).toContain('on worker-7');
+    expect(text()).toContain('tcp');
+    // Not ready means a flow is not delivering, and the reason says so.
+    expect(text()).toContain('WorkloadProgressing');
+  });
+
+  it('adds readers to a booked generator and shows them before the next poll', async () => {
+    await load(response({ generators: [generator()] }));
+    const addButton = () =>
+      [...rows()[0].querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Add readers'),
+      ) as HTMLButtonElement;
+    addButton().click();
+    fixture.detectChanges();
+    const node = rows()[0].querySelector('input[aria-label="Reader node"]') as HTMLInputElement;
+    node.value = 'worker-7';
+    node.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    (
+      [...rows()[0].querySelectorAll('button')].find(
+        (b) => b.textContent?.trim() === 'Add',
+      ) as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    const req = http.expectOne(
+      (r) => r.method === 'POST' && r.url === '/api/generators/generator-bars-1-7f3a/readers',
+    );
+    expect(req.request.body).toEqual({ count: 1, node: 'worker-7', provider: 'auto' });
+    req.flush({
+      readers: [{ name: 'generator-bars-1-7f3a-r00aa', node: 'worker-7', provider: 'auto' }],
+      error: null,
+    });
+    fixture.detectChanges();
+    expect(text()).toContain('generator-bars-1-7f3a-r00aa');
+  });
+
+  it('deletes the reader whose button was pressed, not its generator', async () => {
+    await load(
+      response({
+        generators: [generator({ readers: [{ name: 'generator-bars-1-7f3a-r0001' }] })],
+      }),
+    );
+    (rows()[0].querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne(
+        (r) => r.method === 'DELETE' && r.url === '/api/readers/generator-bars-1-7f3a-r0001',
+      )
+      .flush({ deleted: 'generator-bars-1-7f3a-r0001' });
+  });
+
+  it('calls a serving reader delivering only on its own word', async () => {
+    const reader = { name: 'generator-bars-1-7f3a-r0001', phase: 'Bound', ready: true };
+    await load(
+      response({
+        generators: [
+          generator({
+            readers: [
+              { ...reader, delivering: true },
+              { ...reader, name: 'generator-bars-1-7f3a-r0002', delivering: false },
+              { ...reader, name: 'generator-bars-1-7f3a-r0003', delivering: null },
+            ],
+          }),
+        ],
+      }),
+    );
+    const states = Array.from(
+      fixture.nativeElement.querySelectorAll('.gen-reader .gen-reader-meta'),
+    ).map((el) => (el as HTMLElement).textContent ?? '');
+    expect(states[0]).toContain('delivering');
+    expect(states[1]).toContain('not delivering');
+    // Ready means serving; without an answer from the reader it is not called delivering.
+    expect(states[2]).toContain('serving');
+    expect(fixture.nativeElement.querySelectorAll('.gen-reader .dot.bad')).toHaveLength(1);
+  });
+
+  it('lists readers whose generator is gone, so they can still be released', async () => {
+    await load(response({ orphanReaders: [{ name: 'generator-gone-0001-r0001' }] }));
+    expect(text()).toContain('Readers without a generator');
+    (fixture.nativeElement.querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE' && r.url === '/api/readers/generator-gone-0001-r0001')
+      .flush({ deleted: 'generator-gone-0001-r0001' });
+  });
+
+  it('says which readers a generator delete left behind', async () => {
+    await load(response({ generators: [generator()] }));
+    (rows()[0].querySelector('.row .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE' && r.url === '/api/generators/generator-bars-1-7f3a')
+      .flush({
+        deleted: 'generator-bars-1-7f3a',
+        error: 'readers left behind: generator-bars-1-7f3a-r0001: apiserver said no',
+      });
+    fixture.detectChanges();
+    expect(text()).toContain('readers left behind');
   });
 
   it('offers no form where booking is switched off', async () => {

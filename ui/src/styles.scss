@@ -896,6 +896,29 @@ main {
 .gen-actions .gen-input {
   flex: 1;
 }
+/* A reader under the generator it reads: one line, so a generator with several
+   stays a row rather than becoming a card of its own. */
+.gen-reader {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.gen-reader-name {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-weight: 700;
+}
+.gen-reader-meta {
+  opacity: 0.7;
+}
+.gen-reader-add {
+  margin-top: 8px;
+}
+.gen-actions .gen-input.gen-count {
+  flex: 0 0 4.5em;
+}
 
 footer {
   padding: 12px 28px;
