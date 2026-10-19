@@ -103,6 +103,13 @@ import { validateGenerator } from './generator-validation';
           </select>
         </div>
 
+        @if (heavy(); as memory) {
+          <div class="gen-hint">
+            Above 1080p or 60 frames a second the test source may fall behind its rate on most
+            nodes. The grain ring takes about {{ memory }}, which the booking reserves.
+          </div>
+        }
+
         <div class="gen-field">
           <label class="gen-label" for="gen-overlay">Overlay text</label>
           <input
@@ -377,6 +384,22 @@ export class GeneratorForm {
   protected readonly submittable = computed(
     () => !this.busy() && !validateGenerator(this.request(), this.limits()),
   );
+
+  /**
+   * The ring a heavy choice reserves, for the hint, or '' for a light one. The
+   * server sizes the booking the same way: 128 bytes per 48 pixels a row, grain
+   * rate x domain history grains.
+   */
+  protected readonly heavy = computed(() => {
+    const video = this.request().video;
+    const rate = video.grainRate.numerator / video.grainRate.denominator;
+    if (!this.videoOn() || (video.frameWidth <= 1920 && rate <= 61)) return '';
+    const history = this.limits()?.historySeconds ?? 2;
+    const grains = history > 0 ? Math.ceil(rate * history) : 10;
+    const bytes = Math.ceil(video.frameWidth / 48) * 128 * video.frameHeight * grains;
+    const gib = bytes / 2 ** 30;
+    return gib >= 1 ? `${gib.toFixed(1)} GiB` : `${Math.round(bytes / 2 ** 20)} MiB`;
+  });
 
   protected animated(pattern: string): boolean {
     return (this.limits()?.animated ?? []).includes(pattern);
