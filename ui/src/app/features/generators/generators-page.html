@@ -2,6 +2,7 @@
   <aside class="panel">
     @if (enabled()) {
       <mv-generator-form [limits]="limits()" (created)="onCreated($event)" />
+      <mv-reader-form [limits]="limits()" (created)="onReadersCreated($event)" />
     } @else {
       <div class="gwbar">
         <h2>Book a generator</h2>
@@ -45,27 +46,31 @@
           </div>
         }
       </div>
+      @if (flowReaders().length) {
+        <h2>
+          Readers of chosen flows <span class="of-count">({{ flowReaders().length }})</span>
+        </h2>
+        <div class="flow">
+          @for (reader of flowReaders(); track reader.name) {
+            <mv-reader-row
+              [reader]="reader"
+              [busy]="isDeleting(reader.name)"
+              [showFlows]="true"
+              (remove)="removeReader($event)"
+            />
+          }
+        </div>
+      }
       @if (orphans().length) {
         <h2>Readers without a generator</h2>
-        <div class="flows">
+        <div class="flow">
           @for (reader of orphans(); track reader.name) {
-            <div class="flow">
-              <div class="gen-reader">
-                <span class="dot"></span>
-                <span class="gen-reader-name">{{ reader.name }}</span>
-                <span class="gen-reader-meta">{{
-                  reader.node ? 'on ' + reader.node : 'any node'
-                }}</span>
-                <button
-                  class="btn kill"
-                  type="button"
-                  [disabled]="isDeleting(reader.name) || reader.deleting"
-                  (click)="removeReader(reader.name)"
-                >
-                  {{ isDeleting(reader.name) ? 'Deleting...' : 'Delete' }}
-                </button>
-              </div>
-            </div>
+            <mv-reader-row
+              [reader]="reader"
+              [busy]="isDeleting(reader.name)"
+              [showFlows]="true"
+              (remove)="removeReader($event)"
+            />
           }
         </div>
       }

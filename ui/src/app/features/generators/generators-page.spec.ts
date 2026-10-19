@@ -57,6 +57,13 @@ describe('GeneratorsPage', () => {
     return (fixture.nativeElement as HTMLElement).textContent ?? '';
   }
 
+  const FLOWS = {
+    flows: [
+      { id: 'd4d00000-0000-0000-0000-000000000001', label: 'MXL-1', format: 'video' },
+      { id: 'aea7b9e9-1e5b-4333-9ac4-8689053a77de', label: 'SRT audio', format: 'audio' },
+    ],
+  };
+
   async function load(body: GeneratorsResponse): Promise<void> {
     TestBed.configureTestingModule({
       imports: [GeneratorsPage],
@@ -74,12 +81,14 @@ describe('GeneratorsPage', () => {
       .forEach((req) =>
         req.flush({ videoFlowId: 'aaaaaaaa-1111-4222-8333-444455556666', audioFlowId: 'b' }),
       );
+    // The reader form's flow picker.
+    http.match((req) => req.url === '/api/operator-flows').forEach((req) => req.flush(FLOWS));
     fixture.detectChanges();
   }
 
   afterEach(() => {
     fixture.destroy();
-    http.match(() => true).forEach((req) => req.flush({}));
+    http.match(() => true).forEach((req) => req.cancelled || req.flush({}));
     http.verify();
   });
 
@@ -287,6 +296,75 @@ describe('GeneratorsPage', () => {
       });
     fixture.detectChanges();
     expect(text()).toContain('readers left behind');
+  });
+
+  it('books a reader of the flows chosen in the picker', async () => {
+    await load(response());
+    const picker = () =>
+      Array.from(fixture.nativeElement.querySelectorAll('.rd-flow')) as HTMLElement[];
+    expect(picker().map((el) => el.textContent)).toEqual([
+      expect.stringContaining('MXL-1'),
+      expect.stringContaining('SRT audio'),
+    ]);
+    const book = () =>
+      [...fixture.nativeElement.querySelectorAll('mv-reader-form button')].find((b) =>
+        (b as HTMLButtonElement).textContent?.includes('Book reader'),
+      ) as HTMLButtonElement;
+    // Nothing chosen yet: nothing to read.
+    expect(book().disabled).toBe(true);
+
+    const box = picker()[1].querySelector('input') as HTMLInputElement;
+    box.checked = true;
+    box.dispatchEvent(new Event('change'));
+    const node = fixture.nativeElement.querySelector('#rd-node') as HTMLInputElement;
+    node.value = 'worker-9';
+    node.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    book().click();
+
+    const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/readers');
+    expect(req.request.body).toEqual({
+      label: '',
+      flows: ['aea7b9e9-1e5b-4333-9ac4-8689053a77de'],
+      count: 1,
+      node: 'worker-9',
+      provider: 'auto',
+      ttl: '1h',
+    });
+    req.flush({
+      readers: [{ name: 'generator-r-flow-00aa', flows: ['aea7b9e9-1e5b-4333-9ac4-8689053a77de'] }],
+    });
+    fixture.detectChanges();
+    // Shown before the next poll, with the flows it reads.
+    expect(text()).toContain('Readers of chosen flows');
+    expect(text()).toContain('generator-r-flow-00aa');
+  });
+
+  it('narrows the picker by label, group or id', async () => {
+    await load(response());
+    const filter = fixture.nativeElement.querySelector('#rd-filter') as HTMLInputElement;
+    filter.value = 'srt';
+    filter.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const shown = fixture.nativeElement.querySelectorAll('.rd-flow');
+    expect(shown).toHaveLength(1);
+    expect((shown[0] as HTMLElement).textContent).toContain('SRT audio');
+  });
+
+  it('lists readers of chosen flows apart and releases them one by one', async () => {
+    await load(
+      response({
+        readers: [
+          { name: 'generator-r-replica-0001', flows: ['d4d00000-0000-0000-0000-000000000001'] },
+        ],
+      }),
+    );
+    expect(text()).toContain('d4d00000-0000-0000-0000-000000000001');
+    (fixture.nativeElement.querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE' && r.url === '/api/readers/generator-r-replica-0001')
+      .flush({ deleted: 'generator-r-replica-0001' });
   });
 
   it('offers no form where booking is switched off', async () => {

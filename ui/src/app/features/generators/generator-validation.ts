@@ -1,4 +1,9 @@
-import { GeneratorRequest, GeneratorsResponse, ReaderRequest } from '../../core/api/models';
+import {
+  FlowReaderRequest,
+  GeneratorRequest,
+  GeneratorsResponse,
+  ReaderRequest,
+} from '../../core/api/models';
 
 /**
  * The form's copy of the aggregator's rules.
@@ -58,6 +63,28 @@ export function validateReaders(
     return `provider must be one of ${list(providers)}`;
   }
   return null;
+}
+
+const UUID_LOWER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The first thing wrong with a request for readers of chosen flows, or null. */
+export function validateFlowReaders(
+  request: FlowReaderRequest,
+  limits: GeneratorsResponse | null,
+): string | null {
+  const max = limits?.maxCopies ?? 16;
+  if (request.flows.length < 1 || request.flows.length > max) {
+    return `choose between 1 and ${max} flows`;
+  }
+  if (!request.flows.every((id) => UUID_LOWER_RE.test(id))) {
+    return 'every flow id must be a full lowercase UUID';
+  }
+  if (new Set(request.flows).size !== request.flows.length) return 'a flow is chosen twice';
+  const ttls = limits?.ttls ?? [];
+  if (ttls.length && !ttls.includes(request.ttl)) {
+    return `expiry must be one of ${list(ttls)}`;
+  }
+  return validateReaders(request, limits);
 }
 
 /** The first thing wrong with a submission, or null. */

@@ -4,6 +4,8 @@ import { poll } from '../../core/api/poll';
 import { Generator, GeneratorReader } from '../../core/api/models';
 import { GeneratorForm } from './generator-form';
 import { AddReaders, GeneratorRow } from './generator-row';
+import { ReaderForm } from './reader-form';
+import { ReaderRow } from './reader-row';
 
 /**
  * Booking writers on demand: the form on the left, what it booked on the right.
@@ -16,7 +18,7 @@ import { AddReaders, GeneratorRow } from './generator-row';
 @Component({
   selector: 'mv-generators-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [GeneratorForm, GeneratorRow],
+  imports: [GeneratorForm, GeneratorRow, ReaderForm, ReaderRow],
   templateUrl: './generators-page.html',
 })
 export class GeneratorsPage {
@@ -45,6 +47,19 @@ export class GeneratorsPage {
       return { ...g, readers: [...(g.readers ?? []), ...added.filter((r) => !known.has(r.name))] };
     });
   });
+
+  /** Readers of chosen flows, with anything booked since the last poll in front. */
+  protected readonly flowReaders = computed(() => {
+    const polled = this.data()?.readers ?? [];
+    const names = new Set(polled.map((r) => r.name));
+    return [...this.freshFlowReaders().filter((r) => !names.has(r.name)), ...polled];
+  });
+
+  private readonly freshFlowReaders = signal<GeneratorReader[]>([]);
+
+  protected onReadersCreated(readers: GeneratorReader[]): void {
+    this.freshFlowReaders.update((list) => [...readers, ...list]);
+  }
 
   /** Readers whose generator is gone: listed so they can still be released. */
   protected readonly orphans = computed(() => this.data()?.orphanReaders ?? []);
@@ -90,6 +105,7 @@ export class GeneratorsPage {
     this.api.deleteReader(name).subscribe({
       next: () => {
         this.deleting.update((list) => list.filter((n) => n !== name));
+        this.freshFlowReaders.update((list) => list.filter((r) => r.name !== name));
         this.freshReaders.update((all) =>
           Object.fromEntries(
             Object.entries(all).map(([g, list]) => [g, list.filter((r) => r.name !== name)]),

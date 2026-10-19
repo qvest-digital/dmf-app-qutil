@@ -286,6 +286,15 @@ export interface ReaderRequest {
   provider: string;
 }
 
+/** Readers of flows chosen by id, whoever writes them. */
+export interface FlowReaderRequest extends ReaderRequest {
+  /** Names the reader claims. */
+  label: string;
+  flows: string[];
+  /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
+  ttl: string;
+}
+
 export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
@@ -394,6 +403,8 @@ export interface GeneratorsResponse {
   grainRates: { numerator: number; denominator: number }[];
   sampleRates: number[];
   generators: Generator[];
+  /** Readers of chosen flows, which belong to no generator. */
+  readers?: GeneratorReader[];
   /** Readers whose generator is gone, so they can still be released. */
   orphanReaders?: GeneratorReader[];
   error?: string | null;
