@@ -6,6 +6,7 @@ import {
   AudioSnapshot,
   FlowIds,
   FlowsResponse,
+  FlowReaderRequest,
   GeneratorBatch,
   GeneratorRequest,
   ReaderBatch,
@@ -98,6 +99,11 @@ export class MetricsApi {
       `/api/generators/${encodeURIComponent(generator)}/readers`,
       request,
     );
+  }
+
+  /** Book readers of flows chosen by id. The aggregator refuses a flow it cannot find. */
+  createFlowReaders(request: FlowReaderRequest): Observable<ReaderBatch> {
+    return this.http.post<ReaderBatch>('/api/readers', request);
   }
 
   /** Release one reader. The aggregator refuses any claim that is not one it booked. */

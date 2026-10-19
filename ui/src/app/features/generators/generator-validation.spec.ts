@@ -1,5 +1,5 @@
 import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
-import { validateGenerator, validateReaders } from './generator-validation';
+import { validateFlowReaders, validateGenerator, validateReaders } from './generator-validation';
 
 const LIMITS: GeneratorsResponse = {
   namespace: 'production-demo-app',
@@ -211,6 +211,23 @@ describe('validateGenerator', () => {
       'reader count must be between 1 and 16',
     );
     expect(validateReaders({ count: 2, node: 'worker-3', provider: 'tcp' }, LIMITS)).toBeNull();
+  });
+
+  it('mirrors the server on a request for readers of chosen flows', () => {
+    const base = { label: '', count: 1, node: '', provider: 'auto', ttl: '1h' };
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID] }, LIMITS)).toBeNull();
+    expect(validateFlowReaders({ ...base, flows: [] }, LIMITS)).toBe(
+      'choose between 1 and 16 flows',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID.toUpperCase()] }, LIMITS)).toBe(
+      'every flow id must be a full lowercase UUID',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID, VIDEO_ID] }, LIMITS)).toBe(
+      'a flow is chosen twice',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID], count: 0 }, LIMITS)).toBe(
+      'reader count must be between 1 and 16',
+    );
   });
 
   /** Before the first poll there is nothing to check a value against, and a form

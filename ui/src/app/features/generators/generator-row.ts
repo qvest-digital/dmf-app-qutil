@@ -1,11 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
-import {
-  Generator,
-  GeneratorReader,
-  GeneratorsResponse,
-  ReaderRequest,
-} from '../../core/api/models';
-import { generatorState, readerState } from './generator-state';
+import { Generator, GeneratorsResponse, ReaderRequest } from '../../core/api/models';
+import { generatorState } from './generator-state';
+import { ReaderRow } from './reader-row';
 import { validateReaders } from './generator-validation';
 
 /** A reader request for the generator it names, as the row hands it up. */
@@ -21,6 +17,7 @@ export interface AddReaders {
 @Component({
   selector: 'mv-generator-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReaderRow],
   template: `
     <div class="flow">
       <div class="row">
@@ -70,22 +67,11 @@ export interface AddReaders {
         }
       </div>
       @for (reader of generator().readers ?? []; track reader.name) {
-        <div class="gen-reader">
-          <span class="dot" [class]="readerState(reader).cls" [title]="readerTip(reader)"></span>
-          <span class="gen-reader-name">{{ reader.name }}</span>
-          <span class="gen-reader-meta">
-            {{ reader.node ? 'on ' + reader.node : 'any node' }} | {{ reader.provider ?? 'auto' }} |
-            {{ readerState(reader).label }}
-          </span>
-          <button
-            class="btn kill"
-            type="button"
-            [disabled]="busyReaders().includes(reader.name) || reader.deleting"
-            (click)="removeReader.emit(reader.name)"
-          >
-            {{ busyReaders().includes(reader.name) ? 'Deleting...' : 'Delete' }}
-          </button>
-        </div>
+        <mv-reader-row
+          [reader]="reader"
+          [busy]="busyReaders().includes(reader.name)"
+          (remove)="removeReader.emit($event)"
+        />
       }
       @if (adding()) {
         <div class="gen-actions gen-reader-add">
@@ -170,18 +156,6 @@ export class GeneratorRow {
   protected readonly hasFlows = computed(
     () => !!(this.generator().video || this.generator().audio),
   );
-
-  protected readerState(reader: GeneratorReader) {
-    return readerState(reader);
-  }
-
-  protected readerTip(reader: GeneratorReader): string {
-    const phase = reader.phase ?? 'no phase yet';
-    const flows = (reader.flows ?? []).join(', ');
-    return [reader.reachable?.message ? `${phase}: ${reader.reachable.message}` : phase, flows]
-      .filter(Boolean)
-      .join(' | ');
-  }
 
   protected value(event: Event): string {
     return (event.target as HTMLInputElement | HTMLSelectElement).value;

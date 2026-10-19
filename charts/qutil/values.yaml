@@ -234,9 +234,9 @@ writers:
 
 # Booking writers from the UI: the operator picks a videotestsrc pattern, the
 # aggregator creates a MediaFunctionClaim of writers.className, and the page
-# lists and deletes what it booked, along with readers of each generator's flows
-# on a chosen node. The four writers above stay where they are; this is for the
-# flows a demo wants without a release.
+# lists and deletes what it booked, along with readers that hold a generator's
+# flows, or any flows chosen by id, open on a chosen node. The four writers above
+# stay where they are; this is for the flows a demo wants without a release.
 #
 # Off by default, and deliberately: enabling it grants the aggregator create and
 # delete on claims in the production namespace, and nothing in front of this API

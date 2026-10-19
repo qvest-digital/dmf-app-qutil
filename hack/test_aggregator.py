@@ -825,7 +825,7 @@ class GeneratorBooking(unittest.TestCase):
         self.assertEqual(self.posted, [])
 
     def test_the_listing_no_longer_reports_a_cap(self):
-        with mock.patch.object(agg, "_gen_list", lambda: ([], [], None)):
+        with mock.patch.object(agg, "_gen_list", lambda: ([], [], [], None)):
             res = agg.generators()
         self.assertNotIn("max", res)
         self.assertEqual(res["maxCopies"], agg._GEN_MAX_COPIES)
@@ -990,7 +990,7 @@ class GeneratorReaders(unittest.TestCase):
     def test_the_listing_nests_readers_under_their_generator(self):
         _, res = agg.reader_create(self.GEN, {"count": 1})
         self.claims[res["readers"][0]["name"]] = self.posted[0]
-        rows, orphans, err = agg._gen_list()
+        rows, _, orphans, err = agg._gen_list()
         self.assertIsNone(err)
         self.assertEqual([r["name"] for r in rows[0]["readers"]], [res["readers"][0]["name"]])
         self.assertEqual(orphans, [])
@@ -999,7 +999,8 @@ class GeneratorReaders(unittest.TestCase):
         _, res = agg.reader_create(self.GEN, {"count": 1})
         self.claims[res["readers"][0]["name"]] = self.posted[0]
         del self.claims[self.GEN]
-        rows, orphans, _ = agg._gen_list()
+        rows, standalone, orphans, _ = agg._gen_list()
+        self.assertEqual(standalone, [])
         self.assertEqual(rows, [])
         self.assertEqual([r["name"] for r in orphans], [res["readers"][0]["name"]])
 
@@ -1061,6 +1062,115 @@ class GeneratorReaders(unittest.TestCase):
             code, out = agg.generator_delete(self.GEN)
         self.assertEqual(code, 200)
         self.assertIn(reader, out["error"])
+
+
+class FlowReaders(unittest.TestCase):
+    """Readers of flows chosen by id, whoever writes them: a chart writer, an
+    SRT ingest or a generator. They belong to no generator, so they carry no
+    generator label, expire on their own and are listed on their own."""
+
+    A = "d4d00000-0000-0000-0000-000000000001"
+    B = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.posted = []
+        self.claims = {}
+        self.known = {self.A: "claim writer-mxl-1", self.B: "a flow the operator already knows"}
+
+        def k8s_json(path, method="GET", body=None):
+            self.posted.append(body)
+            return 201, body
+
+        def safe_k8s(path):
+            if "labelSelector=" in path:
+                selector = urllib.parse.unquote(path.split("labelSelector=", 1)[1])
+                want = dict(kv.split("=", 1) for kv in selector.split(","))
+                return {"items": [c for c in self.claims.values()
+                                  if all((c["metadata"].get("labels") or {}).get(k) == v
+                                         for k, v in want.items())]}
+            return self.claims.get(path.rsplit("/", 1)[-1]) or {"_error": "404"}
+
+        patches = [
+            mock.patch.object(agg, "GEN_ENABLED", True),
+            mock.patch.object(agg, "_flow_ids_in_use", lambda: (self.known, None)),
+            mock.patch.object(agg, "k8s_json", k8s_json),
+            mock.patch.object(agg, "safe_k8s", safe_k8s),
+            mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_reads_exactly_the_chosen_flows(self):
+        code, res = agg.flow_readers_create({"flows": [self.A, self.B], "count": 1})
+        self.assertEqual(code, 201)
+        self.assertEqual(self.posted[0]["spec"]["parameters"]["flows"], [self.A, self.B])
+        self.assertNotIn(agg._READER_LABEL_GENERATOR, self.posted[0]["metadata"]["labels"])
+
+    def test_names_fit_a_release_and_the_delete_guard(self):
+        _, res = agg.flow_readers_create({"flows": [self.A], "count": 2,
+                                          "label": "a very long label for the readers"})
+        names = [b["metadata"]["name"] for b in self.posted]
+        self.assertEqual(len(set(names)), 2)
+        for name in names:
+            self.assertTrue(name.startswith(agg.GEN_PREFIX + "r-"))
+            self.assertLessEqual(len(name), 53)
+
+    def test_refuses_a_name_helm_would_not_take_as_a_release(self):
+        with mock.patch.object(agg, "GEN_PREFIX", "p" * 30 + "-"):
+            code, res = agg.flow_readers_create({"flows": [self.A], "count": 1,
+                                                 "label": "x" * 20})
+        self.assertEqual(code, 502)
+        self.assertIn("does not make a usable reader name", res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_refuses_a_label_or_expiry_that_is_not_text(self):
+        for body, message in (({"label": 5}, "label must be text"),
+                              ({"ttl": ["1h"]}, "expiry must be one of 1h, 8h, 24h, none")):
+            code, res = agg.flow_readers_create(dict({"flows": [self.A], "count": 1}, **body))
+            self.assertEqual((code, res["error"]), (400, message))
+
+    def test_expires_on_its_own(self):
+        agg.flow_readers_create({"flows": [self.A], "count": 1, "ttl": "8h"})
+        self.assertIn("end", self.posted[0]["spec"]["booking"]["window"])
+        self.posted.clear()
+        agg.flow_readers_create({"flows": [self.A], "count": 1, "ttl": "none"})
+        self.assertNotIn("window", self.posted[0]["spec"]["booking"])
+
+    def test_refuses_a_flow_the_cluster_does_not_know(self):
+        unknown = "11111111-1111-4111-8111-111111111111"
+        code, res = agg.flow_readers_create({"flows": [self.A, unknown], "count": 1})
+        self.assertEqual(code, 404)
+        self.assertIn(unknown, res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_fails_closed_when_the_flows_cannot_be_listed(self):
+        with mock.patch.object(agg, "_flow_ids_in_use", lambda: (None, "forbidden")):
+            code, _ = agg.flow_readers_create({"flows": [self.A], "count": 1})
+        self.assertEqual(code, 503)
+        self.assertEqual(self.posted, [])
+
+    def test_refuses_what_is_not_a_set_of_flow_ids(self):
+        for flows, message in (([], "choose between 1 and 16 flows"),
+                               ([self.A.upper()], "every flow id must be a full lowercase UUID"),
+                               ([self.A, self.A], "a flow is chosen twice")):
+            code, res = agg.flow_readers_create({"flows": flows, "count": 1})
+            self.assertEqual((code, res["error"]), (400, message))
+        self.assertEqual(self.posted, [])
+
+    def test_listed_apart_from_generators_and_orphans(self):
+        _, res = agg.flow_readers_create({"flows": [self.A], "count": 1})
+        self.claims[res["readers"][0]["name"]] = self.posted[0]
+        rows, standalone, orphans, err = agg._gen_list()
+        self.assertEqual((rows, orphans, err), ([], [], None))
+        self.assertEqual([r["name"] for r in standalone], [res["readers"][0]["name"]])
+
+    def test_released_through_the_reader_delete(self):
+        _, res = agg.flow_readers_create({"flows": [self.A], "count": 1})
+        name = res["readers"][0]["name"]
+        self.claims[name] = self.posted[0]
+        with mock.patch.object(agg, "k8s_json", lambda *a, **k: (200, {})):
+            self.assertEqual(agg.reader_delete(name)[0], 200)
 
 
 class ReaderDelivering(unittest.TestCase):

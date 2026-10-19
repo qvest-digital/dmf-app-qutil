@@ -27,6 +27,7 @@
 #                                    readers of each where asked
 #   DELETE /api/generators/<name>  -> release one, and the readers of it
 #   POST   /api/generators/<name>/readers -> book readers of one generator
+#   POST   /api/readers            -> book readers of any flows by id
 #   DELETE /api/readers/<name>     -> release one reader
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
@@ -952,15 +953,19 @@ except ValueError:
 _GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
 _GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
 _GEN_COMPONENT = "generator"
-# Readers are claims of READER_CLASS that hold a generator's flows open on a
-# node, which is what makes mxl-k8s mirror them there. They carry the
-# generator's name, so they are listed under it and released with it.
+# Readers are claims of READER_CLASS that hold flows open on a node, which is
+# what makes mxl-k8s mirror them there. A reader of a generator carries the
+# generator's name, so it is listed under it and released with it; a reader of
+# flows chosen by id carries none and lives until its own expiry.
 READER_CLASS = os.environ.get("READER_CLASS", "mxl-reader")
 _READER_COMPONENT = "reader"
 _READER_LABEL_GENERATOR = "qutil.qvest-digital.com/generator"
 # What the receiver CRD accepts as a libmxl-fabrics provider.
 _READER_PROVIDERS = ("auto", "tcp", "verbs", "efa", "shm")
 _GEN_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+# The provisioner names the Helm release after the claim, and Helm refuses a
+# release name over 53 characters.
+_GEN_MAX_NAME = 53
 _GEN_MAX_BODY = 8192
 # videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
 # pod Ready and producing nothing, so the set is closed here.
@@ -1736,6 +1741,8 @@ def _validate_generator(req):
     """
     if not isinstance(req, dict):
         return "body must be a JSON object of at most 8 KiB"
+    if not isinstance(req.get("label", ""), str):
+        return "label must be text"
 
     video = req.get("video") or {}
     audio = req.get("audio") or {}
@@ -1744,7 +1751,8 @@ def _validate_generator(req):
     if not video_on and not audio_on:
         return "enable at least one of video or audio"
 
-    if req.get("ttl", "1h") not in _GEN_TTLS:
+    ttl = req.get("ttl", "1h")
+    if not isinstance(ttl, str) or ttl not in _GEN_TTLS:
         return "expiry must be one of " + ", ".join(_GEN_TTLS)
 
     count = _gen_int(req, "count", 1)
@@ -1805,6 +1813,15 @@ def _validate_generator(req):
     return None
 
 
+def _ttl_window(req):
+    """The booking window an expiry choice asks for, or None for no expiry."""
+    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
+    if not seconds:
+        return None
+    end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
 def _gen_claim(name, req):
     """The claim to POST. Deliberately shaped like the blocks
     charts/qutil/templates/claims-writers.yaml renders, so the two can be read
@@ -1858,10 +1875,9 @@ def _gen_claim(name, req):
         "booking": {"jobRef": GEN_JOB_REF},
         "parameters": parameters,
     }
-    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
-    if seconds:
-        end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        spec["booking"]["window"] = {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    window = _ttl_window(req)
+    if window:
+        spec["booking"]["window"] = window
 
     return {
         "apiVersion": "dmf.qvest-digital.com/v1alpha1",
@@ -1893,29 +1909,27 @@ def _is_reader(claim):
             and labels.get(_GEN_LABEL_COMPONENT) == _READER_COMPONENT)
 
 
-def _reader_claim(name, generator, req):
-    """A claim of READER_CLASS reading every flow the generator produces. It
-    expires with the generator: a reader outliving its flows reads nothing."""
-    spec = generator.get("spec") or {}
-    parameters = {"flows": _claim_flow_ids(generator),
+def _reader_claim(name, flows, req, window=None, generator=None):
+    """A claim of READER_CLASS reading flows. A reader of a generator carries
+    its name and expires with it: a reader outliving its flows reads nothing."""
+    parameters = {"flows": flows,
                   "receiver": {"provider": req.get("provider", "auto")}}
     node = (req.get("node") or "").strip()
     if node:
         parameters["affinity"] = _node_affinity(node)
     booking = {"jobRef": GEN_JOB_REF}
-    window = (spec.get("booking") or {}).get("window")
     if window:
         booking["window"] = window
-    gen_name = (generator.get("metadata") or {}).get("name")
+    labels = {_GEN_LABEL_MANAGED: GEN_MANAGER, _GEN_LABEL_COMPONENT: _READER_COMPONENT}
+    if generator:
+        labels[_READER_LABEL_GENERATOR] = generator
     return {
         "apiVersion": "dmf.qvest-digital.com/v1alpha1",
         "kind": "MediaFunctionClaim",
         "metadata": {
             "name": name,
             "namespace": CLAIM_NS,
-            "labels": {_GEN_LABEL_MANAGED: GEN_MANAGER,
-                       _GEN_LABEL_COMPONENT: _READER_COMPONENT,
-                       _READER_LABEL_GENERATOR: gen_name},
+            "labels": labels,
         },
         "spec": {"className": READER_CLASS,
                  "lifecycle": {"reprovisionOnDrift": False},
@@ -2037,13 +2051,13 @@ def _page_claims(component, extra=""):
 
 
 def _gen_list():
-    """(generators, orphaned readers, error)."""
+    """(generators, readers of chosen flows, orphaned readers, error)."""
     claims, err = _page_claims(_GEN_COMPONENT)
     if err:
-        return None, [], err
+        return None, [], [], err
     readers, err = _page_claims(_READER_COMPONENT)
     if err:
-        return None, [], err
+        return None, [], [], err
     by_generator = {}
     for claim, delivering in zip(readers, _reader_probe_pool.map(_reader_delivering, readers)):
         row = _reader_row(claim)
@@ -2058,15 +2072,18 @@ def _gen_list():
     # Newest first, so a just-booked generator is at the top of the list it
     # appears in.
     rows.sort(key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
-    # Readers whose generator is gone, from a release that failed half way.
-    # Listed rather than dropped, or nothing on the page could release them.
+    # Readers of chosen flows belong to no generator. Readers whose generator
+    # is gone are from a release that failed half way: listed rather than
+    # dropped, or nothing on the page could release them.
+    standalone = sorted(by_generator.pop(None, []),
+                        key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
     orphans = sorted((r for group in by_generator.values() for r in group),
                      key=lambda r: r["name"] or "")
-    return rows, orphans, None
+    return rows, standalone, orphans, None
 
 
 def generators():
-    rows, orphans, err = _gen_list() if GEN_ENABLED else ([], [], None)
+    rows, standalone, orphans, err = _gen_list() if GEN_ENABLED else ([], [], [], None)
     return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
             "maxCopies": _GEN_MAX_COPIES, "ttls": [t for t in _GEN_TTLS],
             "readerClass": READER_CLASS, "providers": list(_READER_PROVIDERS),
@@ -2074,7 +2091,8 @@ def generators():
             "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
             "grainRates": [{"numerator": n, "denominator": d} for n, d in _GEN_GRAIN_RATES],
             "sampleRates": list(_GEN_SAMPLE_RATES),
-            "generators": rows or [], "orphanReaders": orphans, "error": err}
+            "generators": rows or [], "readers": standalone, "orphanReaders": orphans,
+            "error": err}
 
 
 def generator_flow_ids():
@@ -2094,7 +2112,7 @@ def _gen_book(req):
     pattern = (req.get("video") or {}).get("pattern") or ""
     for attempt in (1, 2):
         name = _gen_name(label, pattern)
-        if not _GEN_NAME_RE.match(name) or len(name) > 63:
+        if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
             return 400, {"error": "that label does not make a usable claim name"}
         code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                              "POST", _gen_claim(name, req))
@@ -2110,17 +2128,23 @@ def _gen_book(req):
 
 
 def _book_readers(generator, req):
-    """POST req["count"] reader claims of generator. (rows, error) where error
-    names the first failure, after which nothing more is booked."""
+    """POST req["count"] reader claims of generator."""
     gen_name = (generator.get("metadata") or {}).get("name") or ""
+    window = ((generator.get("spec") or {}).get("booking") or {}).get("window")
+    return _post_readers(f"{gen_name}-r", _claim_flow_ids(generator), req, window, gen_name)
+
+
+def _post_readers(stem, flows, req, window=None, generator=None):
+    """POST req["count"] reader claims named <stem><4 hex>. (rows, error) where
+    error names the first failure, after which nothing more is booked."""
     rows = []
     for _ in range(_gen_int(req, "count", 1)):
         for attempt in (1, 2):
-            name = f"{gen_name}-r{secrets.token_hex(2)}"
-            if not _GEN_NAME_RE.match(name) or len(name) > 63:
-                return rows, f"{gen_name} does not make a usable reader name"
+            name = f"{stem}{secrets.token_hex(2)}"
+            if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
+                return rows, "that label or prefix does not make a usable reader name"
             code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
-                                 "POST", _reader_claim(name, generator, req))
+                                 "POST", _reader_claim(name, flows, req, window, generator))
             if code in (200, 201):
                 rows.append(_reader_row(res))
                 break
@@ -2151,6 +2175,56 @@ def reader_create(gen_name, req):
         return 409, {"error": f"{gen_name} produces no flow to read"}
 
     rows, err = _book_readers(generator, req)
+    if rows:
+        snapshot_drop("generators")
+    if not rows:
+        return 502, {"error": err}
+    return 201, {"readers": rows,
+                 "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}: {err}" if err else None}
+
+
+_UUID_LOWER_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _validate_flow_readers(req):
+    """The first thing wrong with a request for readers of chosen flows, or
+    None. Every message is mirrored in the UI's generator-validation.ts."""
+    if not isinstance(req, dict):
+        return "body must be a JSON object of at most 8 KiB"
+    if not isinstance(req.get("label", ""), str):
+        return "label must be text"
+    flows = req.get("flows")
+    if not isinstance(flows, list) or not 1 <= len(flows) <= _GEN_MAX_COPIES:
+        return f"choose between 1 and {_GEN_MAX_COPIES} flows"
+    for flow_id in flows:
+        if not isinstance(flow_id, str) or not _UUID_LOWER_RE.match(flow_id):
+            return "every flow id must be a full lowercase UUID"
+    if len(set(flows)) != len(flows):
+        return "a flow is chosen twice"
+    ttl = req.get("ttl", "1h")
+    if not isinstance(ttl, str) or ttl not in _GEN_TTLS:
+        return "expiry must be one of " + ", ".join(_GEN_TTLS)
+    return _validate_readers(req)
+
+
+def flow_readers_create(req):
+    """Book readers of flows chosen by id, whoever writes them."""
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    bad = _validate_flow_readers(req)
+    if bad:
+        return 400, {"error": bad}
+    # A reader of a flow nobody writes waits for ever, so an id must name a
+    # flow the cluster knows or a claim that will write it.
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check the flows: {err}"}
+    for flow_id in req["flows"]:
+        if flow_id not in used:
+            return 404, {"error": f"flow {flow_id} is not known to the cluster"}
+
+    stem = f"{GEN_PREFIX}r-{_gen_slug(req.get('label')) or 'flow'}-"
+    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req))
     if rows:
         snapshot_drop("generators")
     if not rows:
@@ -2604,6 +2678,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
             try:
                 code, res = generator_create(body)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
+        if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/readers":
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+            try:
+                code, res = flow_readers_create(body)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)
