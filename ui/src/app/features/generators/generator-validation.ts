@@ -62,6 +62,9 @@ export function validateReaders(
   if (providers.length && !providers.includes(request.provider)) {
     return `provider must be one of ${list(providers)}`;
   }
+  if (request.checkValues !== undefined && typeof request.checkValues !== 'boolean') {
+    return 'checkValues must be true or false';
+  }
   return null;
 }
 
