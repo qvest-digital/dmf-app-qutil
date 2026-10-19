@@ -1,34 +1,36 @@
 <main class="mv-main">
   <aside class="panel">
-    <h2>RDMA delivery</h2>
-    <div class="agg">
-      <div class="stat">
-        <div class="k">Throughput</div>
-        <div class="v lime">{{ totals()?.mbps | fmt }} <small>Mbit/s</small></div>
-      </div>
-      <div class="stat">
-        <div class="k">Grains / s</div>
-        <div class="v">{{ totals()?.fps | fmt }}</div>
-      </div>
-      <div class="stat">
-        <div class="k">Flows live</div>
-        <div class="v">
-          {{ totals()?.live ?? '-' }}<small>/{{ totals()?.total ?? '-' }}</small>
+    <div class="panel-scroll" tabindex="0" role="region" aria-label="RDMA diagnostics">
+      <h2>RDMA delivery</h2>
+      <div class="agg">
+        <div class="stat">
+          <div class="k">Throughput</div>
+          <div class="v lime">{{ totals()?.mbps | fmt }} <small>Mbit/s</small></div>
+        </div>
+        <div class="stat">
+          <div class="k">Grains / s</div>
+          <div class="v">{{ totals()?.fps | fmt }}</div>
+        </div>
+        <div class="stat">
+          <div class="k">Flows live</div>
+          <div class="v">
+            {{ totals()?.live ?? '-' }}<small>/{{ totals()?.total ?? '-' }}</small>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="gwbar">
-      <h2>Gateways</h2>
-      <mv-gateway-grid [gateways]="gateways()" />
-    </div>
+      <div class="gwbar">
+        <h2>Gateways</h2>
+        <mv-gateway-grid [gateways]="gateways()" />
+      </div>
 
-    <div class="gwbar">
-      <h2>Services</h2>
-      <mv-service-links [services]="services()" />
-    </div>
+      <div class="gwbar">
+        <h2>Services</h2>
+        <mv-service-links [services]="services()" />
+      </div>
 
-    <mv-operator-flow-list [flows]="opFlows()" />
+      <mv-operator-flow-list [flows]="opFlows()" />
+    </div>
   </aside>
 
   <!-- Held open whether or not anything is in it: a preview that creates the
