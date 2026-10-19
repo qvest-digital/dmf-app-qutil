@@ -1,5 +1,12 @@
 import { MonitorResponse, ReaderFlowStatus } from '../../core/api/models';
-import { countsOf, diffEvents, ratePerSecond, since, sparkline } from './monitor-state';
+import {
+  baselineFor,
+  countsOf,
+  diffEvents,
+  ratePerSecond,
+  since,
+  sparkline,
+} from './monitor-state';
 
 function flow(
   over: Partial<ReaderFlowStatus> = {},
@@ -18,6 +25,7 @@ function flow(
       ok: 100,
       too_early: 0,
       too_late: 0,
+      missing: 0,
       invalid: 0,
       incomplete: 0,
       wrong_size: 0,
@@ -81,6 +89,40 @@ describe('monitor state', () => {
     );
     const back = diffEvents(data(flow({ state: 'flow_not_found' })), data(flow()), 2);
     expect(back[0].severity).toBe('ok');
+  });
+
+  it('names the last error only when it explains this rise', () => {
+    const old = diffEvents(
+      data(flow()),
+      data(
+        flow(
+          { lastError: { message: 'flow not found in the domain', secondsAgo: 40 } },
+          { too_late: 1 },
+        ),
+      ),
+      1,
+    );
+    expect(old[0].text).toBe('too late +1');
+  });
+
+  it('reports a reader that stops answering, and one that answers again', () => {
+    const silent: MonitorResponse = {
+      readers: [{ name: 'reader-1', pods: [], status: null, statusError: 'no answer within 2 s' }],
+      flows: {},
+    };
+    expect(diffEvents(data(flow()), silent, 1)).toEqual([
+      expect.objectContaining({ severity: 'bad', text: 'no answer within 2 s', flow: '' }),
+    ]);
+    expect(diffEvents(silent, data(flow()), 2)[0]).toEqual(
+      expect.objectContaining({ severity: 'ok', text: 'answering again' }),
+    );
+  });
+
+  it('drops the whole baseline of a flow whose reader restarted', () => {
+    const base = { opens: 3, ok: 1000, too_late: 5 };
+    expect(baselineFor({ opens: 3, ok: 1200, too_late: 9 }, base)).toBe(base);
+    // Restarted: opens back to 1, even though too_late already climbed past 5.
+    expect(baselineFor({ opens: 1, ok: 1100, too_late: 9 }, base)).toBeUndefined();
   });
 
   it('counts from the test start, and from zero again after a reader restart', () => {

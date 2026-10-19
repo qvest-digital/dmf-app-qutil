@@ -42,7 +42,7 @@
 # production namespace only. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 import uuid as uuid_mod
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2057,18 +2057,30 @@ def _reader_status(claim):
     publishes: (status, error). The reader answers whatever its flows are
     doing, so a reader that cannot be asked is an error of its own."""
     handle = (claim.get("status") or {}).get("handle") or {}
-    endpoints = {ep.get("name"): ep.get("url") for ep in handle.get("endpoints") or []}
-    url = endpoints.get("status")
-    if not url and endpoints.get("metrics", "").endswith("/metrics"):
-        # A class from before the status endpoint was published.
-        url = endpoints["metrics"][:-len("metrics")] + "status"
-    if not handle.get("ready") or not url:
+    url = next((ep.get("url") for ep in handle.get("endpoints") or [] if ep.get("name") == "status"), None)
+    if not handle.get("ready"):
         return None, "not provisioned yet"
+    if not url:
+        return None, "the reader class publishes no status endpoint"
     try:
         with urllib.request.urlopen(url, timeout=1) as r:
             return json.loads(r.read().decode() or "{}"), None
     except Exception as e:
         return None, f"cannot ask the reader: {e}"
+
+
+# Its own pool, so a monitor rebuild never waits behind the generators
+# listing's delivery probes, and a deadline over the whole round, so a few
+# readers that do not answer cannot hold the page's poll for long.
+_monitor_pool = ThreadPoolExecutor(max_workers=32, thread_name_prefix="monitor")
+_MONITOR_DEADLINE = 2.0
+
+
+def _ask_readers(claims):
+    futures = [_monitor_pool.submit(_reader_status, c) for c in claims]
+    done, _ = wait(futures, timeout=_MONITOR_DEADLINE)
+    return [f.result() if f in done else (None, f"no answer within {_MONITOR_DEADLINE:g} s")
+            for f in futures]
 
 
 def monitor():
@@ -2096,7 +2108,7 @@ def monitor():
 
     readers = []
     wanted = set()
-    for claim, (status, err) in zip(claims, _reader_probe_pool.map(_reader_status, claims)):
+    for claim, (status, err) in zip(claims, _ask_readers(claims)):
         row = _reader_row(claim)
         row["pods"] = by_instance.get(row["name"], [])
         row["status"] = status
@@ -2454,20 +2466,26 @@ def _generator_expectations(generator, check_legal):
     the generator was booked with: the writer declares v210 video and float32
     audio of the geometry, rate and channels it was asked for."""
     flow = (((generator.get("spec") or {}).get("parameters") or {}).get("flow")) or {}
+    def known(fields):
+        # A field the claim leaves to the chart's default is not known here,
+        # so it is not checked rather than checked against nothing.
+        return {k: v for k, v in fields.items() if v is not None}
+
     out = {}
     video = flow.get("video_output") or {}
     if video.get("enabled") and video.get("id"):
         rate = video.get("grain_rate") or {}
-        out[video["id"].lower()] = {
+        num, den = rate.get("numerator"), rate.get("denominator")
+        out[video["id"].lower()] = known({
             "mediaType": "video/v210", "width": video.get("frame_width"),
             "height": video.get("frame_height"),
-            "rate": f"{rate.get('numerator')}/{rate.get('denominator')}",
-            "checkLegal": check_legal}
+            "rate": f"{num}/{den}" if num and den else None,
+            "checkLegal": check_legal})
     audio = flow.get("audio_output") or {}
     if audio.get("enabled") and audio.get("id"):
-        out[audio["id"].lower()] = {
+        out[audio["id"].lower()] = known({
             "mediaType": "audio/float32", "sampleRate": audio.get("sample_rate"),
-            "channels": audio.get("channel_count"), "checkLegal": check_legal}
+            "channels": audio.get("channel_count"), "checkLegal": check_legal})
     return out
 
 

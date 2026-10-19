@@ -21,6 +21,7 @@ import {
   Counts,
   MonitorEvent,
   STATE_LABELS,
+  baselineFor,
   countsOf,
   diffEvents,
   flowKey,
@@ -55,6 +56,8 @@ interface ReaderView {
   node: string;
   restarts: number;
   flows: FlowView[];
+  /** The flows are the last the reader reported before it stopped answering. */
+  stale: boolean;
   cls: 'live' | 'warn' | 'bad' | '';
 }
 
@@ -81,6 +84,12 @@ export class MonitorPage {
   protected readonly events = signal<MonitorEvent[]>([]);
   /** ok counter samples per flow, oldest first. */
   private readonly history = signal<Record<string, { at: number; value: number }[]>>({});
+  /**
+   * Each reader's flows as it last reported them. A reader that stops
+   * answering keeps its last counts on the page, marked stale, so a killed pod
+   * does not make the test's problem count go down.
+   */
+  private readonly lastKnown = signal<Record<string, ReaderFlowStatus[]>>({});
   /** When each flow last had a warning or a bad counter rise. */
   private readonly recent = signal<Record<string, { warn: number; bad: number }>>({});
   private previous: MonitorResponse | null = null;
@@ -95,7 +104,9 @@ export class MonitorPage {
         if (fresh.length) {
           this.events.update((list) => [...[...fresh].reverse(), ...list].slice(0, FEED));
           this.recent.update((all) => {
-            const next = { ...all };
+            const live = new Set(Object.keys(countsOf(data)));
+            // Flows that are gone take their marks with them.
+            const next = Object.fromEntries(Object.entries(all).filter(([key]) => live.has(key)));
             for (const e of fresh) {
               const key = flowKey(e.reader, e.flow);
               const seen = next[key] ?? { warn: 0, bad: 0 };
@@ -107,6 +118,14 @@ export class MonitorPage {
           });
         }
         this.previous = data;
+        this.lastKnown.update((all) => {
+          const next: Record<string, ReaderFlowStatus[]> = {};
+          for (const r of data.readers) {
+            const flows = r.status?.flows ?? all[r.name];
+            if (flows) next[r.name] = flows;
+          }
+          return next;
+        });
         const counts = countsOf(data);
         this.history.update((all) => {
           const next: Record<string, { at: number; value: number }[]> = {};
@@ -124,10 +143,12 @@ export class MonitorPage {
     const base = this.baseline();
     const history = this.history();
     const recent = this.recent();
+    const lastKnown = this.lastKnown();
     const now = Date.now();
     return (data?.readers ?? []).map((reader) => {
       const node = reader.pods.map((p) => p.node).find(Boolean) ?? '';
-      const flows = (reader.status?.flows ?? []).map((status) =>
+      const stale = !reader.status && !!lastKnown[reader.name];
+      const flows = (reader.status?.flows ?? lastKnown[reader.name] ?? []).map((status) =>
         this.flowView(
           reader,
           status,
@@ -148,6 +169,7 @@ export class MonitorPage {
         node,
         restarts: reader.pods.reduce((n, p) => n + (p.restarts ?? 0), 0),
         flows,
+        stale,
         cls: reader.statusError ? 'bad' : (worst ?? ''),
       };
     });
@@ -219,9 +241,9 @@ export class MonitorPage {
     return new Date(at).toLocaleTimeString([], { hour12: false });
   }
 
-  protected rateText(rate: number, unit: string): string {
+  protected rateText(rate: number, unit: string | null): string {
     const n = rate >= 10000 ? `${(rate / 1000).toFixed(1)}k` : rate.toFixed(rate >= 100 ? 0 : 1);
-    return `${n} ${unit}/s`;
+    return `${n} ${unit ?? 'reads'}/s`;
   }
 
   private flowView(
@@ -235,9 +257,13 @@ export class MonitorPage {
     now: number,
   ): FlowView {
     const key = flowKey(reader.name, status.id);
+    const current = countsOf({ readers: [{ ...reader, status: { flows: [status] } }], flows: {} })[
+      key
+    ];
+    const flowBase = baselineFor(current, base?.[key]);
     const counters = COUNTERS.map((spec) => ({
       spec,
-      value: since(spec.read(status), base?.[key]?.[spec.key]),
+      value: since(spec.read(status), flowBase?.[spec.key]),
     }));
     const samples = history[key] ?? [];
     const rates = samples

@@ -1209,6 +1209,12 @@ class ReaderExpectations(unittest.TestCase):
         self.assertEqual(claim["spec"]["parameters"]["expect"], {"a": {"width": 1}})
         self.assertNotIn("expect", agg._reader_claim("r", ["a"], {})["spec"]["parameters"])
 
+    def test_a_field_left_to_the_chart_default_is_not_checked(self):
+        gen = self._generator(audio=False)
+        del gen["spec"]["parameters"]["flow"]["video_output"]["grain_rate"]
+        out = agg._generator_expectations(gen, False)
+        self.assertNotIn("rate", out["3f2c8a1e-1111-4222-8333-444455556666"])
+
     def test_check_values_must_be_a_boolean(self):
         self.assertEqual(agg._validate_readers({"count": 1, "checkValues": "yes"}),
                          "checkValues must be true or false")
@@ -1285,6 +1291,16 @@ class Monitor(unittest.TestCase):
         self.assertEqual(flow["originNode"], "worker-1")
         self.assertEqual([(m["sourceNode"], m["targetNode"], m["phase"]) for m in flow["mirrors"]],
                          [("worker-1", "worker-7", "Ready")])
+
+    def test_a_reader_that_does_not_answer_in_time_is_named(self):
+        def slow(url, timeout=None):
+            import time as t
+            t.sleep(0.3)
+            raise OSError("late")
+        with mock.patch.object(agg.urllib.request, "urlopen", slow), \
+                mock.patch.object(agg, "_MONITOR_DEADLINE", 0.05):
+            reader = next(r for r in agg.monitor()["readers"] if r["name"] == "booked-reader-0001")
+        self.assertEqual(reader["statusError"], "no answer within 0.05 s")
 
     def test_a_reader_that_cannot_be_asked_is_an_error_of_its_own(self):
         def refuse(url, timeout=None):
