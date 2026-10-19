@@ -265,6 +265,21 @@ import { validateGenerator } from './generator-validation';
             }
           </select>
         </div>
+
+        <div class="gen-field">
+          <label class="gen-check">
+            <input
+              type="checkbox"
+              [checked]="readerCheckValues()"
+              (change)="readerCheckValues.set(checked($event))"
+            />
+            Check sample values
+          </label>
+          <div class="gen-hint">
+            SMPTE bars write super-black as luma code 0, which v210 reserves, so this flags every
+            grain of that pattern.
+          </div>
+        </div>
       }
 
       <div class="gen-field">
@@ -324,6 +339,7 @@ export class GeneratorForm {
   protected readonly readerCount = signal(0);
   protected readonly readerNode = signal('');
   protected readonly readerProvider = signal('auto');
+  protected readonly readerCheckValues = signal(false);
   protected readonly busy = signal(false);
   protected readonly rolling = signal(false);
   /** What the server said, which outranks anything this form worked out itself. */
@@ -358,6 +374,7 @@ export class GeneratorForm {
         count: this.readerCount(),
         node: this.readerNode().trim(),
         provider: this.readerProvider(),
+        checkValues: this.readerCheckValues(),
       },
       video: {
         enabled: this.videoOn(),

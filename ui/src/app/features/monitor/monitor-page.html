@@ -1,0 +1,145 @@
+<main class="mon-main">
+  <section class="panel mon-top">
+    <div class="mon-head">
+      <h2>Reader monitor</h2>
+      <div class="mon-actions">
+        @if (startedAt() === null) {
+          <button class="btn" type="button" (click)="startTest()">Start test</button>
+        } @else {
+          <span class="mon-elapsed">test running {{ elapsed() }}</span>
+          <button class="btn" type="button" (click)="startTest()">Restart</button>
+          <button class="btn" type="button" (click)="clearTest()">Show totals</button>
+        }
+        <label class="gen-check">
+          <input
+            type="checkbox"
+            [checked]="problemsOnly()"
+            (change)="problemsOnly.set(checked($event))"
+          />
+          Problems only
+        </label>
+      </div>
+    </div>
+    @if (data()?.error; as error) {
+      <div class="gen-errors">{{ error }}</div>
+    }
+    <div class="mon-tiles">
+      <div class="mon-tile">
+        <div class="k">readers</div>
+        <div class="v">{{ totals().readers }}</div>
+      </div>
+      <div class="mon-tile" [class.bad]="totals().delivering < totals().flows">
+        <div class="k">flows delivering</div>
+        <div class="v">{{ totals().delivering }} / {{ totals().flows }}</div>
+      </div>
+      <div class="mon-tile ok">
+        <div class="k">grains ok</div>
+        <div class="v">{{ rateText(totals().grains, 'grains') }}</div>
+      </div>
+      <div class="mon-tile ok">
+        <div class="k">samples ok</div>
+        <div class="v">{{ rateText(totals().samples, 'samples') }}</div>
+      </div>
+      <div class="mon-tile" [class.bad]="totals().problems > 0">
+        <div class="k">problems {{ startedAt() === null ? 'since boot' : 'this test' }}</div>
+        <div class="v">{{ totals().problems }}</div>
+      </div>
+      <div class="mon-tile" [class.bad]="totals().mirrorsReady < totals().mirrors">
+        <div class="k">mirrors ready</div>
+        <div class="v">{{ totals().mirrorsReady }} / {{ totals().mirrors }}</div>
+      </div>
+    </div>
+    <div class="mon-classes">
+      @for (c of totals().classes; track c.spec.key) {
+        <span class="mon-chip" [class]="c.value ? c.spec.severity : 'zero'">
+          {{ c.spec.label }} <b>{{ c.value }}</b>
+        </span>
+      }
+    </div>
+  </section>
+
+  <section class="mon-body">
+    <div class="panel">
+      @for (r of shown(); track r.reader.name) {
+        <div class="flow mon-reader">
+          <div class="mon-reader-head">
+            <span class="dot" [class]="r.cls"></span>
+            <span class="name">{{ r.reader.name }}</span>
+            @if (r.reader.generator) {
+              <span class="badge">{{ r.reader.generator }}</span>
+            }
+            <span class="mon-meta">
+              {{ r.node ? 'on ' + r.node : 'not scheduled' }} | {{ r.reader.provider ?? 'auto' }}
+              @if (r.restarts) {
+                |
+                <span class="warn">{{ r.restarts }} restart{{ r.restarts === 1 ? '' : 's' }}</span>
+              }
+            </span>
+          </div>
+          @if (r.reader.statusError; as err) {
+            <div class="mon-error">{{ err }}</div>
+          }
+          @for (f of r.flows; track f.key) {
+            <div class="mon-flow" [class.problem]="f.problem">
+              <div class="mon-flow-head">
+                <span class="dot" [class]="f.cls"></span>
+                <span class="mon-flow-label">{{ f.label }}</span>
+                <span class="mon-state">{{
+                  f.status.delivering ? 'delivering' : stateLabel(f.status.state)
+                }}</span>
+                <span class="mon-meta">{{ f.status.format }}</span>
+                <svg class="mon-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                  <polyline [attr.points]="f.spark" />
+                </svg>
+                <span class="mon-rate">{{ rateText(f.rate, f.status.unit) }}</span>
+                @if (f.status.ageSeconds !== null) {
+                  <span class="mon-meta">age {{ (f.status.ageSeconds * 1000).toFixed(0) }} ms</span>
+                }
+              </div>
+              <div class="mon-meta mon-id">{{ f.status.id }}</div>
+              @if (f.status.formatMismatch) {
+                <div class="mon-error">expected otherwise: {{ f.status.formatMismatch }}</div>
+              }
+              <div class="mon-classes">
+                @for (c of f.counters; track c.spec.key) {
+                  @if (c.value || c.spec.severity === 'ok') {
+                    <span class="mon-chip" [class]="c.spec.severity">
+                      {{ c.spec.label }} <b>{{ c.value }}</b>
+                    </span>
+                  }
+                }
+              </div>
+              <div class="mon-meta" [class.warn]="f.replicationBad">{{ f.replication }}</div>
+              @if (f.status.lastError; as e) {
+                <div class="mon-meta">
+                  last error {{ e.secondsAgo.toFixed(0) }} s ago: {{ e.message }}
+                </div>
+              }
+            </div>
+          }
+        </div>
+      } @empty {
+        <div class="flow empty">
+          {{
+            problemsOnly()
+              ? 'No reader has a problem.'
+              : 'No reader is booked. Book one on the Generators page, or any claim of the reader class.'
+          }}
+        </div>
+      }
+    </div>
+
+    <aside class="panel mon-feed">
+      <h2>Events</h2>
+      @for (e of events(); track $index) {
+        <div class="mon-event" [class]="e.severity">
+          <span class="mon-meta">{{ time(e.at) }}</span>
+          <span class="mon-event-who">{{ e.reader }} / {{ e.flow.slice(0, 8) }}</span>
+          <span>{{ e.text }}</span>
+        </div>
+      } @empty {
+        <div class="flow empty">Nothing has gone wrong since the page opened.</div>
+      }
+    </aside>
+  </section>
+</main>

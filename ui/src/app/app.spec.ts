@@ -41,7 +41,8 @@ describe('App', () => {
       'Diagnostics',
       'Generators',
       'Bookings',
+      'Monitor',
     ]);
-    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book']);
+    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book', '/mon']);
   });
 });
