@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.54](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.53...v1.0.0-rc.54) (2026-10-19)
+
+
+### Features
+
+* **generators:** offer UHD and rates up to 240/1, sized per booking ([#211](https://github.com/qvest-digital/dmf-app-qutil/issues/211)) ([0a6e4af](https://github.com/qvest-digital/dmf-app-qutil/commit/0a6e4af2898a803af123c6dd5c60394cf7242e2d))
+* **ui:** book any catalog class from a Bookings tab ([#190](https://github.com/qvest-digital/dmf-app-qutil/issues/190)) ([1a20d94](https://github.com/qvest-digital/dmf-app-qutil/commit/1a20d94e60d70f21d6c27e24d4c18502936deac5))
+
+
+### Miscellaneous
+
+* **deps:** bump @vitest/mocker and vitest in /ui ([#180](https://github.com/qvest-digital/dmf-app-qutil/issues/180)) ([0367154](https://github.com/qvest-digital/dmf-app-qutil/commit/03671540d74c95471baf4e8114fae6302dbbdb07))
+
 ## [1.0.0-rc.53](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.52...v1.0.0-rc.53) (2026-10-19)
 
 
