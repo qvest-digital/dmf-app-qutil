@@ -251,8 +251,6 @@ spec:
             # separates one from the claims this chart renders.
             - name: GEN_MANAGER
               value: {{ include "qutil.fullname" . }}-aggregator
-            - name: GEN_MAX
-              value: {{ .Values.generators.maxCount | quote }}
             # Stamped onto every page-booked claim: the class envelope is sized
             # for 1080p50, and an animated pattern needs a limit a still one
             # does not. See the generators.resources comment in values.yaml.

@@ -250,9 +250,6 @@ generators:
   # Every claim the page books starts with this, and it refuses to delete one
   # that does not. The claims this chart renders cannot match it.
   namePrefix: generator-
-  # A ceiling on what one form can allocate: each generator is a writer pod with
-  # a grain ring in the node's MXL domain, which is RAM.
-  maxCount: 8
   # Stamped onto every page-booked claim, because the class envelope is sized for
   # 1080p50 and would reserve several times what a test pattern needs.
   #
@@ -474,12 +471,17 @@ testSources:
       #
       # At 1920x1080 50/1 on AWS it draws a steady 3.7 cores and a limit of 4
       # throttles 4.3% of periods, so both move up by the same margin.
+      #
+      # It has since grown to 5.8 cores on AWS, and a limit of 6 throttled
+      # 10.2% of periods (78s over 2.4h): each throttled period is a stall at
+      # the source, seen on the ingest as late and duplicated grains. The
+      # limit takes the whole of a c5n.2xlarge, which is where it lands.
       resources:
         requests:
           cpu: "4"
           memory: 256Mi
         limits:
-          cpu: "6"
+          cpu: "8"
           memory: 512Mi
     - name: srt-test-source-3
       claim: srt-ingest-3
@@ -502,4 +504,23 @@ testSources:
       memory: 256Mi
     limits:
       cpu: "1500m"
+      memory: 512Mi
+
+# A standing SRT listener for the Ross SSG, which only dials. Off by default:
+# only a cluster that books the SSG against it turns it on, and its DataMiner
+# resource then dials ross-source.<release namespace>:<port>. The image is
+# testSources.image.
+rossSource:
+  enabled: false
+  port: 9000
+  label: ROSS QUELLE
+  # Static, so its cost stays flat: smptebars measured 0.61 cores for the
+  # paced test-source pipeline on sc.
+  pattern: "smptebars=size=1920x1080:rate=50"
+  resources:
+    requests:
+      cpu: 750m
+      memory: 256Mi
+    limits:
+      cpu: "2"
       memory: 512Mi

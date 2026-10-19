@@ -18,6 +18,9 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const MAX_OVERLAY = 32;
 const MAX_CHANNELS = 16;
+const MAX_NODE = 253;
+/** DNS-1123 subdomain, which is what a node name is. */
+const NODE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
 
 function list(values: readonly (string | number)[]): string {
   return values.join(', ');
@@ -35,6 +38,19 @@ export function validateGenerator(
   const ttls = limits?.ttls ?? [];
   if (ttls.length && !ttls.includes(request.ttl)) {
     return `expiry must be one of ${list(ttls)}`;
+  }
+
+  const maxCopies = limits?.maxCopies ?? Infinity;
+  if (!Number.isInteger(request.count) || request.count < 1 || request.count > maxCopies) {
+    return `count must be between 1 and ${limits?.maxCopies ?? 'the server limit'}`;
+  }
+
+  const node = request.node.trim();
+  if (node && (node.length > MAX_NODE || !NODE_RE.test(node))) {
+    return (
+      "node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
+      'at most 253 characters'
+    );
   }
 
   for (const [on, block, what] of [

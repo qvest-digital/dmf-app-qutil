@@ -5,7 +5,7 @@ const LIMITS: GeneratorsResponse = {
   namespace: 'production-demo-app',
   className: 'mxl-writer',
   enabled: true,
-  max: 8,
+  maxCopies: 16,
   ttls: ['1h', '8h', '24h', 'none'],
   patterns: ['smpte', 'ball', 'gamut', 'checkers-8', 'snow', 'zone-plate'],
   animated: ['ball', 'snow', 'zone-plate'],
@@ -27,6 +27,8 @@ const AUDIO_ID = '9b1d0000-2222-4333-8444-555566667777';
 
 type Over = {
   ttl?: string;
+  count?: number;
+  node?: string;
   video?: Partial<GeneratorRequest['video']>;
   audio?: Partial<GeneratorRequest['audio']>;
 };
@@ -35,6 +37,8 @@ function request(over: Over = {}): GeneratorRequest {
   return {
     label: 'Bars 1',
     ttl: over.ttl ?? '1h',
+    count: over.count ?? 1,
+    node: over.node ?? '',
     video: {
       enabled: true,
       id: VIDEO_ID,
@@ -159,10 +163,32 @@ describe('validateGenerator', () => {
     );
   });
 
+  it('refuses a count outside 1 to the server ceiling', () => {
+    expect(validateGenerator(request({ count: 16 }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ count: 0 }), LIMITS)).toBe('count must be between 1 and 16');
+    expect(validateGenerator(request({ count: 17 }), LIMITS)).toBe(
+      'count must be between 1 and 16',
+    );
+    expect(validateGenerator(request({ count: 2.5 }), LIMITS)).toContain('count must be');
+  });
+
+  it('accepts a node name and refuses what no node can be called', () => {
+    expect(
+      validateGenerator(request({ node: 'ip-10-0-1-23.eu-central-1.compute.internal' }), LIMITS),
+    ).toBeNull();
+    expect(validateGenerator(request({ node: 'Worker_1' }), LIMITS)).toContain(
+      'node must be a Kubernetes node name',
+    );
+    expect(validateGenerator(request({ node: 'a'.repeat(254) }), LIMITS)).toContain(
+      'node must be a Kubernetes node name',
+    );
+  });
+
   /** Before the first poll there is nothing to check a value against, and a form
    *  that refused everything until then would look broken. */
   it('checks what it can before the server has said what it accepts', () => {
     expect(validateGenerator(request(), null)).toBeNull();
+    expect(validateGenerator(request({ count: 5 }), null)).toBeNull();
     expect(validateGenerator(request({ video: { id: 'nope' } }), null)).toContain(
       'must be a full UUID',
     );
