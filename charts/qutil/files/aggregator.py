@@ -23,8 +23,11 @@
 #                                    addresses they publish, external where any
 #   GET    /api/generators         -> the writer claims the UI booked
 #   GET    /api/generators/flow-ids-> two unused MXL flow ids
-#   POST   /api/generators         -> book a writer claim
-#   DELETE /api/generators/<name>  -> release one
+#   POST   /api/generators         -> book one or more writer claims, and
+#                                    readers of each where asked
+#   DELETE /api/generators/<name>  -> release one, and the readers of it
+#   POST   /api/generators/<name>/readers -> book readers of one generator
+#   DELETE /api/readers/<name>     -> release one reader
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
@@ -33,6 +36,7 @@
 # production namespace only. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 import uuid as uuid_mod
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -940,7 +944,6 @@ GEN_JOB_REF = os.environ.get("GEN_JOB_REF", "qutil/generators")
 # prefix, and delete refuses anything missing either.
 GEN_PREFIX = os.environ.get("GEN_PREFIX", "generator-")
 GEN_MANAGER = os.environ.get("GEN_MANAGER", "qutil-aggregator")
-GEN_MAX = int(os.environ.get("GEN_MAX") or "8")
 try:
     GEN_RESOURCES = json.loads(os.environ.get("GEN_RESOURCES") or "{}")
 except ValueError:
@@ -949,6 +952,14 @@ except ValueError:
 _GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
 _GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
 _GEN_COMPONENT = "generator"
+# Readers are claims of READER_CLASS that hold a generator's flows open on a
+# node, which is what makes mxl-k8s mirror them there. They carry the
+# generator's name, so they are listed under it and released with it.
+READER_CLASS = os.environ.get("READER_CLASS", "mxl-reader")
+_READER_COMPONENT = "reader"
+_READER_LABEL_GENERATOR = "qutil.qvest-digital.com/generator"
+# What the receiver CRD accepts as a libmxl-fabrics provider.
+_READER_PROVIDERS = ("auto", "tcp", "verbs", "efa", "shm")
 _GEN_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _GEN_MAX_BODY = 8192
 # videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
@@ -967,6 +978,13 @@ _GEN_FRAME_SIZES = ((640, 360), (1296, 720), (1920, 1080))
 _GEN_GRAIN_RATES = ((30000, 1001), (25, 1), (50, 1), (60000, 1001))
 _GEN_SAMPLE_RATES = (44100, 48000, 96000)
 _GEN_MAX_CHANNELS = 16
+# Copies per submission. Each one is a claim POST inside a single request, so
+# the bound keeps a mistyped count from booking writers by the hundred.
+_GEN_MAX_COPIES = 16
+# A node name is a DNS-1123 subdomain. It lands in a node affinity term rather
+# than a shell, so the pattern is about refusing a name no node can carry.
+_GEN_NODE_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+_GEN_MAX_NODE = 253
 _GEN_MAX_OVERLAY = 32
 # How long a booking may last. Nothing else prunes a claim created at runtime:
 # helm prunes what its release owns and Flux what its source declares, so a
@@ -1218,6 +1236,8 @@ _PREVIEW_PREFIX = "preview-"
 # established before any read succeeds. Ten seconds killed the source first, so
 # a preview of a flow originating on another node never started.
 SOURCE_START_TIMEOUT = "60s"
+# The frame rate a preview is encoded at, at most (mediamtx mxlH264MaxRate).
+PREVIEW_MAX_RATE = 25
 
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
@@ -1415,11 +1435,14 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # turns CABAC and the deblocking filter off: the stream comes out
         # Constrained Baseline whatever mxlH264Profile asks for, and the
         # average QP goes from 28 to 37 at the same bitrate.
+        # 25 fps whatever the flow's rate: previews share one media server,
+        # and at the 50 fps house format their encodes filled its node and
+        # made every preview drop frames. The flow keeps its own rate.
         conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1464,7 +1487,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000}
+                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1669,6 +1692,41 @@ def _gen_int(node, key, default=None):
     return value
 
 
+def _validate_node(node):
+    if node is None:
+        node = ""
+    if not isinstance(node, str) or (node.strip() and (
+            len(node.strip()) > _GEN_MAX_NODE or not _GEN_NODE_RE.match(node.strip()))):
+        return ("node must be a Kubernetes node name: lowercase letters, digits, "
+                "'-' and '.', at most 253 characters")
+    return None
+
+
+def _validate_readers(req, allow_none=False):
+    """The first thing wrong with a reader request, or None. allow_none admits
+    a count of 0, which on the booking form means no readers."""
+    if not isinstance(req, dict):
+        return "readers must be a JSON object"
+    low = 0 if allow_none else 1
+    count = _gen_int(req, "count", low)
+    if count is None or not low <= count <= _GEN_MAX_COPIES:
+        return f"reader count must be between {low} and {_GEN_MAX_COPIES}"
+    bad = _validate_node(req.get("node"))
+    if bad:
+        return "reader " + bad
+    if req.get("provider", "auto") not in _READER_PROVIDERS:
+        return "provider must be one of " + ", ".join(_READER_PROVIDERS)
+    return None
+
+
+def _node_affinity(node):
+    """A required node affinity on metadata.name: it matches the node name
+    itself, not a hostname label that may differ from it."""
+    return {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+        "nodeSelectorTerms": [{"matchFields": [
+            {"key": "metadata.name", "operator": "In", "values": [node]}]}]}}}
+
+
 def _validate_generator(req):
     """The first thing wrong with a submission, or None.
 
@@ -1688,6 +1746,20 @@ def _validate_generator(req):
 
     if req.get("ttl", "1h") not in _GEN_TTLS:
         return "expiry must be one of " + ", ".join(_GEN_TTLS)
+
+    count = _gen_int(req, "count", 1)
+    if count is None or not 1 <= count <= _GEN_MAX_COPIES:
+        return f"count must be between 1 and {_GEN_MAX_COPIES}"
+
+    bad = _validate_node(req.get("node"))
+    if bad:
+        return bad
+
+    readers = req.get("readers")
+    if readers is not None:
+        bad = _validate_readers(readers, allow_none=True)
+        if bad:
+            return bad
 
     for on, block, what in ((video_on, video, "video"), (audio_on, audio, "audio")):
         if not on:
@@ -1773,6 +1845,9 @@ def _gen_claim(name, req):
     # test pattern at these sizes needs.
     if GEN_RESOURCES:
         parameters["resources"] = GEN_RESOURCES
+    node = (req.get("node") or "").strip()
+    if node:
+        parameters["affinity"] = _node_affinity(node)
 
     spec = {
         "className": GEN_CLASS,
@@ -1812,11 +1887,106 @@ def _is_generator(claim):
             and labels.get(_GEN_LABEL_COMPONENT) == _GEN_COMPONENT)
 
 
+def _is_reader(claim):
+    labels = (claim.get("metadata", {}) or {}).get("labels") or {}
+    return (labels.get(_GEN_LABEL_MANAGED) == GEN_MANAGER
+            and labels.get(_GEN_LABEL_COMPONENT) == _READER_COMPONENT)
+
+
+def _reader_claim(name, generator, req):
+    """A claim of READER_CLASS reading every flow the generator produces. It
+    expires with the generator: a reader outliving its flows reads nothing."""
+    spec = generator.get("spec") or {}
+    parameters = {"flows": _claim_flow_ids(generator),
+                  "receiver": {"provider": req.get("provider", "auto")}}
+    node = (req.get("node") or "").strip()
+    if node:
+        parameters["affinity"] = _node_affinity(node)
+    booking = {"jobRef": GEN_JOB_REF}
+    window = (spec.get("booking") or {}).get("window")
+    if window:
+        booking["window"] = window
+    gen_name = (generator.get("metadata") or {}).get("name")
+    return {
+        "apiVersion": "dmf.qvest-digital.com/v1alpha1",
+        "kind": "MediaFunctionClaim",
+        "metadata": {
+            "name": name,
+            "namespace": CLAIM_NS,
+            "labels": {_GEN_LABEL_MANAGED: GEN_MANAGER,
+                       _GEN_LABEL_COMPONENT: _READER_COMPONENT,
+                       _READER_LABEL_GENERATOR: gen_name},
+        },
+        "spec": {"className": READER_CLASS,
+                 "lifecycle": {"reprovisionOnDrift": False},
+                 "booking": booking,
+                 "parameters": parameters},
+    }
+
+
+def _reader_delivering(claim):
+    """Whether every flow of a reader delivers: True, False, or None when that
+    cannot be told yet. Read from the endpoint the claim publishes, since the
+    reader's workload is ready as soon as it serves, flows or not."""
+    handle = (claim.get("status") or {}).get("handle") or {}
+    if not handle.get("ready"):
+        return None
+    url = next((ep.get("url") for ep in handle.get("endpoints") or []
+                if ep.get("name") == "delivering"), None)
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        return False if e.code == 503 else None
+    except Exception:
+        return None
+
+
+# Readers answer in parallel: one slow pod must not hold the whole listing.
+_reader_probe_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="reader-probe")
+
+
+def _reader_row(claim):
+    meta = claim.get("metadata", {}) or {}
+    status = claim.get("status", {}) or {}
+    parameters = (claim.get("spec") or {}).get("parameters") or {}
+    reachable = _cond(claim, "Reachable")
+    return {
+        "name": meta.get("name"),
+        "generator": (meta.get("labels") or {}).get(_READER_LABEL_GENERATOR),
+        "phase": status.get("phase"),
+        "ready": (status.get("handle") or {}).get("ready"),
+        "deleting": bool(meta.get("deletionTimestamp")),
+        "reachable": {"status": reachable.get("status"), "reason": reachable.get("reason"),
+                      "message": reachable.get("message")} if reachable else None,
+        "node": _gen_node(parameters),
+        "provider": (parameters.get("receiver") or {}).get("provider"),
+        "flows": parameters.get("flows") or [],
+        "created": meta.get("creationTimestamp"),
+        "delivering": None,
+    }
+
+
+def _gen_node(parameters):
+    """The node _gen_claim pinned the writer to, or None."""
+    terms = ((((parameters.get("affinity") or {}).get("nodeAffinity") or {})
+              .get("requiredDuringSchedulingIgnoredDuringExecution") or {})
+             .get("nodeSelectorTerms") or [])
+    for term in terms:
+        for field in term.get("matchFields") or []:
+            if field.get("key") == "metadata.name" and field.get("values"):
+                return field["values"][0]
+    return None
+
+
 def _gen_row(claim):
     meta = claim.get("metadata", {}) or {}
     status = claim.get("status", {}) or {}
     handle = status.get("handle") or {}
-    flow = ((claim.get("spec") or {}).get("parameters") or {}).get("flow") or {}
+    parameters = (claim.get("spec") or {}).get("parameters") or {}
+    flow = parameters.get("flow") or {}
     video = flow.get("video_output") or {}
     audio = flow.get("audio_output") or {}
     reachable = _cond(claim, "Reachable")
@@ -1841,6 +2011,7 @@ def _gen_row(claim):
         "created": meta.get("creationTimestamp"),
         "ageSeconds": _age_secs(meta.get("creationTimestamp")),
         "groupHint": flow.get("group_hint"),
+        "node": _gen_node(parameters),
         "video": {"id": video.get("id"), "pattern": video.get("flow_pattern"),
                   "overlayText": video.get("overlay_text"),
                   "frameWidth": video.get("frame_width"),
@@ -1851,32 +2022,59 @@ def _gen_row(claim):
     }
 
 
-def _gen_list():
-    """Only the claims this page created. A label selector rather than a filter in
-    here, so the chart's claims are never in this process's hands at all."""
+def _page_claims(component, extra=""):
+    """The claims this page created of one component. A label selector rather
+    than a filter in here, so the chart's claims are never in this process's
+    hands at all."""
     selector = urllib.parse.quote(
-        f"{_GEN_LABEL_MANAGED}={GEN_MANAGER},{_GEN_LABEL_COMPONENT}={_GEN_COMPONENT}",
+        f"{_GEN_LABEL_MANAGED}={GEN_MANAGER},{_GEN_LABEL_COMPONENT}={component}{extra}",
         safe="=,")
     res = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims"
                    f"?labelSelector={selector}")
     if "_error" in res:
         return None, res["_error"]
-    rows = [_gen_row(c) for c in res.get("items", []) or []]
+    return res.get("items", []) or [], None
+
+
+def _gen_list():
+    """(generators, orphaned readers, error)."""
+    claims, err = _page_claims(_GEN_COMPONENT)
+    if err:
+        return None, [], err
+    readers, err = _page_claims(_READER_COMPONENT)
+    if err:
+        return None, [], err
+    by_generator = {}
+    for claim, delivering in zip(readers, _reader_probe_pool.map(_reader_delivering, readers)):
+        row = _reader_row(claim)
+        row["delivering"] = delivering
+        by_generator.setdefault(row["generator"], []).append(row)
+    rows = []
+    for claim in claims:
+        row = _gen_row(claim)
+        row["readers"] = sorted(by_generator.pop(row["name"], []),
+                                key=lambda r: (r["created"] or "", r["name"] or ""))
+        rows.append(row)
     # Newest first, so a just-booked generator is at the top of the list it
     # appears in.
     rows.sort(key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
-    return rows, None
+    # Readers whose generator is gone, from a release that failed half way.
+    # Listed rather than dropped, or nothing on the page could release them.
+    orphans = sorted((r for group in by_generator.values() for r in group),
+                     key=lambda r: r["name"] or "")
+    return rows, orphans, None
 
 
 def generators():
-    rows, err = _gen_list() if GEN_ENABLED else ([], None)
+    rows, orphans, err = _gen_list() if GEN_ENABLED else ([], [], None)
     return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
-            "max": GEN_MAX, "ttls": [t for t in _GEN_TTLS],
+            "maxCopies": _GEN_MAX_COPIES, "ttls": [t for t in _GEN_TTLS],
+            "readerClass": READER_CLASS, "providers": list(_READER_PROVIDERS),
             "patterns": list(_GEN_PATTERNS), "animated": list(_GEN_ANIMATED),
             "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
             "grainRates": [{"numerator": n, "denominator": d} for n, d in _GEN_GRAIN_RATES],
             "sampleRates": list(_GEN_SAMPLE_RATES),
-            "generators": rows or [], "error": err}
+            "generators": rows or [], "orphanReaders": orphans, "error": err}
 
 
 def generator_flow_ids():
@@ -1889,31 +2087,9 @@ def generator_flow_ids():
     return 200, {"videoFlowId": video_id, "audioFlowId": audio_id}
 
 
-def generator_create(req):
-    if not GEN_ENABLED:
-        return 403, {"error": "generator booking is disabled on this install"}
-    bad = _validate_generator(req)
-    if bad:
-        return 400, {"error": bad}
-
-    rows, err = _gen_list()
-    if err:
-        return 503, {"error": f"cannot list generators in {CLAIM_NS}: {err}"}
-    if len(rows) >= GEN_MAX:
-        return 409, {"error": f"at most {GEN_MAX} generators at once; delete one first"}
-
-    # Fail closed: booking a writer whose id might already be written is the one
-    # mistake here that destroys somebody else's grains.
-    used, err = _flow_ids_in_use()
-    if err:
-        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
-    for block in (req.get("video") or {}, req.get("audio") or {}):
-        if not block.get("enabled"):
-            continue
-        flow_id = (block.get("id") or "").lower()
-        if flow_id in used:
-            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
-
+def _gen_book(req):
+    """POST one claim for req. (code, created claim) on success,
+    (code, {"error": ...}) otherwise."""
     label = req.get("label") or ""
     pattern = (req.get("video") or {}).get("pattern") or ""
     for attempt in (1, 2):
@@ -1923,8 +2099,7 @@ def generator_create(req):
         code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                              "POST", _gen_claim(name, req))
         if code in (200, 201):
-            snapshot_drop("generators")
-            return 201, _gen_row(res)
+            return 201, res
         # A fresh suffix is the whole fix for a name that is taken; anything else
         # is the operator's to see.
         if res.get("reason") != "AlreadyExists" or attempt == 2:
@@ -1932,6 +2107,135 @@ def generator_create(req):
                 return 403, {"error": f"not allowed to create claims in {CLAIM_NS}"}
             return code, {"error": res.get("error") or "claim create failed"}
     return 409, {"error": "could not find a free claim name"}
+
+
+def _book_readers(generator, req):
+    """POST req["count"] reader claims of generator. (rows, error) where error
+    names the first failure, after which nothing more is booked."""
+    gen_name = (generator.get("metadata") or {}).get("name") or ""
+    rows = []
+    for _ in range(_gen_int(req, "count", 1)):
+        for attempt in (1, 2):
+            name = f"{gen_name}-r{secrets.token_hex(2)}"
+            if not _GEN_NAME_RE.match(name) or len(name) > 63:
+                return rows, f"{gen_name} does not make a usable reader name"
+            code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
+                                 "POST", _reader_claim(name, generator, req))
+            if code in (200, 201):
+                rows.append(_reader_row(res))
+                break
+            if res.get("reason") != "AlreadyExists" or attempt == 2:
+                if code == 403:
+                    return rows, f"not allowed to create claims in {CLAIM_NS}"
+                return rows, res.get("error") or "reader claim create failed"
+    return rows, None
+
+
+def reader_create(gen_name, req):
+    """Book readers of one generator the page booked."""
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    if not isinstance(req, dict):
+        return 400, {"error": "body must be a JSON object of at most 8 KiB"}
+    bad = _validate_readers(req)
+    if bad:
+        return 400, {"error": bad}
+    if not gen_name or not _GEN_NAME_RE.match(gen_name) or not gen_name.startswith(GEN_PREFIX):
+        return 400, {"error": "not a generator name"}
+    generator = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{gen_name}")
+    if "_error" in generator or not _is_generator(generator):
+        return 404, {"error": f"no generator named {gen_name} was booked from this page"}
+    if (generator.get("metadata") or {}).get("deletionTimestamp"):
+        return 409, {"error": f"{gen_name} is being deleted"}
+    if not _claim_flow_ids(generator):
+        return 409, {"error": f"{gen_name} produces no flow to read"}
+
+    rows, err = _book_readers(generator, req)
+    if rows:
+        snapshot_drop("generators")
+    if not rows:
+        return 502, {"error": err}
+    return 201, {"readers": rows,
+                 "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}: {err}" if err else None}
+
+
+def reader_delete(name):
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    if not name or not _GEN_NAME_RE.match(name) or not name.startswith(GEN_PREFIX):
+        return 400, {"error": "not a reader name"}
+    claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}")
+    if "_error" in claim:
+        return 404, {"error": f"no reader named {name}"}
+    if not _is_reader(claim):
+        return 403, {"error": f"{name} is not a reader booked from this page"}
+    code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}",
+                         "DELETE")
+    if code not in (200, 202):
+        return code, {"error": res.get("error") or "claim delete failed"}
+    snapshot_drop("generators")
+    return 200, {"deleted": name}
+
+
+def generator_create(req):
+    """Book req["count"] writers. The first carries the ids the operator
+    submitted; every further copy gets ids minted here, since two writers on one
+    flow delete each other's grains.
+
+    201 with {"generators": [...], "error": ...} once at least one claim exists:
+    a copy that fails after others were booked must not hide the ones that run.
+    """
+    if not GEN_ENABLED:
+        return 403, {"error": "generator booking is disabled on this install"}
+    bad = _validate_generator(req)
+    if bad:
+        return 400, {"error": bad}
+
+    # Fail closed: booking a writer whose id might already be written is the one
+    # mistake here that destroys somebody else's grains.
+    used, err = _flow_ids_in_use()
+    if err:
+        return 503, {"error": f"cannot check flow-id uniqueness: {err}"}
+    video = req.get("video") or {}
+    audio = req.get("audio") or {}
+    for block in (video, audio):
+        if not block.get("enabled"):
+            continue
+        flow_id = (block.get("id") or "").lower()
+        if flow_id in used:
+            return 409, {"error": f"flow id {flow_id} is already in use by {used[flow_id]}"}
+
+    readers = req.get("readers") or {}
+    want_readers = _gen_int(readers, "count", 0) if readers else 0
+    rows = []
+    for copy in range(_gen_int(req, "count", 1)):
+        if copy:
+            video_id, audio_id = _gen_new_ids(used)
+            req = dict(req, video=dict(video, id=video_id), audio=dict(audio, id=audio_id))
+        for block in (req.get("video") or {}, req.get("audio") or {}):
+            if block.get("enabled"):
+                used[(block.get("id") or "").lower()] = "this booking"
+        code, res = _gen_book(req)
+        if code != 201:
+            if not rows:
+                return code, res
+            snapshot_drop("generators")
+            return 201, {"generators": rows,
+                         "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}: "
+                                  f"{res['error']}"}
+        row = _gen_row(res)
+        row["readers"] = []
+        if want_readers:
+            row["readers"], err = _book_readers(res, readers)
+            if err:
+                rows.append(row)
+                snapshot_drop("generators")
+                return 201, {"generators": rows,
+                             "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}, "
+                                      f"stopped at the readers of {row['name']}: {err}"}
+        rows.append(row)
+    snapshot_drop("generators")
+    return 201, {"generators": rows, "error": None}
 
 
 def generator_delete(name):
@@ -1953,6 +2257,22 @@ def generator_delete(name):
     if code not in (200, 202):
         return code, {"error": res.get("error") or "claim delete failed"}
 
+    # Its readers would hold a receiver open on a flow that is going away. A
+    # failure here is reported, not swallowed: the readers left behind are
+    # listed as orphans until released.
+    left = []
+    readers, err = _page_claims(_READER_COMPONENT, f",{_READER_LABEL_GENERATOR}={name}")
+    if err:
+        left.append(f"cannot list its readers: {err}")
+    for reader in readers or []:
+        if not _is_reader(reader):
+            continue
+        reader_name = reader["metadata"]["name"]
+        rcode, rres = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/"
+                               f"{reader_name}", "DELETE")
+        if rcode not in (200, 202, 404):
+            left.append(f"{reader_name}: {rres.get('error') or 'delete failed'}")
+
     # A mediamtx path left pointing at a flow that is going away retries the open
     # every 5s for as long as the server lives. A wide audio flow can have one
     # such path per pair, so every preview-<flow_id>[-...] path goes, not only
@@ -1963,7 +2283,8 @@ def generator_delete(name):
             with _idle_lock:
                 _idle_since.pop(path_name, None)
     snapshot_drop("generators")
-    return 200, {"deleted": name}
+    return 200, {"deleted": name,
+                 "error": "readers left behind: " + "; ".join(left) if left else None}
 
 
 # -- Serving under load ------------------------------------------------------
@@ -2260,14 +2581,16 @@ class H(BaseHTTPRequestHandler):
             uuid, owner, _, _ = self._preview_args()
             code, res = preview_del(uuid, owner)
             return self._send(code, res)
-        if self.path.startswith("/api/generators/"):
-            name = urllib.parse.unquote(
-                urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
-            try:
-                code, res = generator_delete(name)
-            except Exception as e:
-                code, res = 500, {"error": str(e)}
-            return self._send(code, res)
+        for prefix, release in (("/api/generators/", generator_delete),
+                                ("/api/readers/", reader_delete)):
+            if self.path.startswith(prefix):
+                name = urllib.parse.unquote(
+                    urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
+                try:
+                    code, res = release(name)
+                except Exception as e:
+                    code, res = 500, {"error": str(e)}
+                return self._send(code, res)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -2281,6 +2604,16 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
             try:
                 code, res = generator_create(body)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
+        parts = urllib.parse.urlsplit(self.path).path.rstrip("/").split("/")
+        if len(parts) == 5 and parts[1:3] == ["api", "generators"] and parts[4] == "readers":
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+            try:
+                code, res = reader_create(urllib.parse.unquote(parts[3]), body)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)

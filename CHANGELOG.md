@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.0.0-rc.52](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.51...v1.0.0-rc.52) (2026-10-19)
+
+
+### Features
+
+* **generators:** book readers that pull a generator's flows to a node ([#207](https://github.com/qvest-digital/dmf-app-qutil/issues/207)) ([5374254](https://github.com/qvest-digital/dmf-app-qutil/commit/53742542126e2576d45e2e0da3d50ffe226629eb))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump hono from 4.13.1 to 4.13.7 in /ui ([#179](https://github.com/qvest-digital/dmf-app-qutil/issues/179)) ([8baaffa](https://github.com/qvest-digital/dmf-app-qutil/commit/8baaffa805793e27139b74a40d7a1ad94cfd554a))
+
+## [1.0.0-rc.51](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.50...v1.0.0-rc.51) (2026-10-19)
+
+
+### Features
+
+* **generators:** book several copies and pin to a node by name ([#201](https://github.com/qvest-digital/dmf-app-qutil/issues/201)) ([f30bc99](https://github.com/qvest-digital/dmf-app-qutil/commit/f30bc991c990f52cfc553154c3538e6c8bba55c8))
+
+
+### Miscellaneous
+
+* **deps:** bump fast-uri from 3.1.5 to 3.1.7 in /ui ([#174](https://github.com/qvest-digital/dmf-app-qutil/issues/174)) ([abc9dac](https://github.com/qvest-digital/dmf-app-qutil/commit/abc9dac5b0a3465c7c3d9fef6acc239abc1f6262))
+
+## [1.0.0-rc.50](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.49...v1.0.0-rc.50) (2026-10-02)
+
+
+### Bug Fixes
+
+* **aggregator:** encode previews at 25 frames a second ([#196](https://github.com/qvest-digital/dmf-app-qutil/issues/196)) ([b5a6190](https://github.com/qvest-digital/dmf-app-qutil/commit/b5a61904e01b832acd80a7b943423322bb6e3643))
+
+## [1.0.0-rc.49](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.48...v1.0.0-rc.49) (2026-10-02)
+
+
+### Bug Fixes
+
+* **chart:** give the second test source the CPU it now draws ([#194](https://github.com/qvest-digital/dmf-app-qutil/issues/194)) ([def84a2](https://github.com/qvest-digital/dmf-app-qutil/commit/def84a26d7186de8b0a04757bbde6aa6eeec042c))
+
 ## [1.0.0-rc.48](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.47...v1.0.0-rc.48) (2026-09-28)
 
 

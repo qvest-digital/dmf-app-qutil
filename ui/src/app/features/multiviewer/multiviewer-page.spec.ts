@@ -44,6 +44,23 @@ describe('MultiviewerPage preview column', () => {
     fixture.detectChanges();
   }
 
+  it('keeps all diagnostics inside the inset scrolling area', () => {
+    const panel: HTMLElement = fixture.nativeElement.querySelector('.panel');
+    const scroll = panel.querySelector(':scope > .panel-scroll');
+
+    expect(scroll).not.toBeNull();
+    expect(panel.children).toHaveLength(1);
+    expect(scroll?.querySelector('h2')?.textContent).toContain('RDMA delivery');
+    for (const selector of [
+      '.agg',
+      'mv-gateway-grid',
+      'mv-service-links',
+      'mv-operator-flow-list',
+    ]) {
+      expect(scroll?.querySelector(selector)).not.toBeNull();
+    }
+  });
+
   // The column is held open whether or not it holds a card. A column that
   // arrives with the first preview re-lays the page out under the pointer
   // that opened it, which is what this reserves against.

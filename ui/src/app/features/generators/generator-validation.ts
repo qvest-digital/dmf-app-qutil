@@ -1,4 +1,4 @@
-import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
+import { GeneratorRequest, GeneratorsResponse, ReaderRequest } from '../../core/api/models';
 
 /**
  * The form's copy of the aggregator's rules.
@@ -18,9 +18,46 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const MAX_OVERLAY = 32;
 const MAX_CHANNELS = 16;
+const MAX_NODE = 253;
+/** DNS-1123 subdomain, which is what a node name is. */
+const NODE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
 
 function list(values: readonly (string | number)[]): string {
   return values.join(', ');
+}
+
+function validateNode(node: string): string | null {
+  const name = node.trim();
+  if (name && (name.length > MAX_NODE || !NODE_RE.test(name))) {
+    return (
+      "node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
+      'at most 253 characters'
+    );
+  }
+  return null;
+}
+
+/**
+ * The first thing wrong with a reader request, or null. allowNone admits a count
+ * of 0, which on the booking form means no readers.
+ */
+export function validateReaders(
+  request: ReaderRequest,
+  limits: GeneratorsResponse | null,
+  allowNone = false,
+): string | null {
+  const low = allowNone ? 0 : 1;
+  const max = limits?.maxCopies ?? Infinity;
+  if (!Number.isInteger(request.count) || request.count < low || request.count > max) {
+    return `reader count must be between ${low} and ${limits?.maxCopies ?? 'the server limit'}`;
+  }
+  const node = validateNode(request.node);
+  if (node) return `reader ${node}`;
+  const providers = limits?.providers ?? [];
+  if (providers.length && !providers.includes(request.provider)) {
+    return `provider must be one of ${list(providers)}`;
+  }
+  return null;
 }
 
 /** The first thing wrong with a submission, or null. */
@@ -36,6 +73,17 @@ export function validateGenerator(
   if (ttls.length && !ttls.includes(request.ttl)) {
     return `expiry must be one of ${list(ttls)}`;
   }
+
+  const maxCopies = limits?.maxCopies ?? Infinity;
+  if (!Number.isInteger(request.count) || request.count < 1 || request.count > maxCopies) {
+    return `count must be between 1 and ${limits?.maxCopies ?? 'the server limit'}`;
+  }
+
+  const node = validateNode(request.node);
+  if (node) return node;
+
+  const readers = validateReaders(request.readers, limits, true);
+  if (readers) return readers;
 
   for (const [on, block, what] of [
     [video.enabled, video, 'video'],
