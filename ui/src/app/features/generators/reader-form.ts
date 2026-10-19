@@ -2,10 +2,12 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   input,
   output,
   signal,
+  untracked,
 } from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
@@ -83,7 +85,10 @@ import { validateFlowReaders } from './generator-validation';
           [value]="count()"
           (input)="count.set(+value($event))"
         />
-        <div class="gen-hint">Each reader holds every chosen flow open.</div>
+        <div class="gen-hint">
+          Each reader holds every chosen flow open. A reader booked here is not released with a
+          generator whose flow it reads; add it from the generator for that.
+        </div>
       </div>
 
       <div class="gen-field">
@@ -125,6 +130,9 @@ import { validateFlowReaders } from './generator-validation';
       @if (serverError() || (chosen().length ? error() : ''); as text) {
         <div class="gen-errors" aria-live="polite">{{ text }}</div>
       }
+      @if (partial(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
 
       <div class="gen-actions">
         <button class="btn" type="button" [disabled]="!submittable()" (click)="submit()">
@@ -151,6 +159,29 @@ export class ReaderForm {
   protected readonly ttl = signal('1h');
   protected readonly busy = signal(false);
   protected readonly serverError = signal('');
+  /**
+   * Why the last booking stopped short. An outcome, not a verdict on the
+   * fields, so it lasts until the next submit -- in serverError the reset after
+   * a booking would clear it at once.
+   */
+  protected readonly partial = signal('');
+
+  constructor() {
+    // A server's complaint is about the values that were sent; editing any of
+    // them makes it stale.
+    effect(() => {
+      this.request();
+      untracked(() => this.serverError.set(''));
+    });
+    // A chosen flow that left the cluster's list would be posted unseen and
+    // refused, so it leaves the choice with it.
+    effect(() => {
+      const list = this.flowList();
+      if (!list) return;
+      const known = new Set((list.flows ?? []).map((f) => f.id));
+      untracked(() => this.chosen.update((ids) => ids.filter((id) => known.has(id))));
+    });
+  }
 
   protected readonly shown = computed<OperatorFlow[]>(() => {
     const needle = this.filter().trim().toLowerCase();
@@ -158,8 +189,13 @@ export class ReaderForm {
       (a.label || a.id).localeCompare(b.label || b.id),
     );
     if (!needle) return flows;
-    return flows.filter((f) =>
-      [f.label, f.grouphint, f.id].some((v) => (v ?? '').toLowerCase().includes(needle)),
+    // A chosen flow stays in view whatever the filter, so nothing is posted
+    // that the picker does not show.
+    const chosen = this.chosen();
+    return flows.filter(
+      (f) =>
+        chosen.includes(f.id) ||
+        [f.label, f.grouphint, f.id].some((v) => (v ?? '').toLowerCase().includes(needle)),
     );
   });
 
@@ -185,18 +221,18 @@ export class ReaderForm {
   }
 
   protected toggle(id: string, on: boolean): void {
-    this.serverError.set('');
     this.chosen.update((list) => (on ? [...list, id] : list.filter((f) => f !== id)));
   }
 
   protected submit(): void {
     this.busy.set(true);
     this.serverError.set('');
+    this.partial.set('');
     this.api.createFlowReaders(this.request()).subscribe({
       next: (batch) => {
         this.busy.set(false);
         this.created.emit(batch.readers);
-        this.serverError.set(batch.error ?? '');
+        this.partial.set(batch.error ?? '');
         this.chosen.set([]);
         this.label.set('');
       },

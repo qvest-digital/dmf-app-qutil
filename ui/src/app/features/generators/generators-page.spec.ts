@@ -367,6 +367,41 @@ describe('GeneratorsPage', () => {
       .flush({ deleted: 'generator-r-replica-0001' });
   });
 
+  it('drops a booked reader once the poll has reported it, so it cannot come back stale', async () => {
+    await load(response());
+    const component = fixture.componentInstance as unknown as {
+      onReadersCreated(r: { name: string }[]): void;
+    };
+    component.onReadersCreated([{ name: 'generator-r-flow-00aa' }]);
+    fixture.detectChanges();
+    expect(text()).toContain('generator-r-flow-00aa');
+
+    // The poll reports it, then later no longer does: expired or deleted elsewhere.
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    http
+      .match((req) => req.url === '/api/generators')
+      .forEach((req) => req.flush(response({ readers: [{ name: 'generator-r-flow-00aa' }] })));
+    fixture.detectChanges();
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    http.match((req) => req.url === '/api/generators').forEach((req) => req.flush(response()));
+    fixture.detectChanges();
+    expect(text()).not.toContain('generator-r-flow-00aa');
+  }, 10000);
+
+  it('forgets a reader whose delete finds it gone already', async () => {
+    await load(response({ readers: [{ name: 'generator-r-flow-00aa' }] }));
+    (fixture.nativeElement.querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE')
+      .flush(
+        { error: 'no reader named generator-r-flow-00aa' },
+        { status: 404, statusText: 'Not Found' },
+      );
+    fixture.detectChanges();
+    expect(text()).not.toContain('no reader named');
+  });
+
   it('offers no form where booking is switched off', async () => {
     await load(response({ enabled: false }));
     expect(fixture.nativeElement.querySelector('#gen-label')).toBeNull();

@@ -1116,6 +1116,20 @@ class FlowReaders(unittest.TestCase):
             self.assertTrue(name.startswith(agg.GEN_PREFIX + "r-"))
             self.assertLessEqual(len(name), 53)
 
+    def test_refuses_a_name_helm_would_not_take_as_a_release(self):
+        with mock.patch.object(agg, "GEN_PREFIX", "p" * 30 + "-"):
+            code, res = agg.flow_readers_create({"flows": [self.A], "count": 1,
+                                                 "label": "x" * 20})
+        self.assertEqual(code, 502)
+        self.assertIn("does not make a usable reader name", res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_refuses_a_label_or_expiry_that_is_not_text(self):
+        for body, message in (({"label": 5}, "label must be text"),
+                              ({"ttl": ["1h"]}, "expiry must be one of 1h, 8h, 24h, none")):
+            code, res = agg.flow_readers_create(dict({"flows": [self.A], "count": 1}, **body))
+            self.assertEqual((code, res["error"]), (400, message))
+
     def test_expires_on_its_own(self):
         agg.flow_readers_create({"flows": [self.A], "count": 1, "ttl": "8h"})
         self.assertIn("end", self.posted[0]["spec"]["booking"]["window"])

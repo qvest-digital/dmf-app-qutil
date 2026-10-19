@@ -1,4 +1,12 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
 import { Generator, GeneratorReader } from '../../core/api/models';
@@ -71,6 +79,31 @@ export class GeneratorsPage {
   private readonly fresh = signal<Generator[]>([]);
   /** Readers booked since the last poll, by generator, for the same reason as fresh. */
   private readonly freshReaders = signal<Record<string, GeneratorReader[]>>({});
+
+  constructor() {
+    // A booking stands in for the poll only until the poll reports it. Kept past
+    // that, it would come back with its booking-time state once the claim
+    // expires or is deleted elsewhere, and offer a delete that can only 404.
+    effect(() => {
+      const data = this.data();
+      if (!data) return;
+      const generators = new Set((data.generators ?? []).map((g) => g.name));
+      const readers = new Set(
+        [...(data.readers ?? []), ...(data.generators ?? []).flatMap((g) => g.readers ?? [])].map(
+          (r) => r.name,
+        ),
+      );
+      untracked(() => {
+        this.fresh.update((list) => list.filter((g) => !generators.has(g.name)));
+        this.freshFlowReaders.update((list) => list.filter((r) => !readers.has(r.name)));
+        this.freshReaders.update((all) =>
+          Object.fromEntries(
+            Object.entries(all).map(([g, list]) => [g, list.filter((r) => !readers.has(r.name))]),
+          ),
+        );
+      });
+    });
+  }
   protected readonly deleting = signal<string[]>([]);
   protected readonly deleteError = signal('');
   protected readonly readerError = signal('');
@@ -105,18 +138,27 @@ export class GeneratorsPage {
     this.api.deleteReader(name).subscribe({
       next: () => {
         this.deleting.update((list) => list.filter((n) => n !== name));
-        this.freshFlowReaders.update((list) => list.filter((r) => r.name !== name));
-        this.freshReaders.update((all) =>
-          Object.fromEntries(
-            Object.entries(all).map(([g, list]) => [g, list.filter((r) => r.name !== name)]),
-          ),
-        );
+        this.forgetReader(name);
       },
-      error: (err: { error?: { error?: string } }) => {
+      error: (err: { status?: number; error?: { error?: string } }) => {
         this.deleting.update((list) => list.filter((n) => n !== name));
+        // Gone already: nothing left to release, so nothing left to show.
+        if (err.status === 404) {
+          this.forgetReader(name);
+          return;
+        }
         this.readerError.set(err.error?.error ?? `could not delete ${name}`);
       },
     });
+  }
+
+  private forgetReader(name: string): void {
+    this.freshFlowReaders.update((list) => list.filter((r) => r.name !== name));
+    this.freshReaders.update((all) =>
+      Object.fromEntries(
+        Object.entries(all).map(([g, list]) => [g, list.filter((r) => r.name !== name)]),
+      ),
+    );
   }
 
   protected remove(name: string): void {

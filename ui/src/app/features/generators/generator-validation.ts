@@ -72,6 +72,7 @@ export function validateFlowReaders(
   request: FlowReaderRequest,
   limits: GeneratorsResponse | null,
 ): string | null {
+  if (typeof request.label !== 'string') return 'label must be text';
   const max = limits?.maxCopies ?? 16;
   if (request.flows.length < 1 || request.flows.length > max) {
     return `choose between 1 and ${max} flows`;
@@ -92,6 +93,7 @@ export function validateGenerator(
   request: GeneratorRequest,
   limits: GeneratorsResponse | null,
 ): string | null {
+  if (typeof request.label !== 'string') return 'label must be text';
   const video = request.video;
   const audio = request.audio;
   if (!video.enabled && !audio.enabled) return 'enable at least one of video or audio';

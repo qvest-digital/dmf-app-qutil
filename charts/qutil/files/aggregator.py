@@ -953,15 +953,19 @@ except ValueError:
 _GEN_LABEL_MANAGED = "app.kubernetes.io/managed-by"
 _GEN_LABEL_COMPONENT = "app.kubernetes.io/component"
 _GEN_COMPONENT = "generator"
-# Readers are claims of READER_CLASS that hold a generator's flows open on a
-# node, which is what makes mxl-k8s mirror them there. They carry the
-# generator's name, so they are listed under it and released with it.
+# Readers are claims of READER_CLASS that hold flows open on a node, which is
+# what makes mxl-k8s mirror them there. A reader of a generator carries the
+# generator's name, so it is listed under it and released with it; a reader of
+# flows chosen by id carries none and lives until its own expiry.
 READER_CLASS = os.environ.get("READER_CLASS", "mxl-reader")
 _READER_COMPONENT = "reader"
 _READER_LABEL_GENERATOR = "qutil.qvest-digital.com/generator"
 # What the receiver CRD accepts as a libmxl-fabrics provider.
 _READER_PROVIDERS = ("auto", "tcp", "verbs", "efa", "shm")
 _GEN_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+# The provisioner names the Helm release after the claim, and Helm refuses a
+# release name over 53 characters.
+_GEN_MAX_NAME = 53
 _GEN_MAX_BODY = 8192
 # videotestsrc patterns, passed to the writer as -p. An unknown one leaves the
 # pod Ready and producing nothing, so the set is closed here.
@@ -1737,6 +1741,8 @@ def _validate_generator(req):
     """
     if not isinstance(req, dict):
         return "body must be a JSON object of at most 8 KiB"
+    if not isinstance(req.get("label", ""), str):
+        return "label must be text"
 
     video = req.get("video") or {}
     audio = req.get("audio") or {}
@@ -1745,7 +1751,8 @@ def _validate_generator(req):
     if not video_on and not audio_on:
         return "enable at least one of video or audio"
 
-    if req.get("ttl", "1h") not in _GEN_TTLS:
+    ttl = req.get("ttl", "1h")
+    if not isinstance(ttl, str) or ttl not in _GEN_TTLS:
         return "expiry must be one of " + ", ".join(_GEN_TTLS)
 
     count = _gen_int(req, "count", 1)
@@ -1806,6 +1813,15 @@ def _validate_generator(req):
     return None
 
 
+def _ttl_window(req):
+    """The booking window an expiry choice asks for, or None for no expiry."""
+    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
+    if not seconds:
+        return None
+    end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
 def _gen_claim(name, req):
     """The claim to POST. Deliberately shaped like the blocks
     charts/qutil/templates/claims-writers.yaml renders, so the two can be read
@@ -1859,10 +1875,9 @@ def _gen_claim(name, req):
         "booking": {"jobRef": GEN_JOB_REF},
         "parameters": parameters,
     }
-    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
-    if seconds:
-        end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        spec["booking"]["window"] = {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    window = _ttl_window(req)
+    if window:
+        spec["booking"]["window"] = window
 
     return {
         "apiVersion": "dmf.qvest-digital.com/v1alpha1",
@@ -2097,7 +2112,7 @@ def _gen_book(req):
     pattern = (req.get("video") or {}).get("pattern") or ""
     for attempt in (1, 2):
         name = _gen_name(label, pattern)
-        if not _GEN_NAME_RE.match(name) or len(name) > 63:
+        if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
             return 400, {"error": "that label does not make a usable claim name"}
         code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                              "POST", _gen_claim(name, req))
@@ -2126,10 +2141,8 @@ def _post_readers(stem, flows, req, window=None, generator=None):
     for _ in range(_gen_int(req, "count", 1)):
         for attempt in (1, 2):
             name = f"{stem}{secrets.token_hex(2)}"
-            # 53, not 63: the provisioner names the Helm release after the
-            # claim, and Helm refuses a longer release name.
-            if not _GEN_NAME_RE.match(name) or len(name) > 53:
-                return rows, f"{stem} does not make a usable reader name"
+            if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
+                return rows, "that label or prefix does not make a usable reader name"
             code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
                                  "POST", _reader_claim(name, flows, req, window, generator))
             if code in (200, 201):
@@ -2178,6 +2191,8 @@ def _validate_flow_readers(req):
     None. Every message is mirrored in the UI's generator-validation.ts."""
     if not isinstance(req, dict):
         return "body must be a JSON object of at most 8 KiB"
+    if not isinstance(req.get("label", ""), str):
+        return "label must be text"
     flows = req.get("flows")
     if not isinstance(flows, list) or not 1 <= len(flows) <= _GEN_MAX_COPIES:
         return f"choose between 1 and {_GEN_MAX_COPIES} flows"
@@ -2186,7 +2201,8 @@ def _validate_flow_readers(req):
             return "every flow id must be a full lowercase UUID"
     if len(set(flows)) != len(flows):
         return "a flow is chosen twice"
-    if req.get("ttl", "1h") not in _GEN_TTLS:
+    ttl = req.get("ttl", "1h")
+    if not isinstance(ttl, str) or ttl not in _GEN_TTLS:
         return "expiry must be one of " + ", ".join(_GEN_TTLS)
     return _validate_readers(req)
 
@@ -2208,12 +2224,7 @@ def flow_readers_create(req):
             return 404, {"error": f"flow {flow_id} is not known to the cluster"}
 
     stem = f"{GEN_PREFIX}r-{_gen_slug(req.get('label')) or 'flow'}-"
-    seconds = _GEN_TTLS.get(req.get("ttl", "1h"), 3600)
-    window = None
-    if seconds:
-        end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        window = {"end": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
-    rows, err = _post_readers(stem, req["flows"], req, window)
+    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req))
     if rows:
         snapshot_drop("generators")
     if not rows:
