@@ -77,7 +77,9 @@
             </span>
           </div>
           @if (r.reader.statusError; as err) {
-            <div class="mon-error">{{ err }}</div>
+            <div class="mon-error">
+              {{ err }}{{ r.stale ? ' - counts below are the last it reported' : '' }}
+            </div>
           }
           @for (f of r.flows; track f.key) {
             <div class="mon-flow" [class.problem]="f.problem">
@@ -134,7 +136,9 @@
       @for (e of events(); track $index) {
         <div class="mon-event" [class]="e.severity">
           <span class="mon-meta">{{ time(e.at) }}</span>
-          <span class="mon-event-who">{{ e.reader }} / {{ e.flow.slice(0, 8) }}</span>
+          <span class="mon-event-who"
+            >{{ e.reader }}{{ e.flow ? ' / ' + e.flow.slice(0, 8) : '' }}</span
+          >
           <span>{{ e.text }}</span>
         </div>
       } @empty {

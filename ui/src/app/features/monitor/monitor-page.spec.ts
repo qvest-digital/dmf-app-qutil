@@ -23,6 +23,7 @@ function status(
       ok: 1000,
       too_early: 0,
       too_late: 0,
+      missing: 0,
       invalid: 0,
       incomplete: 0,
       wrong_size: 0,
@@ -146,6 +147,18 @@ describe('MonitorPage', () => {
     expect(dots[0].classList).toContain('bad');
     expect(text()).toContain('expected otherwise: 1920x1080 where 1296x720 was expected');
   });
+
+  it('keeps the last counts of a reader that stops answering, marked stale', async () => {
+    await poll(response(status({ too_late: 4 })));
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    const silent = response(status());
+    silent.readers[0].status = null;
+    silent.readers[0].statusError = 'no answer within 2 s';
+    await poll(silent);
+    expect(text()).toContain('counts below are the last it reported');
+    expect(text()).toContain('too late 4');
+    expect(text()).toContain('no answer within 2 s');
+  }, 10000);
 
   it('names a reader it cannot ask instead of hiding it', async () => {
     const body = response(status());

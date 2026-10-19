@@ -23,6 +23,7 @@ export const COUNTERS: CounterSpec[] = [
   { key: 'skipped', label: 'skipped', severity: 'warn', read: (f) => f.skipped },
   { key: 'stalls', label: 'stalls', severity: 'warn', read: (f) => f.stalls },
   { key: 'lost', label: 'flow lost', severity: 'warn', read: (f) => f.lost },
+  { key: 'missing', label: 'missing', severity: 'bad', read: (f) => f.reads.missing },
   { key: 'invalid', label: 'invalid', severity: 'bad', read: (f) => f.reads.invalid },
   { key: 'incomplete', label: 'incomplete', severity: 'bad', read: (f) => f.reads.incomplete },
   { key: 'wrong_size', label: 'wrong size', severity: 'bad', read: (f) => f.reads.wrong_size },
@@ -76,6 +77,9 @@ export const STATE_LABELS: Record<string, string> = {
   open: 'open',
 };
 
+/** How old a reader's last error may be to explain a counter that rose. */
+const RECENT_ERROR_S = 3;
+
 /** Counters by flow key, `<reader>/<flow id>`, then counter key. */
 export type Counts = Record<string, Record<string, number>>;
 
@@ -88,7 +92,7 @@ export function countsOf(data: MonitorResponse | null): Counts {
   const out: Counts = {};
   for (const reader of data?.readers ?? []) {
     for (const flow of reader.status?.flows ?? []) {
-      const counts: Record<string, number> = {};
+      const counts: Record<string, number> = { opens: flow.opens };
       for (const c of COUNTERS) counts[c.key] = c.read(flow);
       out[flowKey(reader.name, flow.id)] = counts;
     }
@@ -96,8 +100,21 @@ export function countsOf(data: MonitorResponse | null): Counts {
   return out;
 }
 
-/** A counter less what it stood at when the test started. A counter that went
- *  down belongs to a reader that restarted, so it counts from zero again. */
+/**
+ * The baseline that applies to a flow now. A reader that restarted counts from
+ * zero, which shows as fewer opens or fewer correct reads than at the test
+ * start; then the whole flow counts from zero, not counter by counter, since a
+ * counter that has already climbed past its old value would undercount.
+ */
+export function baselineFor(
+  counts: Record<string, number>,
+  base: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  if (!base) return undefined;
+  return counts['opens'] < base['opens'] || counts['ok'] < base['ok'] ? undefined : base;
+}
+
+/** A counter less what it stood at when the test started. */
 export function since(now: number, base: number | undefined): number {
   return base === undefined || now < base ? now : now - base;
 }
@@ -121,13 +138,25 @@ export function diffEvents(
   at: number,
 ): MonitorEvent[] {
   if (!prev) return [];
+  const out: MonitorEvent[] = [];
+  // A reader that stops answering, or answers again, is news of its own: its
+  // flows drop out of the counts while it is silent.
+  const wasSilent = new Map(prev.readers.map((r) => [r.name, r.statusError]));
+  for (const reader of next.readers) {
+    if (!wasSilent.has(reader.name)) continue;
+    const before = wasSilent.get(reader.name);
+    if (reader.statusError && !before) {
+      out.push({ at, reader: reader.name, flow: '', severity: 'bad', text: reader.statusError });
+    } else if (!reader.statusError && before) {
+      out.push({ at, reader: reader.name, flow: '', severity: 'ok', text: 'answering again' });
+    }
+  }
   const before = countsOf(prev);
   const states = new Map<string, string>();
   for (const reader of prev.readers) {
     for (const flow of reader.status?.flows ?? [])
       states.set(flowKey(reader.name, flow.id), flow.state);
   }
-  const out: MonitorEvent[] = [];
   for (const reader of next.readers) {
     for (const flow of reader.status?.flows ?? []) {
       const key = flowKey(reader.name, flow.id);
@@ -152,7 +181,9 @@ export function diffEvents(
             reader: reader.name,
             flow: flow.id,
             severity: c.severity,
-            text: `${c.label} +${delta}${flow.lastError ? `: ${flow.lastError.message}` : ''}`,
+            // Only an error from this poll explains this rise; an older one
+            // belongs to something else, such as the wait before a mirror landed.
+            text: `${c.label} +${delta}${flow.lastError && flow.lastError.secondsAgo <= RECENT_ERROR_S ? `: ${flow.lastError.message}` : ''}`,
           });
         }
       }

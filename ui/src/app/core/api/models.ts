@@ -320,8 +320,6 @@ export interface PreviewStatus {
 
 // ── /api/generators ─────────────────────────────────────────────────────────
 
-/** What the form sends. The aggregator translates these into claim parameters:
- *  no browser names a parameter key, because nothing validates one. */
 // -- GET /api/monitor -------------------------------------------------------
 
 /** Read outcomes a reader counts per flow, in grains or samples. */
@@ -329,6 +327,7 @@ export interface ReaderReads {
   ok: number;
   too_early: number;
   too_late: number;
+  missing: number;
   invalid: number;
   incomplete: number;
   wrong_size: number;
@@ -352,7 +351,8 @@ export interface ReaderFlowStatus {
   /** starting | domain_unavailable | flow_not_found | permission_denied | flow_error | open */
   state: string;
   delivering: boolean;
-  unit: 'grains' | 'samples';
+  /** null until the flow has been opened: before that the reader cannot tell. */
+  unit: 'grains' | 'samples' | null;
   mediaType: string;
   format: string;
   /** How the flow differs from what the reader was told to expect, or ''. */
@@ -418,6 +418,8 @@ export interface FlowReaderRequest extends ReaderRequest {
   ttl: string;
 }
 
+/** What the form sends. The aggregator translates these into claim parameters:
+ *  no browser names a parameter key, because nothing validates one. */
 export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
