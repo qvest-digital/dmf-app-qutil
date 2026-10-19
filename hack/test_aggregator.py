@@ -825,7 +825,7 @@ class GeneratorBooking(unittest.TestCase):
         self.assertEqual(self.posted, [])
 
     def test_the_listing_no_longer_reports_a_cap(self):
-        with mock.patch.object(agg, "_gen_list", lambda: ([], None)):
+        with mock.patch.object(agg, "_gen_list", lambda: ([], [], None)):
             res = agg.generators()
         self.assertNotIn("max", res)
         self.assertEqual(res["maxCopies"], agg._GEN_MAX_COPIES)
@@ -990,9 +990,111 @@ class GeneratorReaders(unittest.TestCase):
     def test_the_listing_nests_readers_under_their_generator(self):
         _, res = agg.reader_create(self.GEN, {"count": 1})
         self.claims[res["readers"][0]["name"]] = self.posted[0]
-        rows, err = agg._gen_list()
+        rows, orphans, err = agg._gen_list()
         self.assertIsNone(err)
         self.assertEqual([r["name"] for r in rows[0]["readers"]], [res["readers"][0]["name"]])
+        self.assertEqual(orphans, [])
+
+    def test_readers_of_a_vanished_generator_are_listed_as_orphans(self):
+        _, res = agg.reader_create(self.GEN, {"count": 1})
+        self.claims[res["readers"][0]["name"]] = self.posted[0]
+        del self.claims[self.GEN]
+        rows, orphans, _ = agg._gen_list()
+        self.assertEqual(rows, [])
+        self.assertEqual([r["name"] for r in orphans], [res["readers"][0]["name"]])
+
+    def test_a_failed_reader_after_others_returns_what_was_booked(self):
+        self.fail_at = 3
+        code, res = agg.reader_create(self.GEN, {"count": 4})
+        self.assertEqual(code, 201)
+        self.assertEqual(len(res["readers"]), 2)
+        self.assertIn("booked 2 of 4", res["error"])
+
+    def test_a_reader_failure_on_the_form_says_how_far_the_booking_got(self):
+        self.fail_at = 2
+        req = {"label": "Bars", "ttl": "1h", "count": 3, "node": "",
+               "readers": {"count": 1},
+               "video": {"enabled": True, "id": self.VIDEO, "pattern": "smpte",
+                         "overlayText": "", "frameWidth": 1296, "frameHeight": 720,
+                         "grainRate": {"numerator": 30000, "denominator": 1001}},
+               "audio": {"enabled": False}}
+        code, res = agg.generator_create(req)
+        self.assertEqual(code, 201)
+        self.assertIn("booked 1 of 3", res["error"])
+
+    def test_reader_names_stay_inside_a_label_value_and_the_prefix(self):
+        long_gen = agg.GEN_PREFIX + "a" * 20 + "-ffff"
+        self.claims[long_gen] = dict(self._generator(), metadata=dict(
+            self._generator()["metadata"], name=long_gen))
+        _, res = agg.reader_create(long_gen, {"count": 1})
+        name = res["readers"][0]["name"]
+        self.assertLessEqual(len(name), 63)
+        self.assertTrue(name.startswith(agg.GEN_PREFIX))
+
+    def test_reader_delete_refuses_a_chart_claim_and_a_foreign_name(self):
+        self.claims["generator-bars-ab12-r0001"] = {
+            "metadata": {"name": "generator-bars-ab12-r0001",
+                         "labels": {agg._GEN_LABEL_MANAGED: "Helm",
+                                    agg._GEN_LABEL_COMPONENT: "reader"}}}
+        self.assertEqual(agg.reader_delete("generator-bars-ab12-r0001")[0], 403)
+        self.assertEqual(agg.reader_delete("writer-mxl-1")[0], 400)
+        self.assertEqual(self.deleted, [])
+
+    def test_no_readers_for_a_generator_on_its_way_out(self):
+        self.claims[self.GEN]["metadata"]["deletionTimestamp"] = "2026-10-19T12:00:00Z"
+        code, _ = agg.reader_create(self.GEN, {"count": 1})
+        self.assertEqual(code, 409)
+        self.assertEqual(self.posted, [])
+
+    def test_a_reader_left_behind_by_a_delete_is_reported(self):
+        _, res = agg.reader_create(self.GEN, {"count": 1})
+        reader = res["readers"][0]["name"]
+        self.claims[reader] = self.posted[0]
+        real = agg.k8s_json
+
+        def refuse_reader(path, method="GET", body=None):
+            if method == "DELETE" and path.endswith(reader):
+                return 500, {"error": "apiserver said no"}
+            return real(path, method, body)
+
+        with mock.patch.object(agg, "k8s_json", refuse_reader):
+            code, out = agg.generator_delete(self.GEN)
+        self.assertEqual(code, 200)
+        self.assertIn(reader, out["error"])
+
+
+class ReaderDelivering(unittest.TestCase):
+    """A reader's workload is ready once it serves, flows or not, so delivery
+    is read from the endpoint its claim publishes."""
+
+    def _claim(self, ready=True, url="http://r.ns:9102/delivering"):
+        endpoints = [{"name": "metrics", "url": "http://r.ns:9102/metrics"}]
+        if url:
+            endpoints.append({"name": "delivering", "url": url})
+        return {"status": {"handle": {"ready": ready, "endpoints": endpoints}}}
+
+    def _answer(self, code):
+        def urlopen(url, timeout=None):
+            self.asked = url
+            if code == 200:
+                return mock.MagicMock(__enter__=lambda s: mock.Mock(status=200),
+                                      __exit__=lambda *a: False)
+            raise urllib.error.HTTPError(url, code, "", {}, None)
+        return mock.patch.object(agg.urllib.request, "urlopen", urlopen)
+
+    def test_200_is_delivering(self):
+        with self._answer(200):
+            self.assertIs(agg._reader_delivering(self._claim()), True)
+        self.assertEqual(self.asked, "http://r.ns:9102/delivering")
+
+    def test_503_is_not_delivering(self):
+        with self._answer(503):
+            self.assertIs(agg._reader_delivering(self._claim()), False)
+
+    def test_unknown_until_the_handle_is_ready_or_published(self):
+        with self._answer(200):
+            self.assertIsNone(agg._reader_delivering(self._claim(ready=False)))
+            self.assertIsNone(agg._reader_delivering(self._claim(url=None)))
 
 
 class AncReader(unittest.TestCase):

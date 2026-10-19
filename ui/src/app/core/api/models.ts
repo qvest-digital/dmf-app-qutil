@@ -336,8 +336,13 @@ export interface GeneratorReader {
   phase?: string | null;
   ready?: boolean | null;
   deleting?: boolean;
-  /** A reader is ready only while every flow delivers, so this reason says why not. */
+  /** The binder's condition: whether the reader's workload serves at all. */
   reachable?: FlowCondition | null;
+  /**
+   * Whether every flow it reads had a read land within the last second, as the
+   * reader's own endpoint answers. Null until that can be asked.
+   */
+  delivering?: boolean | null;
   node?: string | null;
   provider?: string | null;
   flows?: string[];
@@ -389,6 +394,8 @@ export interface GeneratorsResponse {
   grainRates: { numerator: number; denominator: number }[];
   sampleRates: number[];
   generators: Generator[];
+  /** Readers whose generator is gone, so they can still be released. */
+  orphanReaders?: GeneratorReader[];
   error?: string | null;
 }
 

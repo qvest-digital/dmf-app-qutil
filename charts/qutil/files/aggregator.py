@@ -36,6 +36,7 @@
 # production namespace only. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 import uuid as uuid_mod
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1707,7 +1708,7 @@ def _validate_readers(req, allow_none=False):
     if not isinstance(req, dict):
         return "readers must be a JSON object"
     low = 0 if allow_none else 1
-    count = _gen_int(req, "count", 1)
+    count = _gen_int(req, "count", low)
     if count is None or not low <= count <= _GEN_MAX_COPIES:
         return f"reader count must be between {low} and {_GEN_MAX_COPIES}"
     bad = _validate_node(req.get("node"))
@@ -1923,6 +1924,30 @@ def _reader_claim(name, generator, req):
     }
 
 
+def _reader_delivering(claim):
+    """Whether every flow of a reader delivers: True, False, or None when that
+    cannot be told yet. Read from the endpoint the claim publishes, since the
+    reader's workload is ready as soon as it serves, flows or not."""
+    handle = (claim.get("status") or {}).get("handle") or {}
+    if not handle.get("ready"):
+        return None
+    url = next((ep.get("url") for ep in handle.get("endpoints") or []
+                if ep.get("name") == "delivering"), None)
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        return False if e.code == 503 else None
+    except Exception:
+        return None
+
+
+# Readers answer in parallel: one slow pod must not hold the whole listing.
+_reader_probe_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="reader-probe")
+
+
 def _reader_row(claim):
     meta = claim.get("metadata", {}) or {}
     status = claim.get("status", {}) or {}
@@ -1940,6 +1965,7 @@ def _reader_row(claim):
         "provider": (parameters.get("receiver") or {}).get("provider"),
         "flows": parameters.get("flows") or [],
         "created": meta.get("creationTimestamp"),
+        "delivering": None,
     }
 
 
@@ -2011,30 +2037,36 @@ def _page_claims(component, extra=""):
 
 
 def _gen_list():
+    """(generators, orphaned readers, error)."""
     claims, err = _page_claims(_GEN_COMPONENT)
     if err:
-        return None, err
+        return None, [], err
     readers, err = _page_claims(_READER_COMPONENT)
     if err:
-        return None, err
+        return None, [], err
     by_generator = {}
-    for claim in readers:
+    for claim, delivering in zip(readers, _reader_probe_pool.map(_reader_delivering, readers)):
         row = _reader_row(claim)
+        row["delivering"] = delivering
         by_generator.setdefault(row["generator"], []).append(row)
     rows = []
     for claim in claims:
         row = _gen_row(claim)
-        row["readers"] = sorted(by_generator.get(row["name"], []),
+        row["readers"] = sorted(by_generator.pop(row["name"], []),
                                 key=lambda r: (r["created"] or "", r["name"] or ""))
         rows.append(row)
     # Newest first, so a just-booked generator is at the top of the list it
     # appears in.
     rows.sort(key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
-    return rows, None
+    # Readers whose generator is gone, from a release that failed half way.
+    # Listed rather than dropped, or nothing on the page could release them.
+    orphans = sorted((r for group in by_generator.values() for r in group),
+                     key=lambda r: r["name"] or "")
+    return rows, orphans, None
 
 
 def generators():
-    rows, err = _gen_list() if GEN_ENABLED else ([], None)
+    rows, orphans, err = _gen_list() if GEN_ENABLED else ([], [], None)
     return {"namespace": CLAIM_NS, "className": GEN_CLASS, "enabled": GEN_ENABLED,
             "maxCopies": _GEN_MAX_COPIES, "ttls": [t for t in _GEN_TTLS],
             "readerClass": READER_CLASS, "providers": list(_READER_PROVIDERS),
@@ -2042,7 +2074,7 @@ def generators():
             "frameSizes": [{"width": w, "height": h} for w, h in _GEN_FRAME_SIZES],
             "grainRates": [{"numerator": n, "denominator": d} for n, d in _GEN_GRAIN_RATES],
             "sampleRates": list(_GEN_SAMPLE_RATES),
-            "generators": rows or [], "error": err}
+            "generators": rows or [], "orphanReaders": orphans, "error": err}
 
 
 def generator_flow_ids():
@@ -2113,6 +2145,8 @@ def reader_create(gen_name, req):
     generator = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{gen_name}")
     if "_error" in generator or not _is_generator(generator):
         return 404, {"error": f"no generator named {gen_name} was booked from this page"}
+    if (generator.get("metadata") or {}).get("deletionTimestamp"):
+        return 409, {"error": f"{gen_name} is being deleted"}
     if not _claim_flow_ids(generator):
         return 409, {"error": f"{gen_name} produces no flow to read"}
 
@@ -2197,7 +2231,8 @@ def generator_create(req):
                 rows.append(row)
                 snapshot_drop("generators")
                 return 201, {"generators": rows,
-                             "error": f"readers of {row['name']}: {err}"}
+                             "error": f"booked {len(rows)} of {_gen_int(req, 'count', 1)}, "
+                                      f"stopped at the readers of {row['name']}: {err}"}
         rows.append(row)
     snapshot_drop("generators")
     return 201, {"generators": rows, "error": None}
@@ -2222,12 +2257,21 @@ def generator_delete(name):
     if code not in (200, 202):
         return code, {"error": res.get("error") or "claim delete failed"}
 
-    # Its readers would hold a receiver open on a flow that is going away.
-    readers, _ = _page_claims(_READER_COMPONENT, f",{_READER_LABEL_GENERATOR}={name}")
+    # Its readers would hold a receiver open on a flow that is going away. A
+    # failure here is reported, not swallowed: the readers left behind are
+    # listed as orphans until released.
+    left = []
+    readers, err = _page_claims(_READER_COMPONENT, f",{_READER_LABEL_GENERATOR}={name}")
+    if err:
+        left.append(f"cannot list its readers: {err}")
     for reader in readers or []:
-        if _is_reader(reader):
-            k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/"
-                     f"{reader['metadata']['name']}", "DELETE")
+        if not _is_reader(reader):
+            continue
+        reader_name = reader["metadata"]["name"]
+        rcode, rres = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/"
+                               f"{reader_name}", "DELETE")
+        if rcode not in (200, 202, 404):
+            left.append(f"{reader_name}: {rres.get('error') or 'delete failed'}")
 
     # A mediamtx path left pointing at a flow that is going away retries the open
     # every 5s for as long as the server lives. A wide audio flow can have one
@@ -2239,7 +2283,8 @@ def generator_delete(name):
             with _idle_lock:
                 _idle_since.pop(path_name, None)
     snapshot_drop("generators")
-    return 200, {"deleted": name}
+    return 200, {"deleted": name,
+                 "error": "readers left behind: " + "; ".join(left) if left else None}
 
 
 # -- Serving under load ------------------------------------------------------

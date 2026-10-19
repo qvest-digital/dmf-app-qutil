@@ -46,6 +46,9 @@ export class GeneratorsPage {
     });
   });
 
+  /** Readers whose generator is gone: listed so they can still be released. */
+  protected readonly orphans = computed(() => this.data()?.orphanReaders ?? []);
+
   protected readonly count = computed(() =>
     this.generators().length ? `(${this.generators().length})` : '',
   );
@@ -104,7 +107,9 @@ export class GeneratorsPage {
     this.deleteError.set('');
     this.deleting.update((list) => [...list, name]);
     this.api.deleteGenerator(name).subscribe({
-      next: () => {
+      next: (res) => {
+        // The generator went, but some of its readers may not have.
+        this.deleteError.set((res as { error?: string | null })?.error ?? '');
         this.deleting.update((list) => list.filter((n) => n !== name));
         // Drop it from the optimistic list too, or a deleted generator would sit
         // there until the poll disagreed.

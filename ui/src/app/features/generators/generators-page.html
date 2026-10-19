@@ -45,6 +45,30 @@
           </div>
         }
       </div>
+      @if (orphans().length) {
+        <h2>Readers without a generator</h2>
+        <div class="flows">
+          @for (reader of orphans(); track reader.name) {
+            <div class="flow">
+              <div class="gen-reader">
+                <span class="dot"></span>
+                <span class="gen-reader-name">{{ reader.name }}</span>
+                <span class="gen-reader-meta">{{
+                  reader.node ? 'on ' + reader.node : 'any node'
+                }}</span>
+                <button
+                  class="btn kill"
+                  type="button"
+                  [disabled]="isDeleting(reader.name) || reader.deleting"
+                  (click)="removeReader(reader.name)"
+                >
+                  {{ isDeleting(reader.name) ? 'Deleting...' : 'Delete' }}
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      }
     </div>
   </aside>
 </main>

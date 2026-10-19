@@ -240,6 +240,55 @@ describe('GeneratorsPage', () => {
       .flush({ deleted: 'generator-bars-1-7f3a-r0001' });
   });
 
+  it('calls a serving reader delivering only on its own word', async () => {
+    const reader = { name: 'generator-bars-1-7f3a-r0001', phase: 'Bound', ready: true };
+    await load(
+      response({
+        generators: [
+          generator({
+            readers: [
+              { ...reader, delivering: true },
+              { ...reader, name: 'generator-bars-1-7f3a-r0002', delivering: false },
+              { ...reader, name: 'generator-bars-1-7f3a-r0003', delivering: null },
+            ],
+          }),
+        ],
+      }),
+    );
+    const states = Array.from(
+      fixture.nativeElement.querySelectorAll('.gen-reader .gen-reader-meta'),
+    ).map((el) => (el as HTMLElement).textContent ?? '');
+    expect(states[0]).toContain('delivering');
+    expect(states[1]).toContain('not delivering');
+    // Ready means serving; without an answer from the reader it is not called delivering.
+    expect(states[2]).toContain('serving');
+    expect(fixture.nativeElement.querySelectorAll('.gen-reader .dot.bad')).toHaveLength(1);
+  });
+
+  it('lists readers whose generator is gone, so they can still be released', async () => {
+    await load(response({ orphanReaders: [{ name: 'generator-gone-0001-r0001' }] }));
+    expect(text()).toContain('Readers without a generator');
+    (fixture.nativeElement.querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE' && r.url === '/api/readers/generator-gone-0001-r0001')
+      .flush({ deleted: 'generator-gone-0001-r0001' });
+  });
+
+  it('says which readers a generator delete left behind', async () => {
+    await load(response({ generators: [generator()] }));
+    (rows()[0].querySelector('.row .btn.kill') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.method === 'DELETE' && r.url === '/api/generators/generator-bars-1-7f3a')
+      .flush({
+        deleted: 'generator-bars-1-7f3a',
+        error: 'readers left behind: generator-bars-1-7f3a-r0001: apiserver said no',
+      });
+    fixture.detectChanges();
+    expect(text()).toContain('readers left behind');
+  });
+
   it('offers no form where booking is switched off', async () => {
     await load(response({ enabled: false }));
     expect(fixture.nativeElement.querySelector('#gen-label')).toBeNull();

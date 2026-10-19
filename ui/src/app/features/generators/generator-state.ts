@@ -1,4 +1,4 @@
-import { Generator } from '../../core/api/models';
+import { Generator, GeneratorReader } from '../../core/api/models';
 
 export interface GeneratorState {
   /** Feeds the shared .dot classes: live, bad, or grey for anything in between. */
@@ -26,4 +26,17 @@ export function generatorState(
   if (generator.phase === 'Expired') return { cls: '', label: 'expired' };
   if (generator.ready) return { cls: 'live', label: 'ready' };
   return { cls: '', label: reason || generator.phase?.toLowerCase() || 'pending' };
+}
+
+/**
+ * What a reader is doing. Its workload is ready as soon as it serves, so
+ * readiness alone says nothing about the flows: delivery is the verdict, and
+ * until it can be asked the binder's own reason is shown as for a generator.
+ */
+export function readerState(reader: GeneratorReader): GeneratorState {
+  const base = generatorState(reader);
+  if (reader.deleting || base.cls === 'bad' || !reader.ready) return base;
+  if (reader.delivering === true) return { cls: 'live', label: 'delivering' };
+  if (reader.delivering === false) return { cls: 'bad', label: 'not delivering' };
+  return { cls: '', label: 'serving' };
 }

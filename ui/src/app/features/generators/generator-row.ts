@@ -5,7 +5,7 @@ import {
   GeneratorsResponse,
   ReaderRequest,
 } from '../../core/api/models';
-import { generatorState } from './generator-state';
+import { generatorState, readerState } from './generator-state';
 import { validateReaders } from './generator-validation';
 
 /** A reader request for the generator it names, as the row hands it up. */
@@ -51,7 +51,7 @@ export interface AddReaders {
             [disabled]="busy() || generator().deleting"
             (click)="remove.emit(generator().name)"
           >
-            {{ busy() ? 'Deleting…' : 'Delete' }}
+            {{ busy() ? 'Deleting...' : 'Delete' }}
           </button>
         </span>
       </div>
@@ -60,13 +60,13 @@ export interface AddReaders {
           {{ video.id }}
         }
         @if (generator().audio; as audio) {
-          · {{ audio.id }}
+          | {{ audio.id }}
         }
         @if (generator().node; as node) {
-          · <span class="loc">on {{ node }}</span>
+          | <span class="loc">on {{ node }}</span>
         }
         @if (expiry()) {
-          · <span class="loc">{{ expiry() }}</span>
+          | <span class="loc">{{ expiry() }}</span>
         }
       </div>
       @for (reader of generator().readers ?? []; track reader.name) {
@@ -74,7 +74,7 @@ export interface AddReaders {
           <span class="dot" [class]="readerState(reader).cls" [title]="readerTip(reader)"></span>
           <span class="gen-reader-name">{{ reader.name }}</span>
           <span class="gen-reader-meta">
-            {{ reader.node ? 'on ' + reader.node : 'any node' }} · {{ reader.provider ?? 'auto' }} ·
+            {{ reader.node ? 'on ' + reader.node : 'any node' }} | {{ reader.provider ?? 'auto' }} |
             {{ readerState(reader).label }}
           </span>
           <button
@@ -172,7 +172,7 @@ export class GeneratorRow {
   );
 
   protected readerState(reader: GeneratorReader) {
-    return generatorState(reader);
+    return readerState(reader);
   }
 
   protected readerTip(reader: GeneratorReader): string {
@@ -209,7 +209,7 @@ export class GeneratorRow {
       parts.push(
         [video.pattern, `${video.frameWidth}x${video.frameHeight}`, video.grainRate]
           .filter(Boolean)
-          .join(' · '),
+          .join(' - '),
       );
     }
     if (generator.audio) {
