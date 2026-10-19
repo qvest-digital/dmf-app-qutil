@@ -8,8 +8,11 @@ import {
   BookingsResponse,
   FlowIds,
   FlowsResponse,
+  FlowReaderRequest,
   GeneratorBatch,
   GeneratorRequest,
+  ReaderBatch,
+  ReaderRequest,
   GeneratorsResponse,
   GrainMeta,
   GrainRing,
@@ -105,6 +108,24 @@ export class MetricsApi {
    *  the list does not have to wait for the next poll. */
   createGenerator(request: GeneratorRequest): Observable<GeneratorBatch> {
     return this.http.post<GeneratorBatch>('/api/generators', request);
+  }
+
+  /** Book readers of one generator: claims that hold its flows open on a node. */
+  createReaders(generator: string, request: ReaderRequest): Observable<ReaderBatch> {
+    return this.http.post<ReaderBatch>(
+      `/api/generators/${encodeURIComponent(generator)}/readers`,
+      request,
+    );
+  }
+
+  /** Book readers of flows chosen by id. The aggregator refuses a flow it cannot find. */
+  createFlowReaders(request: FlowReaderRequest): Observable<ReaderBatch> {
+    return this.http.post<ReaderBatch>('/api/readers', request);
+  }
+
+  /** Release one reader. The aggregator refuses any claim that is not one it booked. */
+  deleteReader(name: string): Observable<unknown> {
+    return this.http.delete(`/api/readers/${encodeURIComponent(name)}`);
   }
 
   /** Release one. The aggregator refuses any name it did not book. */

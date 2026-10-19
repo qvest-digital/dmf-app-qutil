@@ -1,11 +1,12 @@
 import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
-import { validateGenerator } from './generator-validation';
+import { validateFlowReaders, validateGenerator, validateReaders } from './generator-validation';
 
 const LIMITS: GeneratorsResponse = {
   namespace: 'production-demo-app',
   className: 'mxl-writer',
   enabled: true,
   maxCopies: 16,
+  providers: ['auto', 'tcp', 'verbs', 'efa', 'shm'],
   ttls: ['1h', '8h', '24h', 'none'],
   patterns: ['smpte', 'ball', 'gamut', 'checkers-8', 'snow', 'zone-plate'],
   animated: ['ball', 'snow', 'zone-plate'],
@@ -29,6 +30,7 @@ type Over = {
   ttl?: string;
   count?: number;
   node?: string;
+  readers?: Partial<GeneratorRequest['readers']>;
   video?: Partial<GeneratorRequest['video']>;
   audio?: Partial<GeneratorRequest['audio']>;
 };
@@ -39,6 +41,7 @@ function request(over: Over = {}): GeneratorRequest {
     ttl: over.ttl ?? '1h',
     count: over.count ?? 1,
     node: over.node ?? '',
+    readers: { count: 0, node: '', provider: 'auto', ...over.readers },
     video: {
       enabled: true,
       id: VIDEO_ID,
@@ -181,6 +184,49 @@ describe('validateGenerator', () => {
     );
     expect(validateGenerator(request({ node: 'a'.repeat(254) }), LIMITS)).toContain(
       'node must be a Kubernetes node name',
+    );
+  });
+
+  it('lets the booking form ask for no readers, and bounds how many it asks for', () => {
+    expect(validateGenerator(request({ readers: { count: 0 } }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ readers: { count: 16 } }), LIMITS)).toBeNull();
+    expect(validateGenerator(request({ readers: { count: 17 } }), LIMITS)).toBe(
+      'reader count must be between 0 and 16',
+    );
+  });
+
+  it('checks the reader node and transport against what the server takes', () => {
+    expect(validateGenerator(request({ readers: { count: 1, node: 'Worker_1' } }), LIMITS)).toBe(
+      "reader node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
+        'at most 253 characters',
+    );
+    expect(
+      validateGenerator(request({ readers: { count: 1, provider: 'carrier-pigeon' } }), LIMITS),
+    ).toBe('provider must be one of auto, tcp, verbs, efa, shm');
+  });
+
+  /** Adding readers to a booked generator books at least one, unlike the form. */
+  it('requires at least one reader when adding to a generator', () => {
+    expect(validateReaders({ count: 0, node: '', provider: 'auto' }, LIMITS)).toBe(
+      'reader count must be between 1 and 16',
+    );
+    expect(validateReaders({ count: 2, node: 'worker-3', provider: 'tcp' }, LIMITS)).toBeNull();
+  });
+
+  it('mirrors the server on a request for readers of chosen flows', () => {
+    const base = { label: '', count: 1, node: '', provider: 'auto', ttl: '1h' };
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID] }, LIMITS)).toBeNull();
+    expect(validateFlowReaders({ ...base, flows: [] }, LIMITS)).toBe(
+      'choose between 1 and 16 flows',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID.toUpperCase()] }, LIMITS)).toBe(
+      'every flow id must be a full lowercase UUID',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID, VIDEO_ID] }, LIMITS)).toBe(
+      'a flow is chosen twice',
+    );
+    expect(validateFlowReaders({ ...base, flows: [VIDEO_ID], count: 0 }, LIMITS)).toBe(
+      'reader count must be between 1 and 16',
     );
   });
 

@@ -243,6 +243,8 @@ spec:
               value: "true"
             - name: GEN_CLASS
               value: {{ .Values.generators.className | default .Values.writers.className }}
+            - name: READER_CLASS
+              value: {{ .Values.generators.readerClassName | quote }}
             - name: GEN_JOB_REF
               value: {{ .Values.generators.jobRef | quote }}
             - name: GEN_PREFIX

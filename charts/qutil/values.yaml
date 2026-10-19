@@ -234,8 +234,9 @@ writers:
 
 # Booking writers from the UI: the operator picks a videotestsrc pattern, the
 # aggregator creates a MediaFunctionClaim of writers.className, and the page
-# lists and deletes what it booked. The four writers above stay where they are;
-# this is for the flows a demo wants without a release.
+# lists and deletes what it booked, along with readers that hold a generator's
+# flows, or any flows chosen by id, open on a chosen node. The four writers above
+# stay where they are; this is for the flows a demo wants without a release.
 #
 # Off by default, and deliberately: enabling it grants the aggregator create and
 # delete on claims in the production namespace, and nothing in front of this API
@@ -246,6 +247,9 @@ generators:
   # Empty follows writers.className, so a cluster that registers the class under
   # another name says so once.
   className: ""
+  # The class a reader of a generator's flows is booked from. A reader holds
+  # those flows open on a node of its own, so mxl-k8s mirrors them there.
+  readerClassName: mxl-reader
   jobRef: qutil/generators
   # Every claim the page books starts with this, and it refuses to delete one
   # that does not. The claims this chart renders cannot match it.

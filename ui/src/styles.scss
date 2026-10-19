@@ -896,6 +896,57 @@ main {
 .gen-actions .gen-input {
   flex: 1;
 }
+/* A reader under the generator it reads: one line, so a generator with several
+   stays a row rather than becoming a card of its own. */
+.gen-reader {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.gen-reader-name {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-weight: 700;
+}
+.gen-reader-meta {
+  opacity: 0.7;
+}
+.gen-reader-add {
+  margin-top: 8px;
+}
+.gen-actions .gen-input.gen-count {
+  flex: 0 0 4.5em;
+}
+/* The flow picker: every flow the cluster carries, so it scrolls rather than
+   pushing the rest of the form off the panel. */
+.rd-flows {
+  max-height: 16em;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.rd-flow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.rd-flow-label {
+  font-weight: 700;
+}
+.rd-flow-meta {
+  grid-column: 2 / 4;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 10.5px;
+  opacity: 0.6;
+  word-break: break-all;
+}
 
 footer {
   padding: 12px 28px;

@@ -1,9 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
-import { Generator } from '../../core/api/models';
+import { Generator, GeneratorReader } from '../../core/api/models';
 import { GeneratorForm } from './generator-form';
-import { GeneratorRow } from './generator-row';
+import { AddReaders, GeneratorRow } from './generator-row';
+import { ReaderForm } from './reader-form';
+import { ReaderRow } from './reader-row';
 
 /**
  * Booking writers on demand: the form on the left, what it booked on the right.
@@ -16,7 +26,7 @@ import { GeneratorRow } from './generator-row';
 @Component({
   selector: 'mv-generators-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [GeneratorForm, GeneratorRow],
+  imports: [GeneratorForm, GeneratorRow, ReaderForm, ReaderRow],
   templateUrl: './generators-page.html',
 })
 export class GeneratorsPage {
@@ -37,16 +47,66 @@ export class GeneratorsPage {
   protected readonly generators = computed(() => {
     const polled = this.data()?.generators ?? [];
     const names = new Set(polled.map((g) => g.name));
-    return [...this.fresh().filter((g) => !names.has(g.name)), ...polled];
+    const fresh = this.freshReaders();
+    return [...this.fresh().filter((g) => !names.has(g.name)), ...polled].map((g) => {
+      const added = fresh[g.name] ?? [];
+      if (!added.length) return g;
+      const known = new Set((g.readers ?? []).map((r) => r.name));
+      return { ...g, readers: [...(g.readers ?? []), ...added.filter((r) => !known.has(r.name))] };
+    });
   });
+
+  /** Readers of chosen flows, with anything booked since the last poll in front. */
+  protected readonly flowReaders = computed(() => {
+    const polled = this.data()?.readers ?? [];
+    const names = new Set(polled.map((r) => r.name));
+    return [...this.freshFlowReaders().filter((r) => !names.has(r.name)), ...polled];
+  });
+
+  private readonly freshFlowReaders = signal<GeneratorReader[]>([]);
+
+  protected onReadersCreated(readers: GeneratorReader[]): void {
+    this.freshFlowReaders.update((list) => [...readers, ...list]);
+  }
+
+  /** Readers whose generator is gone: listed so they can still be released. */
+  protected readonly orphans = computed(() => this.data()?.orphanReaders ?? []);
 
   protected readonly count = computed(() =>
     this.generators().length ? `(${this.generators().length})` : '',
   );
 
   private readonly fresh = signal<Generator[]>([]);
-  private readonly deleting = signal<string[]>([]);
+  /** Readers booked since the last poll, by generator, for the same reason as fresh. */
+  private readonly freshReaders = signal<Record<string, GeneratorReader[]>>({});
+
+  constructor() {
+    // A booking stands in for the poll only until the poll reports it. Kept past
+    // that, it would come back with its booking-time state once the claim
+    // expires or is deleted elsewhere, and offer a delete that can only 404.
+    effect(() => {
+      const data = this.data();
+      if (!data) return;
+      const generators = new Set((data.generators ?? []).map((g) => g.name));
+      const readers = new Set(
+        [...(data.readers ?? []), ...(data.generators ?? []).flatMap((g) => g.readers ?? [])].map(
+          (r) => r.name,
+        ),
+      );
+      untracked(() => {
+        this.fresh.update((list) => list.filter((g) => !generators.has(g.name)));
+        this.freshFlowReaders.update((list) => list.filter((r) => !readers.has(r.name)));
+        this.freshReaders.update((all) =>
+          Object.fromEntries(
+            Object.entries(all).map(([g, list]) => [g, list.filter((r) => !readers.has(r.name))]),
+          ),
+        );
+      });
+    });
+  }
+  protected readonly deleting = signal<string[]>([]);
   protected readonly deleteError = signal('');
+  protected readonly readerError = signal('');
 
   protected isDeleting(name: string): boolean {
     return this.deleting().includes(name);
@@ -56,11 +116,58 @@ export class GeneratorsPage {
     this.fresh.update((list) => [...generators, ...list]);
   }
 
+  protected addReaders({ generator, request }: AddReaders): void {
+    this.readerError.set('');
+    this.api.createReaders(generator, request).subscribe({
+      next: (batch) => {
+        this.freshReaders.update((all) => ({
+          ...all,
+          [generator]: [...(all[generator] ?? []), ...batch.readers],
+        }));
+        this.readerError.set(batch.error ?? '');
+      },
+      error: (err: { error?: { error?: string } }) => {
+        this.readerError.set(err.error?.error ?? `could not add readers to ${generator}`);
+      },
+    });
+  }
+
+  protected removeReader(name: string): void {
+    this.readerError.set('');
+    this.deleting.update((list) => [...list, name]);
+    this.api.deleteReader(name).subscribe({
+      next: () => {
+        this.deleting.update((list) => list.filter((n) => n !== name));
+        this.forgetReader(name);
+      },
+      error: (err: { status?: number; error?: { error?: string } }) => {
+        this.deleting.update((list) => list.filter((n) => n !== name));
+        // Gone already: nothing left to release, so nothing left to show.
+        if (err.status === 404) {
+          this.forgetReader(name);
+          return;
+        }
+        this.readerError.set(err.error?.error ?? `could not delete ${name}`);
+      },
+    });
+  }
+
+  private forgetReader(name: string): void {
+    this.freshFlowReaders.update((list) => list.filter((r) => r.name !== name));
+    this.freshReaders.update((all) =>
+      Object.fromEntries(
+        Object.entries(all).map(([g, list]) => [g, list.filter((r) => r.name !== name)]),
+      ),
+    );
+  }
+
   protected remove(name: string): void {
     this.deleteError.set('');
     this.deleting.update((list) => [...list, name]);
     this.api.deleteGenerator(name).subscribe({
-      next: () => {
+      next: (res) => {
+        // The generator went, but some of its readers may not have.
+        this.deleteError.set((res as { error?: string | null })?.error ?? '');
         this.deleting.update((list) => list.filter((n) => n !== name));
         // Drop it from the optimistic list too, or a deleted generator would sit
         // there until the poll disagreed.

@@ -9,6 +9,7 @@ const LIMITS: GeneratorsResponse = {
   className: 'mxl-writer',
   enabled: true,
   maxCopies: 16,
+  providers: ['auto', 'tcp'],
   ttls: ['1h', '8h', '24h', 'none'],
   patterns: ['smpte', 'ball', 'gamut'],
   animated: ['ball'],
@@ -92,6 +93,7 @@ describe('GeneratorForm', () => {
       ttl: '1h',
       count: 1,
       node: '',
+      readers: { count: 0, node: '', provider: 'auto' },
       video: {
         enabled: true,
         id: VIDEO_ID,
@@ -116,6 +118,24 @@ describe('GeneratorForm', () => {
     const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/generators');
     expect(req.request.body.count).toBe(3);
     expect(req.request.body.node).toBe('worker-3');
+    req.flush({ generators: [], error: null });
+  });
+
+  it('posts the readers asked for every generator, and offers their node only then', () => {
+    flushIds();
+    expect(field('gen-reader-node')).toBeNull();
+    type(field('gen-readers'), '2');
+    type(field('gen-reader-node'), ' worker-7 ');
+    const provider = fixture.nativeElement.querySelector(
+      '#gen-reader-provider',
+    ) as HTMLSelectElement;
+    provider.value = 'tcp';
+    provider.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    bookButton().click();
+
+    const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/generators');
+    expect(req.request.body.readers).toEqual({ count: 2, node: 'worker-7', provider: 'tcp' });
     req.flush({ generators: [], error: null });
   });
 

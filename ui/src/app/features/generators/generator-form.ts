@@ -215,6 +215,52 @@ import { validateGenerator } from './generator-validation';
       </div>
 
       <div class="gen-field">
+        <label class="gen-label" for="gen-readers">Readers per generator</label>
+        <input
+          id="gen-readers"
+          class="gen-input"
+          type="number"
+          min="0"
+          [max]="limits()?.maxCopies ?? 0"
+          [value]="readerCount()"
+          (input)="readerCount.set(+value($event))"
+        />
+        <div class="gen-hint">
+          Each reader holds every flow of its generator open on its node, which mirrors the flows
+          there. More can be added per generator once it is booked.
+        </div>
+      </div>
+
+      @if (readerCount() > 0) {
+        <div class="gen-field">
+          <label class="gen-label" for="gen-reader-node">Reader node</label>
+          <input
+            id="gen-reader-node"
+            class="gen-input gen-mono"
+            type="text"
+            [value]="readerNode()"
+            (input)="readerNode.set(value($event))"
+            placeholder="any"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="gen-field">
+          <label class="gen-label" for="gen-reader-provider">Transport</label>
+          <select
+            id="gen-reader-provider"
+            class="gen-select"
+            [value]="readerProvider()"
+            (change)="readerProvider.set(value($event))"
+          >
+            @for (p of limits()?.providers ?? ['auto']; track p) {
+              <option [value]="p">{{ p }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      <div class="gen-field">
         <label class="gen-label" for="gen-ttl">Expires</label>
         <select id="gen-ttl" class="gen-select" [value]="ttl()" (change)="ttl.set(value($event))">
           @for (choice of limits()?.ttls ?? []; track choice) {
@@ -268,6 +314,9 @@ export class GeneratorForm {
   protected readonly ttl = signal('1h');
   protected readonly count = signal(1);
   protected readonly node = signal('');
+  protected readonly readerCount = signal(0);
+  protected readonly readerNode = signal('');
+  protected readonly readerProvider = signal('auto');
   protected readonly busy = signal(false);
   protected readonly rolling = signal(false);
   /** What the server said, which outranks anything this form worked out itself. */
@@ -298,6 +347,11 @@ export class GeneratorForm {
       ttl: this.ttl(),
       count: this.count(),
       node: this.node().trim(),
+      readers: {
+        count: this.readerCount(),
+        node: this.readerNode().trim(),
+        provider: this.readerProvider(),
+      },
       video: {
         enabled: this.videoOn(),
         id: this.videoId().trim(),
