@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.53](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.52...v1.0.0-rc.53) (2026-10-19)
+
+
+### Features
+
+* **generators:** book readers of any flow by id ([#208](https://github.com/qvest-digital/dmf-app-qutil/issues/208)) ([4f47511](https://github.com/qvest-digital/dmf-app-qutil/commit/4f475119b77856f61993bf9c78177837a1335bec))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump ip-address from 10.3.1 to 10.7.2 in /ui ([#193](https://github.com/qvest-digital/dmf-app-qutil/issues/193)) ([2bb91b2](https://github.com/qvest-digital/dmf-app-qutil/commit/2bb91b23053be8c6a227fabf1715a796c1e5a72f))
+
 ## [1.0.0-rc.52](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.51...v1.0.0-rc.52) (2026-10-19)
 
 
