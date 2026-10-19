@@ -1,0 +1,117 @@
+<main class="gen-main">
+  <aside class="panel">
+    <div class="gwbar">
+      <h2>Book a media function</h2>
+      @if (enabled()) {
+        <form class="gen-form" (ngSubmit)="book()">
+          <label class="gen-field">
+            <span>Class</span>
+            <input
+              name="className"
+              [ngModel]="className()"
+              (ngModelChange)="className.set($event)"
+              placeholder="mxl-writer"
+              autocapitalize="off"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+
+          <label class="gen-field">
+            <span>Label <em>optional</em></span>
+            <input
+              name="label"
+              [ngModel]="label()"
+              (ngModelChange)="label.set($event)"
+              placeholder="names the claim"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="gen-field">
+            <span>Parameters <em>YAML</em></span>
+            <textarea
+              name="params"
+              rows="12"
+              [ngModel]="params()"
+              (ngModelChange)="params.set($event)"
+              placeholder="flow:&#10;  group_hint: my-writer&#10;  video_output:&#10;    id: aaaa0000-0000-0000-0000-000000000001&#10;    flow_pattern: ball"
+              autocapitalize="off"
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
+          </label>
+
+          @if (formError(); as text) {
+            <div class="gen-errors" aria-live="polite">{{ text }}</div>
+          }
+
+          <button type="submit" class="gen-book" [disabled]="submitting() || full()">
+            {{ submitting() ? 'Booking...' : 'Book' }}
+          </button>
+
+          @if (full()) {
+            <div class="flow empty">
+              As many bookings as this install allows at once. Release one first.
+            </div>
+          }
+
+          <p class="gen-note">
+            Nothing here checks the parameters against the class: no class publishes a schema, so a
+            mistyped key reaches the provisioner as typed and shows up as a claim that never binds.
+          </p>
+        </form>
+      } @else {
+        <div class="flow empty">
+          Booking is switched off on this install. It grants the aggregator claim create and delete
+          in the production namespace, and nothing in front of this API authenticates.
+        </div>
+      }
+    </div>
+  </aside>
+
+  <aside class="panel">
+    <div class="gwbar">
+      <h2>
+        Booked here
+        <span class="of-count">{{ bookings().length ? '(' + bookings().length + ')' : '' }}</span>
+      </h2>
+      @if (deleteError(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
+      @if (listError(); as text) {
+        <div class="gen-errors">{{ text }}</div>
+      }
+      <div class="flows">
+        @for (booking of bookings(); track booking.name) {
+          <div class="flow">
+            <div class="gen-head">
+              <b>{{ booking.name }}</b>
+              <span class="of-count">{{ booking.className }}</span>
+              <span class="pill">{{ booking.phase || 'Pending' }}</span>
+            </div>
+            @if (booking.flowIds?.length) {
+              <div class="gen-note">flows: {{ booking.flowIds?.join(', ') }}</div>
+            }
+            @for (endpoint of booking.endpoints; track endpoint.name) {
+              <div class="gen-note">{{ endpoint.name }}: {{ endpoint.url }}</div>
+            }
+            <button
+              type="button"
+              class="gen-drop"
+              [disabled]="isDeleting(booking.name)"
+              (click)="remove(booking.name)"
+            >
+              {{ isDeleting(booking.name) ? 'Releasing...' : 'Release' }}
+            </button>
+          </div>
+        } @empty {
+          <div class="flow empty">
+            Nothing booked from this page. The chart's own claims and anything booked from
+            Generators are not listed here, and cannot be released from here.
+          </div>
+        }
+      </div>
+    </div>
+  </aside>
+</main>

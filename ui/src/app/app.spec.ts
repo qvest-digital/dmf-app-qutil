@@ -37,7 +37,11 @@ describe('App', () => {
     await fixture.whenStable();
     const tabs = [...fixture.nativeElement.querySelectorAll('.tab')] as HTMLAnchorElement[];
 
-    expect(tabs.map((t) => t.textContent!.trim())).toEqual(['Diagnostics', 'Generators']);
-    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen']);
+    expect(tabs.map((t) => t.textContent!.trim())).toEqual([
+      'Diagnostics',
+      'Generators',
+      'Bookings',
+    ]);
+    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book']);
   });
 });

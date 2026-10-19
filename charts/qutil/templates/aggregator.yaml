@@ -120,11 +120,11 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "qutil.fullname" . }}-aggregator
     namespace: {{ .Release.Namespace }}
-{{- if .Values.generators.enabled }}
+{{- if or .Values.generators.enabled .Values.bookings.enabled }}
 ---
 # Claim create and delete in the production namespace only, for the Generators
-# page. Reads come from the ClusterRole above; this adds nothing but the two
-# writes, and only where the writers are booked.
+# and Bookings pages. Reads come from the ClusterRole above; this adds nothing
+# but the two writes, and only where the functions are booked.
 #
 # RBAC cannot scope a delete to the claims this app created, so the aggregator
 # stamps its own managed-by label on what it books and refuses to delete a claim
@@ -258,6 +258,24 @@ spec:
             # does not. See the generators.resources comment in values.yaml.
             - name: GEN_RESOURCES
               value: {{ toJson .Values.generators.resources | quote }}
+            {{- end }}
+            {{- if .Values.bookings.enabled }}
+            # The Bookings page books any class the catalog carries. Off means
+            # the endpoints refuse rather than the apiserver forbidding them.
+            - name: BOOKING_ENABLED
+              value: "true"
+            - name: BOOKING_JOB_REF
+              value: {{ .Values.bookings.jobRef | quote }}
+            - name: BOOKING_PREFIX
+              value: {{ .Values.bookings.namePrefix | quote }}
+            - name: BOOKING_MAX
+              value: {{ .Values.bookings.maxCount | quote }}
+            {{- if not .Values.generators.enabled }}
+            # GEN_MANAGER names the marker for both pages, so an install running
+            # only the Bookings page still needs it.
+            - name: GEN_MANAGER
+              value: {{ include "qutil.fullname" . }}-aggregator
+            {{- end }}
             {{- end }}
           ports:
             - name: http
