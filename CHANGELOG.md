@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.52](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.51...v1.0.0-rc.52) (2026-10-19)
+
+
+### Features
+
+* **generators:** book readers that pull a generator's flows to a node ([#207](https://github.com/qvest-digital/dmf-app-qutil/issues/207)) ([5374254](https://github.com/qvest-digital/dmf-app-qutil/commit/53742542126e2576d45e2e0da3d50ffe226629eb))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump hono from 4.13.1 to 4.13.7 in /ui ([#179](https://github.com/qvest-digital/dmf-app-qutil/issues/179)) ([8baaffa](https://github.com/qvest-digital/dmf-app-qutil/commit/8baaffa805793e27139b74a40d7a1ad94cfd554a))
+
 ## [1.0.0-rc.51](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.50...v1.0.0-rc.51) (2026-10-19)
 
 
