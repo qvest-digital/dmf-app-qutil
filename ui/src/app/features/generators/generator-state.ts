@@ -14,7 +14,9 @@ export interface GeneratorState {
  * WaitingForProvisioner and WorkloadProgressing mean different things to whoever
  * has to fix them, and flattening both to "pending" would throw that away.
  */
-export function generatorState(generator: Generator): GeneratorState {
+export function generatorState(
+  generator: Pick<Generator, 'deleting' | 'reachable' | 'phase' | 'ready'>,
+): GeneratorState {
   if (generator.deleting) return { cls: '', label: 'deleting' };
 
   const reason = generator.reachable?.reason ?? '';

@@ -1,9 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
-import { Generator } from '../../core/api/models';
+import { Generator, GeneratorReader } from '../../core/api/models';
 import { GeneratorForm } from './generator-form';
-import { GeneratorRow } from './generator-row';
+import { AddReaders, GeneratorRow } from './generator-row';
 
 /**
  * Booking writers on demand: the form on the left, what it booked on the right.
@@ -37,7 +37,13 @@ export class GeneratorsPage {
   protected readonly generators = computed(() => {
     const polled = this.data()?.generators ?? [];
     const names = new Set(polled.map((g) => g.name));
-    return [...this.fresh().filter((g) => !names.has(g.name)), ...polled];
+    const fresh = this.freshReaders();
+    return [...this.fresh().filter((g) => !names.has(g.name)), ...polled].map((g) => {
+      const added = fresh[g.name] ?? [];
+      if (!added.length) return g;
+      const known = new Set((g.readers ?? []).map((r) => r.name));
+      return { ...g, readers: [...(g.readers ?? []), ...added.filter((r) => !known.has(r.name))] };
+    });
   });
 
   protected readonly count = computed(() =>
@@ -45,8 +51,11 @@ export class GeneratorsPage {
   );
 
   private readonly fresh = signal<Generator[]>([]);
-  private readonly deleting = signal<string[]>([]);
+  /** Readers booked since the last poll, by generator, for the same reason as fresh. */
+  private readonly freshReaders = signal<Record<string, GeneratorReader[]>>({});
+  protected readonly deleting = signal<string[]>([]);
   protected readonly deleteError = signal('');
+  protected readonly readerError = signal('');
 
   protected isDeleting(name: string): boolean {
     return this.deleting().includes(name);
@@ -54,6 +63,41 @@ export class GeneratorsPage {
 
   protected onCreated(generators: Generator[]): void {
     this.fresh.update((list) => [...generators, ...list]);
+  }
+
+  protected addReaders({ generator, request }: AddReaders): void {
+    this.readerError.set('');
+    this.api.createReaders(generator, request).subscribe({
+      next: (batch) => {
+        this.freshReaders.update((all) => ({
+          ...all,
+          [generator]: [...(all[generator] ?? []), ...batch.readers],
+        }));
+        this.readerError.set(batch.error ?? '');
+      },
+      error: (err: { error?: { error?: string } }) => {
+        this.readerError.set(err.error?.error ?? `could not add readers to ${generator}`);
+      },
+    });
+  }
+
+  protected removeReader(name: string): void {
+    this.readerError.set('');
+    this.deleting.update((list) => [...list, name]);
+    this.api.deleteReader(name).subscribe({
+      next: () => {
+        this.deleting.update((list) => list.filter((n) => n !== name));
+        this.freshReaders.update((all) =>
+          Object.fromEntries(
+            Object.entries(all).map(([g, list]) => [g, list.filter((r) => r.name !== name)]),
+          ),
+        );
+      },
+      error: (err: { error?: { error?: string } }) => {
+        this.deleting.update((list) => list.filter((n) => n !== name));
+        this.readerError.set(err.error?.error ?? `could not delete ${name}`);
+      },
+    });
   }
 
   protected remove(name: string): void {

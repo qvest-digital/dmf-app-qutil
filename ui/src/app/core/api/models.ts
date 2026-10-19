@@ -277,6 +277,15 @@ export interface PreviewStatus {
 
 /** What the form sends. The aggregator translates these into claim parameters:
  *  no browser names a parameter key, because nothing validates one. */
+/** Readers to book for a generator: each holds all its flows open on a node. */
+export interface ReaderRequest {
+  count: number;
+  /** Node name to pin every reader to. Empty leaves placement to the scheduler. */
+  node: string;
+  /** libmxl-fabrics provider the receiver asks for: one of the server's list. */
+  provider: string;
+}
+
 export interface GeneratorRequest {
   label: string;
   /** '1h' | '8h' | '24h' | 'none', as the server's list gives them. */
@@ -285,6 +294,8 @@ export interface GeneratorRequest {
   count: number;
   /** Node name to pin every copy to. Empty leaves placement to the scheduler. */
   node: string;
+  /** Readers booked for every copy. A count of 0 books none. */
+  readers: ReaderRequest;
   video: {
     enabled: boolean;
     id: string;
@@ -318,6 +329,21 @@ export interface GeneratorAudio {
   channelCount?: number | null;
 }
 
+/** One reader of a generator's flows, as its claim reports itself. */
+export interface GeneratorReader {
+  name: string;
+  generator?: string | null;
+  phase?: string | null;
+  ready?: boolean | null;
+  deleting?: boolean;
+  /** A reader is ready only while every flow delivers, so this reason says why not. */
+  reachable?: FlowCondition | null;
+  node?: string | null;
+  provider?: string | null;
+  flows?: string[];
+  created?: string | null;
+}
+
 /** One booked generator, as the claim reports itself. */
 export interface Generator {
   name: string;
@@ -340,6 +366,7 @@ export interface Generator {
   groupHint?: string | null;
   /** The node the booking pinned the writer to, or null when it pinned none. */
   node?: string | null;
+  readers?: GeneratorReader[];
   video?: GeneratorVideo | null;
   audio?: GeneratorAudio | null;
 }
@@ -349,8 +376,11 @@ export interface GeneratorsResponse {
   namespace: string;
   className: string;
   enabled: boolean;
-  /** Most copies one submission may book. */
+  /** Most copies one submission may book, and most readers one request may. */
   maxCopies: number;
+  readerClass?: string;
+  /** libmxl-fabrics providers a reader may ask for. */
+  providers?: string[];
   ttls: string[];
   patterns: string[];
   /** Patterns that stall the test source above 1296x720. */
@@ -368,6 +398,12 @@ export interface GeneratorsResponse {
  */
 export interface GeneratorBatch {
   generators: Generator[];
+  error?: string | null;
+}
+
+/** What one reader request booked, with the first failure if it stopped short. */
+export interface ReaderBatch {
+  readers: GeneratorReader[];
   error?: string | null;
 }
 

@@ -21,6 +21,9 @@
       @if (deleteError(); as text) {
         <div class="gen-errors" aria-live="polite">{{ text }}</div>
       }
+      @if (readerError(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
       @if (listError(); as text) {
         <div class="gen-errors">{{ text }}</div>
       }
@@ -29,7 +32,11 @@
           <mv-generator-row
             [generator]="generator"
             [busy]="isDeleting(generator.name)"
+            [limits]="limits()"
+            [busyReaders]="deleting()"
             (remove)="remove($event)"
+            (addReaders)="addReaders($event)"
+            (removeReader)="removeReader($event)"
           />
         } @empty {
           <div class="flow empty">

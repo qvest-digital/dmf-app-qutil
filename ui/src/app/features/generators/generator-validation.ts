@@ -1,4 +1,4 @@
-import { GeneratorRequest, GeneratorsResponse } from '../../core/api/models';
+import { GeneratorRequest, GeneratorsResponse, ReaderRequest } from '../../core/api/models';
 
 /**
  * The form's copy of the aggregator's rules.
@@ -26,6 +26,40 @@ function list(values: readonly (string | number)[]): string {
   return values.join(', ');
 }
 
+function validateNode(node: string): string | null {
+  const name = node.trim();
+  if (name && (name.length > MAX_NODE || !NODE_RE.test(name))) {
+    return (
+      "node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
+      'at most 253 characters'
+    );
+  }
+  return null;
+}
+
+/**
+ * The first thing wrong with a reader request, or null. allowNone admits a count
+ * of 0, which on the booking form means no readers.
+ */
+export function validateReaders(
+  request: ReaderRequest,
+  limits: GeneratorsResponse | null,
+  allowNone = false,
+): string | null {
+  const low = allowNone ? 0 : 1;
+  const max = limits?.maxCopies ?? Infinity;
+  if (!Number.isInteger(request.count) || request.count < low || request.count > max) {
+    return `reader count must be between ${low} and ${limits?.maxCopies ?? 'the server limit'}`;
+  }
+  const node = validateNode(request.node);
+  if (node) return `reader ${node}`;
+  const providers = limits?.providers ?? [];
+  if (providers.length && !providers.includes(request.provider)) {
+    return `provider must be one of ${list(providers)}`;
+  }
+  return null;
+}
+
 /** The first thing wrong with a submission, or null. */
 export function validateGenerator(
   request: GeneratorRequest,
@@ -45,13 +79,11 @@ export function validateGenerator(
     return `count must be between 1 and ${limits?.maxCopies ?? 'the server limit'}`;
   }
 
-  const node = request.node.trim();
-  if (node && (node.length > MAX_NODE || !NODE_RE.test(node))) {
-    return (
-      "node must be a Kubernetes node name: lowercase letters, digits, '-' and '.', " +
-      'at most 253 characters'
-    );
-  }
+  const node = validateNode(request.node);
+  if (node) return node;
+
+  const readers = validateReaders(request.readers, limits, true);
+  if (readers) return readers;
 
   for (const [on, block, what] of [
     [video.enabled, video, 'video'],
