@@ -381,7 +381,7 @@ imagePullSecret:
     name: aws-secretsmanager
     region: eu-central-1
   remoteRef:
-    key: mxl/dev/demo-app/ghcr-pat
+    key: mxl/shared/ghcr/pull-token
     usernameProperty: username
     passwordProperty: pat
   refreshInterval: 1h
