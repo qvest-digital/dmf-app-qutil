@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.55](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.54...v1.0.0-rc.55) (2026-10-22)
+
+
+### Features
+
+* **generators:** link booked names to their ring pages ([#216](https://github.com/qvest-digital/dmf-app-qutil/issues/216)) ([ee8a40d](https://github.com/qvest-digital/dmf-app-qutil/commit/ee8a40d5803396403ae524629b516ff56f2de0bb))
+
+
+### Miscellaneous
+
+* **chart:** point the default GHCR pull key at the shared master ([#213](https://github.com/qvest-digital/dmf-app-qutil/issues/213)) ([dd4d8a5](https://github.com/qvest-digital/dmf-app-qutil/commit/dd4d8a5685f1a960737f2687c12d59c81cd19ef5))
+
 ## [1.0.0-rc.54](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.53...v1.0.0-rc.54) (2026-10-19)
 
 
