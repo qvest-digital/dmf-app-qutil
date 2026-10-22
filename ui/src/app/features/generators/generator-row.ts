@@ -23,7 +23,13 @@ export interface AddReaders {
       <div class="row">
         <span class="dot" [class]="state().cls" [title]="tooltip()"></span>
         <span class="name">
-          {{ generator().name }}
+          @if (generator().ringUrl; as ring) {
+            <a class="ring-link" [href]="ring" target="_blank" rel="noopener noreferrer">{{
+              generator().name
+            }}</a>
+          } @else {
+            {{ generator().name }}
+          }
           @if (generator().video) {
             <span class="badge video">video</span>
           }

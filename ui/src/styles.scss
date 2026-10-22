@@ -769,16 +769,23 @@ main {
   font-size: 14px;
   margin-bottom: 2px;
 }
-.svc .ext {
+/* An external link: a service's address, or a booked function's name linked
+   to its ring page while that answers. */
+.svc .ext,
+.ring-link {
   color: var(--qv-lime);
   text-decoration: none;
+}
+.svc .ext:hover,
+.svc .ext:focus-visible,
+.ring-link:hover,
+.ring-link:focus-visible {
+  text-decoration: underline;
+}
+.svc .ext {
   /* A hostname has no spaces to wrap on and the card is half the panel. */
   overflow-wrap: anywhere;
   display: inline-block;
-}
-.svc .ext:hover,
-.svc .ext:focus-visible {
-  text-decoration: underline;
 }
 .svc .name {
   opacity: 0.6;

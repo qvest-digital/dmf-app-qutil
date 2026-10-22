@@ -81,7 +81,9 @@ The generators page books writers by asking the aggregator to create a
 because a flow id reaches a `rm -rf` glob in the writer chart and because
 uniqueness can only be judged against the cluster's own index. It lists and
 deletes only the claims it created, selected by a label the chart's claims do not
-carry.
+carry. A writer's or reader's name links to its ring page while the aggregator
+reports one up: the claim live and ready, its `ring` endpoint routed, and the
+page's `/healthz` answering a probe cached per claim for a few seconds.
 
 Three things are less obvious than they look, and all three were bugs once:
 

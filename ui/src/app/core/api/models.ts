@@ -356,6 +356,8 @@ export interface GeneratorReader {
   provider?: string | null;
   flows?: string[];
   created?: string | null;
+  /** Its ring page, set only while the claim is live and the page answers. */
+  ringUrl?: string | null;
 }
 
 /** One booked generator, as the claim reports itself. */
@@ -381,6 +383,8 @@ export interface Generator {
   /** The node the booking pinned the writer to, or null when it pinned none. */
   node?: string | null;
   readers?: GeneratorReader[];
+  /** Its ring page, set only while the claim is live and the page answers. */
+  ringUrl?: string | null;
   video?: GeneratorVideo | null;
   audio?: GeneratorAudio | null;
 }

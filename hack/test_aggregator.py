@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import threading
+import time
 import unittest
 import urllib.parse
 from unittest import mock
@@ -1184,13 +1185,13 @@ class ReaderDelivering(unittest.TestCase):
         return {"status": {"handle": {"ready": ready, "endpoints": endpoints}}}
 
     def _answer(self, code):
-        def urlopen(url, timeout=None):
+        def open_(url, timeout=None):
             self.asked = url
             if code == 200:
                 return mock.MagicMock(__enter__=lambda s: mock.Mock(status=200),
                                       __exit__=lambda *a: False)
             raise urllib.error.HTTPError(url, code, "", {}, None)
-        return mock.patch.object(agg.urllib.request, "urlopen", urlopen)
+        return mock.patch.object(agg._probe_opener, "open", open_)
 
     def test_200_is_delivering(self):
         with self._answer(200):
@@ -1205,6 +1206,249 @@ class ReaderDelivering(unittest.TestCase):
         with self._answer(200):
             self.assertIsNone(agg._reader_delivering(self._claim(ready=False)))
             self.assertIsNone(agg._reader_delivering(self._claim(url=None)))
+
+
+class RingLinks(unittest.TestCase):
+    """A writer's or reader's ring page is linked only while it is up: the
+    claim live and ready, the page routed, and its /healthz answering."""
+
+    GEN = "generator-bars-ab12"
+    READER = "generator-r-flow-00aa"
+    EXTERNAL = "https://ring-generator-bars-ab12.example.test/"
+    READER_EXTERNAL = "https://ring-generator-r-flow-00aa.example.test/"
+
+    def _claim(self, name, component, external=EXTERNAL, ready=True, phase="Bound",
+               end=None, deleting=False, url=None):
+        ring = {"name": "ring", "url": url or f"http://{name}.ns:9102/", "api": "html"}
+        if external:
+            ring["externalUrl"] = external
+        claim = {
+            "metadata": {"name": name, "labels": {
+                agg._GEN_LABEL_MANAGED: agg.GEN_MANAGER,
+                agg._GEN_LABEL_COMPONENT: component}},
+            "spec": {"booking": {"jobRef": "qutil/generators"}, "parameters": {}},
+            "status": {"phase": phase, "handle": {"ready": ready, "endpoints": [ring]}},
+        }
+        if end:
+            claim["spec"]["booking"]["window"] = {"end": end}
+        if deleting:
+            claim["metadata"]["deletionTimestamp"] = "2026-10-19T12:00:00Z"
+        return claim
+
+    def setUp(self):
+        self.claims = {}
+        self.probed = []
+        self.answer = 200
+        self.release = threading.Event()
+        self.release.set()
+
+        def safe_k8s(path):
+            selector = urllib.parse.unquote(path.split("labelSelector=", 1)[1])
+            want = dict(kv.split("=", 1) for kv in selector.split(","))
+            return {"items": [c for c in self.claims.values()
+                              if all(c["metadata"]["labels"].get(k) == v
+                                     for k, v in want.items())]}
+
+        def open_(url, timeout=None):
+            if url.endswith("/delivering"):
+                raise urllib.error.URLError("not under test")
+            self.probed.append(url)
+            self.release.wait(5)
+            if self.answer is None:
+                raise urllib.error.URLError("timed out")
+            if self.answer >= 400:
+                raise urllib.error.HTTPError(url, self.answer, "", {}, None)
+            return mock.MagicMock(__enter__=lambda s: mock.Mock(status=self.answer),
+                                  __exit__=lambda *a: False)
+
+        patches = [
+            mock.patch.object(agg, "safe_k8s", safe_k8s),
+            mock.patch.object(agg._probe_opener, "open", open_),
+            mock.patch.object(agg, "_ring_cache", {}),
+            mock.patch.object(agg, "_ring_inflight", set()),
+            mock.patch.object(agg, "_ring_listed", set()),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.release.set)
+
+    def _book(self, **kw):
+        """A generator and a reader of chosen flows, both shaped by kw; the
+        reader's route and url are its own unless kw names them."""
+        self.claims[self.GEN] = self._claim(self.GEN, agg._GEN_COMPONENT, **kw)
+        kw.setdefault("external", self.READER_EXTERNAL)
+        kw.pop("url", None)
+        self.claims[self.READER] = self._claim(self.READER, agg._READER_COMPONENT, **kw)
+
+    def _settle(self):
+        """Wait out the background refreshes a listing started."""
+        deadline = time.monotonic() + 5
+        while agg._ring_inflight and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertFalse(agg._ring_inflight)
+
+    def _links(self):
+        rows, standalone, _, err = agg._gen_list()
+        self.assertIsNone(err)
+        return rows[0]["ringUrl"], standalone[0]["ringUrl"]
+
+    def _probe_then_list(self):
+        """The first listing starts the probes; the next one reads them."""
+        self._links()
+        self._settle()
+        return self._links()
+
+    def _healthz(self):
+        return [u for u in self.probed if u.endswith("/healthz")]
+
+    def test_linked_while_routed_ready_and_answering(self):
+        self._book()
+        self.assertEqual(self._probe_then_list(), (self.EXTERNAL, self.READER_EXTERNAL))
+        self.assertIn(f"http://{self.GEN}.ns:9102/healthz", self.probed)
+        self.assertIn(f"http://{self.READER}.ns:9102/healthz", self.probed)
+
+    def test_a_new_claim_links_one_rebuild_after_its_probe(self):
+        self._book()
+        self.assertEqual(self._links(), (None, None))
+        self._settle()
+        self.assertEqual(self._links(), (self.EXTERNAL, self.READER_EXTERNAL))
+
+    def test_a_slow_probe_does_not_hold_the_listing(self):
+        self.release.clear()
+        self._book()
+        started = time.monotonic()
+        self.assertEqual(self._links(), (None, None))
+        self.assertEqual(self._links(), (None, None))
+        self.assertLess(time.monotonic() - started, 0.5)
+        # Two listings, one probe per claim in flight.
+        self.assertEqual(len(agg._ring_inflight), 2)
+        self.release.set()
+        self._settle()
+        self.assertEqual(len(self._healthz()), 2)
+        self.assertEqual(self._links()[0], self.EXTERNAL)
+
+    def test_only_a_200_links(self):
+        for answer in (200, 204, 302, 503, None):
+            agg._ring_cache.clear()
+            self.answer = answer
+            self._book()
+            want = (self.EXTERNAL, self.READER_EXTERNAL) if answer == 200 else (None, None)
+            self.assertEqual(self._probe_then_list(), want, answer)
+
+    def test_no_link_without_an_external_url(self):
+        # The class published before routes shipped: the page shows plain names.
+        self._book(external=None)
+        self.assertEqual(self._probe_then_list(), (None, None))
+        self.assertFalse(self._healthz())
+
+    def test_no_link_once_expired_or_on_its_way_out(self):
+        for kw in ({"phase": "Expired"}, {"phase": "Released"}, {"phase": "Failed"},
+                   {"deleting": True}, {"ready": False},
+                   {"end": "2026-01-01T00:00:00Z"}, {"end": "not a time"}):
+            self._book(**kw)
+            self.assertEqual(self._probe_then_list(), (None, None), kw)
+        self.assertFalse(self._healthz())
+
+    def test_a_future_window_still_links(self):
+        self._book(end="2999-01-01T00:00:00Z")
+        self.assertEqual(self._probe_then_list()[0], self.EXTERNAL)
+
+    def test_refuses_an_external_url_that_is_not_http(self):
+        self._book(external="javascript:alert(1)")
+        self.assertEqual(self._probe_then_list(), (None, None))
+        self.assertFalse(self._healthz())
+
+    def test_refuses_an_internal_url_that_is_not_http(self):
+        self._book(url="file:///etc/")
+        self.assertEqual(self._probe_then_list()[0], None)
+        self.assertNotIn("file:///healthz", self.probed)
+
+    def test_probe_is_cached_across_listings(self):
+        self._book()
+        self._probe_then_list()
+        for _ in range(5):
+            self._links()
+        self._settle()
+        self.assertEqual(len(self._healthz()), 2)
+
+    def test_a_url_change_within_the_ttl_probes_again(self):
+        self._book()
+        self.assertEqual(self._probe_then_list()[0], self.EXTERNAL)
+        self.claims[self.GEN] = self._claim(self.GEN, agg._GEN_COMPONENT,
+                                            url="http://elsewhere.ns:9102/")
+        # The answer for the old url does not carry over to the new one.
+        self.assertEqual(self._links()[0], None)
+        self._settle()
+        self.assertIn("http://elsewhere.ns:9102/healthz", self.probed)
+        self.assertEqual(self._links()[0], self.EXTERNAL)
+
+    def test_a_stale_answer_is_served_while_it_refreshes(self):
+        self._book()
+        self._probe_then_list()
+        self.answer = None
+        later = time.monotonic() + agg._RING_TTL + 1
+        with mock.patch.object(agg.time, "monotonic", lambda: later):
+            # Up a moment ago, so still linked while the refresh runs.
+            self.assertEqual(self._links()[0], self.EXTERNAL)
+            self._settle()
+            self.assertEqual(self._links(), (None, None))
+        self.assertEqual(len(self._healthz()), 4)
+
+    def test_a_released_claim_leaves_the_cache(self):
+        self._book()
+        self._probe_then_list()
+        del self.claims[self.READER]
+        agg._gen_list()
+        self.assertEqual(set(agg._ring_cache), {self.GEN})
+
+    def test_a_probe_ending_after_release_is_not_cached(self):
+        self.release.clear()
+        self._book()
+        self._links()
+        del self.claims[self.READER]
+        agg._gen_list()
+        self.release.set()
+        self._settle()
+        self.assertEqual(set(agg._ring_cache), {self.GEN})
+
+
+class ProbeStatus(unittest.TestCase):
+    """A probe answers for the url a claim names, not for one it redirects to."""
+
+    def setUp(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self.hits = []
+        hits = self.hits
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                if self.path == "/moved":
+                    self.send_response(302)
+                    self.send_header("Location", "/healthz")
+                else:
+                    self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def test_a_redirect_is_not_followed(self):
+        self.assertEqual(agg._probe_status(self.base + "/moved", 1), 302)
+        self.assertEqual(self.hits, ["/moved"])
+
+    def test_a_direct_answer(self):
+        self.assertEqual(agg._probe_status(self.base + "/healthz", 1), 200)
+
+    def test_only_http_is_asked(self):
+        self.assertIsNone(agg._probe_status("file:///etc/hostname", 1))
 
 
 class GeneratorRatesAndMemory(unittest.TestCase):

@@ -13,7 +13,15 @@ import { readerState } from './generator-state';
   template: `
     <div class="gen-reader">
       <span class="dot" [class]="state().cls" [title]="tooltip()"></span>
-      <span class="gen-reader-name">{{ reader().name }}</span>
+      <span class="gen-reader-name">
+        @if (reader().ringUrl; as ring) {
+          <a class="ring-link" [href]="ring" target="_blank" rel="noopener noreferrer">{{
+            reader().name
+          }}</a>
+        } @else {
+          {{ reader().name }}
+        }
+      </span>
       <span class="gen-reader-meta">
         {{ reader().node ? 'on ' + reader().node : 'any node' }} |
         {{ reader().provider ?? 'auto' }} | {{ state().label }}

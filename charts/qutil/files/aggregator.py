@@ -2032,17 +2032,109 @@ def _reader_delivering(claim):
                 if ep.get("name") == "delivering"), None)
     if not url:
         return None
+    return {200: True, 503: False}.get(_probe_status(url, 1))
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+# A probe answers for the endpoint a claim names, not for wherever that points.
+_probe_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def _probe_status(url, timeout):
+    """The HTTP status a GET of an in-cluster probe url answers with, a
+    redirect included as such, or None when it is not http(s) or no answer
+    comes."""
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        return None
     try:
-        with urllib.request.urlopen(url, timeout=1) as r:
-            return r.status == 200
+        with _probe_opener.open(url, timeout=timeout) as r:
+            return r.status
     except urllib.error.HTTPError as e:
-        return False if e.code == 503 else None
+        e.close()
+        return e.code
     except Exception:
         return None
 
 
-# Readers answer in parallel: one slow pod must not hold the whole listing.
-_reader_probe_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="reader-probe")
+# Readers and ring pages answer in parallel: one slow pod must not hold the
+# whole listing.
+_probe_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="claim-probe")
+
+# A writer's or reader's ring page is linked only while it answers.
+# handle.ready lags the pod; /healthz over the in-cluster url says the page
+# answers now. It does not check the route. Only the claims a listing names
+# are probed, so the cost follows the bookings rather than the open tabs. The
+# listing reads only the last answer per claim and leaves a stale or missing
+# one to a background refresh, so a slow page never holds the listing up and
+# a new claim gets its link on the first rebuild after its probe answers.
+_RING_TTL = 5.0
+_RING_TIMEOUT = 1.0
+_ring_cache = {}      # claim name -> (url, up, monotonic time the probe ended)
+_ring_inflight = set()
+_ring_listed = set()
+_ring_lock = threading.Lock()
+# Phases in which the function is gone or going. A claim past its window
+# reads Bound until the plane gets to it, so the window is checked as well.
+_ENDED_PHASES = ("Expired", "Released", "Failed")
+
+
+def _ring_refresh(name, url):
+    up = _probe_status(urllib.parse.urljoin(url, "/healthz"), _RING_TIMEOUT) == 200
+    with _ring_lock:
+        _ring_inflight.discard(name)
+        # A claim released while its probe ran is not brought back.
+        if name in _ring_listed:
+            _ring_cache[name] = (url, up, time.monotonic())
+
+
+def _ring_up(name, url):
+    """The last probe answer for a claim's ring page, refreshed in the
+    background once it is older than _RING_TTL. False until one has come."""
+    with _ring_lock:
+        hit = _ring_cache.get(name)
+        # Keyed on the url as well: a re-provisioned claim may publish another.
+        same = bool(hit) and hit[0] == url
+        stale = not same or time.monotonic() - hit[2] >= _RING_TTL
+        submit = stale and name not in _ring_inflight
+        if submit:
+            _ring_inflight.add(name)
+    if submit:
+        _probe_pool.submit(_ring_refresh, name, url)
+    return same and hit[1]
+
+
+def _ring_forget(keep):
+    """Drop the probe answers of claims no longer listed."""
+    with _ring_lock:
+        _ring_listed.clear()
+        _ring_listed.update(keep)
+        for name in set(_ring_cache) - _ring_listed:
+            del _ring_cache[name]
+
+
+def _ring_url(claim):
+    """The externalUrl of a claim's ring page while the page is up, or None."""
+    meta = claim.get("metadata") or {}
+    status = claim.get("status") or {}
+    handle = status.get("handle") or {}
+    if meta.get("deletionTimestamp") or status.get("phase") in _ENDED_PHASES:
+        return None
+    if not handle.get("ready"):
+        return None
+    end = (((claim.get("spec") or {}).get("booking") or {}).get("window") or {}).get("end")
+    past = _age_secs(end) if end else -1
+    if past is None or past >= 0:
+        return None
+    ep = next((e for e in handle.get("endpoints") or [] if e.get("name") == "ring"), None)
+    if not ep or not ep.get("url") or not ep.get("externalUrl"):
+        return None
+    if urllib.parse.urlsplit(ep["externalUrl"]).scheme not in ("http", "https"):
+        return None
+    return ep["externalUrl"] if _ring_up(meta.get("name"), ep["url"]) else None
 
 
 def _reader_row(claim):
@@ -2063,6 +2155,7 @@ def _reader_row(claim):
         "flows": parameters.get("flows") or [],
         "created": meta.get("creationTimestamp"),
         "delivering": None,
+        "ringUrl": None,
     }
 
 
@@ -2116,6 +2209,7 @@ def _gen_row(claim):
                   "grainRate": rate(video)} if video.get("enabled") else None,
         "audio": {"id": audio.get("id"), "sampleRate": audio.get("sample_rate"),
                   "channelCount": audio.get("channel_count")} if audio.get("enabled") else None,
+        "ringUrl": None,
     }
 
 
@@ -2141,14 +2235,20 @@ def _gen_list():
     readers, err = _page_claims(_READER_COMPONENT)
     if err:
         return None, [], [], err
+    _ring_forget((c.get("metadata") or {}).get("name") for c in claims + readers)
+    gen_rings = [_ring_url(c) for c in claims]
+    reader_rings = [_ring_url(c) for c in readers]
+    delivering = _probe_pool.map(_reader_delivering, readers)
     by_generator = {}
-    for claim, delivering in zip(readers, _reader_probe_pool.map(_reader_delivering, readers)):
+    for claim, ring, live in zip(readers, reader_rings, delivering):
         row = _reader_row(claim)
-        row["delivering"] = delivering
+        row["delivering"] = live
+        row["ringUrl"] = ring
         by_generator.setdefault(row["generator"], []).append(row)
     rows = []
-    for claim in claims:
+    for claim, ring in zip(claims, gen_rings):
         row = _gen_row(claim)
+        row["ringUrl"] = ring
         row["readers"] = sorted(by_generator.pop(row["name"], []),
                                 key=lambda r: (r["created"] or "", r["name"] or ""))
         rows.append(row)

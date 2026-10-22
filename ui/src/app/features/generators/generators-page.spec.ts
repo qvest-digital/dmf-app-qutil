@@ -402,6 +402,78 @@ describe('GeneratorsPage', () => {
     expect(text()).not.toContain('no reader named');
   });
 
+  describe('ring page links', () => {
+    const RING = 'https://ring-generator-bars-1-7f3a.example.test/';
+    const READER_RING = 'https://ring-generator-r-flow-00aa.example.test/';
+
+    function links(): HTMLAnchorElement[] {
+      return Array.from(fixture.nativeElement.querySelectorAll('a.ring-link'));
+    }
+
+    it('links each name to its ring page in a new tab while the server says it is up', async () => {
+      await load(
+        response({
+          generators: [
+            generator({
+              ringUrl: RING,
+              readers: [{ name: 'generator-bars-1-7f3a-r0001', ringUrl: READER_RING }],
+            }),
+          ],
+          readers: [{ name: 'generator-r-flow-00aa', ringUrl: READER_RING }],
+        }),
+      );
+      expect(links().map((a) => [a.textContent?.trim(), a.getAttribute('href')])).toEqual([
+        ['generator-bars-1-7f3a', RING],
+        ['generator-bars-1-7f3a-r0001', READER_RING],
+        ['generator-r-flow-00aa', READER_RING],
+      ]);
+      for (const a of links()) {
+        expect(a.getAttribute('target')).toBe('_blank');
+        expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+      }
+    });
+
+    it('shows a plain name where no ring page is up', async () => {
+      await load(
+        response({
+          generators: [
+            generator({ ringUrl: null, readers: [{ name: 'generator-bars-1-7f3a-r0001' }] }),
+          ],
+          readers: [{ name: 'generator-r-flow-00aa' }],
+          orphanReaders: [{ name: 'generator-gone-0001-r0001' }],
+        }),
+      );
+      expect(links()).toHaveLength(0);
+      expect(text()).toContain('generator-bars-1-7f3a-r0001');
+      expect(text()).toContain('generator-r-flow-00aa');
+    });
+
+    it('drops the link once a poll no longer reports the page up', async () => {
+      await load(
+        response({
+          generators: [generator({ ringUrl: RING })],
+          readers: [{ name: 'generator-r-flow-00aa', ringUrl: READER_RING }],
+        }),
+      );
+      expect(links()).toHaveLength(2);
+
+      // Expired: the server stops setting ringUrl, then stops listing the reader.
+      await new Promise((resolve) => setTimeout(resolve, 3100));
+      http
+        .match((req) => req.url === '/api/generators')
+        .forEach((req) =>
+          req.flush(
+            response({
+              generators: [generator({ phase: 'Expired', ringUrl: null })],
+            }),
+          ),
+        );
+      fixture.detectChanges();
+      expect(links()).toHaveLength(0);
+      expect(text()).not.toContain('generator-r-flow-00aa');
+    }, 10000);
+  });
+
   it('offers no form where booking is switched off', async () => {
     await load(response({ enabled: false }));
     expect(fixture.nativeElement.querySelector('#gen-label')).toBeNull();
