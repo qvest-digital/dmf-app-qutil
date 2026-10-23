@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.57](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.56...v1.0.0-rc.57) (2026-10-23)
+
+
+### Continuous Integration
+
+* **chart:** install pyyaml before the chart tests ([#220](https://github.com/qvest-digital/dmf-app-qutil/issues/220)) ([824a956](https://github.com/qvest-digital/dmf-app-qutil/commit/824a956293d8fbf92067a7a8089715f11cd77d52))
+
 ## [1.0.0-rc.56](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.55...v1.0.0-rc.56) (2026-10-23)
 
 
