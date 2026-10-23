@@ -23,8 +23,8 @@ function flow(id: string, format: string): OperatorFlow {
   } as unknown as OperatorFlow;
 }
 
-const VIDEO = flow('d4d00000-0000-0000-0000-000000000001', 'video');
-const AUDIO = flow('a0d10000-0000-0000-0000-000000000001', 'audio');
+const VIDEO = flow('d4d00000-0000-4000-8000-000000000001', 'video');
+const AUDIO = flow('a0d10000-0000-4000-8000-000000000001', 'audio');
 
 describe('GrainStrip', () => {
   let fixture: ComponentFixture<GrainStrip>;

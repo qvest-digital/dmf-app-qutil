@@ -82,7 +82,7 @@ describe('validateGenerator', () => {
 
   it('refuses a truncated id, which would glob several flows at once', () => {
     const error = validateGenerator(
-      request({ video: { id: 'd4d00000-0000-0000-0000-0000000000' } }),
+      request({ video: { id: 'd4d00000-0000-4000-8000-0000000000' } }),
       LIMITS,
     );
     expect(error).toBe('video flow id must be a full UUID, all 36 characters of it');

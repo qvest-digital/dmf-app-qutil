@@ -59,7 +59,7 @@ describe('GeneratorsPage', () => {
 
   const FLOWS = {
     flows: [
-      { id: 'd4d00000-0000-0000-0000-000000000001', label: 'MXL-1', format: 'video' },
+      { id: 'd4d00000-0000-4000-8000-000000000001', label: 'MXL-1', format: 'video' },
       { id: 'aea7b9e9-1e5b-4333-9ac4-8689053a77de', label: 'SRT audio', format: 'audio' },
     ],
   };
@@ -355,11 +355,11 @@ describe('GeneratorsPage', () => {
     await load(
       response({
         readers: [
-          { name: 'generator-r-replica-0001', flows: ['d4d00000-0000-0000-0000-000000000001'] },
+          { name: 'generator-r-replica-0001', flows: ['d4d00000-0000-4000-8000-000000000001'] },
         ],
       }),
     );
-    expect(text()).toContain('d4d00000-0000-0000-0000-000000000001');
+    expect(text()).toContain('d4d00000-0000-4000-8000-000000000001');
     (fixture.nativeElement.querySelector('.gen-reader .btn.kill') as HTMLButtonElement).click();
     fixture.detectChanges();
     http

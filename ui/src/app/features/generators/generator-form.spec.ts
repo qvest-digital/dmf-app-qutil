@@ -211,7 +211,7 @@ describe('GeneratorForm', () => {
 
   it('will not post while a rule fails, and says which', () => {
     flushIds();
-    type(field('gen-video-id'), 'd4d00000-0000-0000-0000-0000000000');
+    type(field('gen-video-id'), 'd4d00000-0000-4000-8000-0000000000');
 
     expect(bookButton().disabled).toBe(true);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(

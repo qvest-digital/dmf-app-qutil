@@ -4,7 +4,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { PreviewController } from '../preview/preview-controller';
 import { MultiviewerPage } from './multiviewer-page';
 
-const FLOW = 'b2000000-0000-0000-0000-000000000001';
+const FLOW = 'b2000000-0000-4000-8000-000000000001';
 
 /**
  * The preview column is part of the page rather than an overlay over it, so the
@@ -81,7 +81,7 @@ describe('MultiviewerPage preview column', () => {
 
   it('stacks a second flow beside the first', () => {
     open(FLOW);
-    open('a0d10000-0000-0000-0000-000000000001');
+    open('a0d10000-0000-4000-8000-000000000001');
 
     expect(cards()).toHaveLength(2);
   });

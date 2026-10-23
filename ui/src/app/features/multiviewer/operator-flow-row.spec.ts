@@ -4,7 +4,7 @@ import { PreviewController } from '../preview/preview-controller';
 import { OperatorFlowRow } from './operator-flow-row';
 
 const AUDIO: OperatorFlow = {
-  id: 'a0d10000-0000-0000-0000-000000000001',
+  id: 'a0d10000-0000-4000-8000-000000000001',
   label: 'audio-testsrc',
   format: 'audio',
   // The width the card is opened with comes from the flow definition, not from
@@ -13,13 +13,13 @@ const AUDIO: OperatorFlow = {
 };
 
 const DATA: OperatorFlow = {
-  id: 'c3000000-0000-0000-0000-000000000001',
+  id: 'c3000000-0000-4000-8000-000000000001',
   label: 'srt-ingest-1-anc',
   format: 'data',
 };
 
 const VIDEO: OperatorFlow = {
-  id: 'b2000000-0000-0000-0000-000000000001',
+  id: 'b2000000-0000-4000-8000-000000000001',
   label: 'writer-mxl-1',
   format: 'video',
   grouphint: 'srt-ingest-1:Video',

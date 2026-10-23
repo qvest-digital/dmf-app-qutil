@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 import { AudioMeters } from './audio-meters';
 import { FlowPreview } from './flow-preview';
 
-const FLOW = 'd4d00000-0000-0000-0000-00000000a003';
+const FLOW = 'd4d00000-0000-4000-8000-00000000a003';
 
 /**
  * A wide flow opens one WHEP connection per pair, and each of those is wired

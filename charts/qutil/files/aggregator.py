@@ -60,7 +60,7 @@ GW_NS = os.environ.get("GW_NS", "mxl-system")
 # The writers are booked from the catalog, so they run in the namespace the
 # MediaProduction owns rather than beside this aggregator.
 WRITER_NS = os.environ.get("WRITER_NS", "production-demo-app")
-FLOW_PREFIX = os.environ.get("FLOW_PREFIX", "d4d00000-0000-0000-0000-00000000000")
+FLOW_PREFIX = os.environ.get("FLOW_PREFIX", "d4d00000-0000-4000-8000-00000000000")
 N_FLOWS = int(os.environ.get("N_FLOWS", "4"))
 
 # No consumer measures what the four per-flow TILES receive: each one goes
