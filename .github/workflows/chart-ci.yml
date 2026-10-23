@@ -19,6 +19,9 @@ jobs:
 
       - run: helm lint charts/qutil
 
+      # The chart tests and check-render.py both parse YAML.
+      - run: pip install --quiet pyyaml
+
       # The aggregator ships as a ConfigMap literal, so a syntax error renders
       # perfectly and only fails when the pod starts.
       - run: python -m py_compile charts/qutil/files/aggregator.py
@@ -32,5 +35,4 @@ jobs:
       # helm accepts a duplicated mapping key; the post-renderer Flux installs
       # through refuses the document, so a chart that lints can still fail to
       # install.
-      - run: pip install --quiet pyyaml
       - run: hack/check-render.py charts/qutil
