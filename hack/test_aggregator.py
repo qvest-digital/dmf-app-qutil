@@ -115,7 +115,7 @@ class PreviewPathConfig(unittest.TestCase):
     """What preview_add asks mediamtx to create for a video flow."""
 
     def setUp(self):
-        self.uuid = "b2000000-0000-0000-0000-000000000001"
+        self.uuid = "b2000000-0000-4000-8000-000000000001"
         self.mtx = MtxRecorder()
         patches = [
             mock.patch.object(agg, "_mtx", self.mtx),
@@ -194,16 +194,16 @@ class PreviewAddGuards(unittest.TestCase):
 
     def test_rejects_a_flow_the_operator_does_not_know(self):
         with mock.patch.object(agg, "_known_flow", lambda u: None):
-            code, _ = agg.preview_add("b2000000-0000-0000-0000-000000000001")
+            code, _ = agg.preview_add("b2000000-0000-4000-8000-000000000001")
         self.assertEqual(code, 404)
         self.assertEqual(self.mtx.calls, [])
 
     def test_refuses_a_format_with_no_route_to_a_browser(self):
         """mxlSource would retry the open every few seconds and log forever."""
-        flow = video_flow("b2000000-0000-0000-0000-000000000001")
+        flow = video_flow("b2000000-0000-4000-8000-000000000001")
         flow["spec"]["definition"]["format"] = "urn:x-nmos:format:mux"
         with mock.patch.object(agg, "_known_flow", lambda u: flow):
-            code, _ = agg.preview_add("b2000000-0000-0000-0000-000000000001")
+            code, _ = agg.preview_add("b2000000-0000-4000-8000-000000000001")
         self.assertEqual(code, 415)
         self.assertIsNone(self.mtx.added())
 
@@ -233,7 +233,7 @@ class JoinedPreview(unittest.TestCase):
     so a card that wants both names both.
     """
 
-    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    VIDEO = "b2000000-0000-4000-8000-000000000001"
     AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
 
     def setUp(self):
@@ -280,7 +280,7 @@ class JoinedPreview(unittest.TestCase):
 
     def test_refuses_a_second_flow_that_is_not_audio(self):
         """Two video flows would give the media server two pictures and no sound."""
-        other = "b2000000-0000-0000-0000-000000000002"
+        other = "b2000000-0000-4000-8000-000000000002"
         self.flows[other] = video_flow(other)
         code, _ = agg.preview_add(self.VIDEO, audio=other)
         self.assertEqual(code, 415)
@@ -350,7 +350,7 @@ class JoinedPreview(unittest.TestCase):
 
     def test_another_flows_joined_path_is_not_mistaken_for_this_ones(self):
         """A hyphen also separates a UUID's own fields, so the id matches whole."""
-        other = "b2000000-0000-0000-0000-000000000002"
+        other = "b2000000-0000-4000-8000-000000000002"
         self.mtx.existing.add(f"preview-{other}-{self.AUDIO}")
         code, res = agg.preview_add(self.VIDEO)
         self.assertEqual(code, 200)
@@ -477,7 +477,7 @@ class PreviewSourceStartTimeout(unittest.TestCase):
     rather than like the wait being too short.
     """
 
-    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    VIDEO = "b2000000-0000-4000-8000-000000000001"
     AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
 
     def setUp(self):
@@ -583,7 +583,7 @@ class PreviewDelete(unittest.TestCase):
     def test_deletes_nothing(self):
         mtx = PathList({})
         with mock.patch.object(agg, "_mtx", mtx):
-            code, res = agg.preview_del("b2000000-0000-0000-0000-000000000001")
+            code, res = agg.preview_del("b2000000-0000-4000-8000-000000000001")
         self.assertEqual(code, 200)
         self.assertEqual(mtx.deleted, [])
 
@@ -600,7 +600,7 @@ class GeneratorDeletePreviewPaths(unittest.TestCase):
     """
 
     NAME = "generator-demo-ab12"
-    VIDEO = "b2000000-0000-0000-0000-000000000001"
+    VIDEO = "b2000000-0000-4000-8000-000000000001"
     AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
 
     def _claim(self):
@@ -662,7 +662,7 @@ class GeneratorDeletePreviewPaths(unittest.TestCase):
         self.assertIn(f"preview-{self.AUDIO}", self._deleted())
 
     def test_does_not_touch_another_flows_path(self):
-        other = "b2000000-0000-0000-0000-000000000002"
+        other = "b2000000-0000-4000-8000-000000000002"
         self.mtx.existing.add(f"preview-{other}")
         agg.generator_delete(self.NAME)
         self.assertNotIn(f"preview-{other}", self._deleted())
@@ -1070,7 +1070,7 @@ class FlowReaders(unittest.TestCase):
     SRT ingest or a generator. They belong to no generator, so they carry no
     generator label, expire on their own and are listed on their own."""
 
-    A = "d4d00000-0000-0000-0000-000000000001"
+    A = "d4d00000-0000-4000-8000-000000000001"
     B = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
 
     def setUp(self):
@@ -1554,19 +1554,19 @@ class AncReader(unittest.TestCase):
         with mock.patch.object(agg, "_claim_endpoint",
                                lambda *a: "http://anc-reader.prod:8080"), \
                 mock.patch.object(agg, "_http_json", http_json):
-            code, _ = agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+            code, _ = agg.anc_grain("a0d30000-0000-4000-8000-000000000001")
 
         self.assertEqual(code, 200)
         self.assertEqual(seen["base"], "http://anc-reader.prod:8080")
         self.assertEqual(
-            seen["path"], "/grain?flow=a0d30000-0000-0000-0000-000000000001")
+            seen["path"], "/grain?flow=a0d30000-0000-4000-8000-000000000001")
 
     def test_looks_the_claim_up_by_the_configured_name_and_class(self):
         asked = []
 
         with mock.patch.object(agg, "_claim_endpoint",
                                lambda *a: asked.append(a) or None):
-            agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+            agg.anc_grain("a0d30000-0000-4000-8000-000000000001")
 
         # The endpoint name the class publishes is "anc".
         self.assertEqual(asked, [(agg.ANC_READER_CLAIM, agg.ANC_READER_CLASS,
@@ -1575,7 +1575,7 @@ class AncReader(unittest.TestCase):
     def test_says_no_reader_is_booked_rather_than_failing_the_lookup(self):
         """An install with no reader claim is a normal state, not a fault."""
         with mock.patch.object(agg, "_claim_endpoint", lambda *a: None):
-            code, body = agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+            code, body = agg.anc_grain("a0d30000-0000-4000-8000-000000000001")
 
         self.assertEqual(code, 503)
         self.assertIn("ANC reader", body["error"])
@@ -1594,7 +1594,7 @@ class AncReader(unittest.TestCase):
         with mock.patch.object(agg, "ANC_PREVIEW_API", "http://127.0.0.1:8080"), \
                 mock.patch.object(agg, "_claim_endpoint", fail), \
                 mock.patch.object(agg, "_http_json", http_json):
-            agg.anc_grain("a0d30000-0000-0000-0000-000000000001")
+            agg.anc_grain("a0d30000-0000-4000-8000-000000000001")
 
         self.assertEqual(seen["base"], "http://127.0.0.1:8080")
 

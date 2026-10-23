@@ -4,7 +4,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { PlayerRegistry } from '../../core/player/player-registry';
 import { FlowPreview } from './flow-preview';
 
-const FLOW = 'b2000000-0000-0000-0000-000000000001';
+const FLOW = 'b2000000-0000-4000-8000-000000000001';
 
 /**
  * The real players run. The Angular unit-test system refuses vi.mock for

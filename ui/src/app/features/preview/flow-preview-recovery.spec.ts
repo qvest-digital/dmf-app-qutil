@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 import { PlayerRegistry } from '../../core/player/player-registry';
 import { FlowPreview } from './flow-preview';
 
-const FLOW = 'b2000000-0000-0000-0000-000000000001';
+const FLOW = 'b2000000-0000-4000-8000-000000000001';
 
 /**
  * What the card does after its transport has already failed once.

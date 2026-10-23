@@ -49,7 +49,7 @@ aggregator:
   gatewayNamespace: mxl-system
   # The four video flows the multiviewer tiles. Fixed by design: the tile grid
   # is a fixed four, and only the way they are served became dynamic.
-  flowPrefix: d4d00000-0000-0000-0000-00000000000
+  flowPrefix: d4d00000-0000-4000-8000-00000000000
   flowCount: 4
   # Namespace the per-booking txDarwin instances are deployed into.
   bookingNamespace: txdarwin
@@ -159,7 +159,7 @@ writers:
   video:
     - name: writer-mxl-1
       groupHint: mxl-multiviewer-1
-      flowId: d4d00000-0000-0000-0000-000000000001
+      flowId: d4d00000-0000-4000-8000-000000000001
       pattern: smpte
       overlayText: MXL-1
       # 531m bare metal, 479m AWS.
@@ -172,7 +172,7 @@ writers:
           memory: 1536Mi
     - name: writer-mxl-2
       groupHint: mxl-multiviewer-2
-      flowId: d4d00000-0000-0000-0000-000000000002
+      flowId: d4d00000-0000-4000-8000-000000000002
       pattern: ball
       overlayText: MXL-2
       # The animated one, and the only writer that needs more than a core:
@@ -186,7 +186,7 @@ writers:
           memory: 1536Mi
     - name: writer-mxl-3
       groupHint: mxl-multiviewer-3
-      flowId: d4d00000-0000-0000-0000-000000000003
+      flowId: d4d00000-0000-4000-8000-000000000003
       pattern: gamut
       overlayText: MXL-3
       # 174m bare metal, 46m AWS.
@@ -199,7 +199,7 @@ writers:
           memory: 1536Mi
     - name: writer-mxl-4
       groupHint: mxl-multiviewer-4
-      flowId: d4d00000-0000-0000-0000-000000000004
+      flowId: d4d00000-0000-4000-8000-000000000004
       pattern: checkers-8
       overlayText: MXL-4
       # 188m bare metal, 96m AWS.
@@ -214,7 +214,7 @@ writers:
     enabled: true
     name: audio-testsrc
     groupHint: mxl-audio-testsrc
-    flowId: a0d10000-0000-0000-0000-000000000001
+    flowId: a0d10000-0000-4000-8000-000000000001
     sampleRate: 48000
     channelCount: 2
     wave: sine
@@ -344,7 +344,7 @@ ancTestSource:
   # through as given, where the writer's appends :video or :audio itself.
   groupHint: mxl-anc-testsrc:data
   # a0d2 = ancillary demo 1, next to the audio source's a0d1.
-  flowId: a0d20000-0000-0000-0000-000000000001
+  flowId: a0d20000-0000-4000-8000-000000000001
   grainRate:
     numerator: 50
     denominator: 1
@@ -420,21 +420,21 @@ srtIngest:
     - name: srt-ingest-1
       groupHint: srt-ingest-1
       port: 9000
-      videoFlowId: b2000000-0000-0000-0000-000000000001
+      videoFlowId: b2000000-0000-4000-8000-000000000001
       audioFlowId: aea7b9e9-1e5b-4333-9ac4-8689053a77de
-      ancFlowId: c3000000-0000-0000-0000-000000000001
+      ancFlowId: c3000000-0000-4000-8000-000000000001
     - name: srt-ingest-2
       groupHint: srt-ingest-2
       port: 9001
-      videoFlowId: b2000000-0000-0000-0000-000000000002
+      videoFlowId: b2000000-0000-4000-8000-000000000002
       audioFlowId: 2fffed31-8d6f-4558-b368-4a925d364fd3
-      ancFlowId: c3000000-0000-0000-0000-000000000002
+      ancFlowId: c3000000-0000-4000-8000-000000000002
     - name: srt-ingest-3
       groupHint: srt-ingest-3
       port: 9002
-      videoFlowId: b2000000-0000-0000-0000-000000000003
+      videoFlowId: b2000000-0000-4000-8000-000000000003
       audioFlowId: b906f97d-5c90-4db2-976a-cd8a3a655925
-      ancFlowId: c3000000-0000-0000-0000-000000000003
+      ancFlowId: c3000000-0000-4000-8000-000000000003
 
 # Cluster-internal SRT generators standing in for playout sources. Each dials
 # one booked ingest by its claim name in the production namespace, so they are

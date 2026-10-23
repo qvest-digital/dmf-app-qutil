@@ -4,7 +4,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FlowPreview } from './flow-preview';
 import { PreviewController } from './preview-controller';
 
-const FLOW = 'd4d00000-0000-0000-0000-00000000a002';
+const FLOW = 'd4d00000-0000-4000-8000-00000000a002';
 
 /**
  * A browser is served two channels of an audio flow whatever its width, so a
@@ -143,7 +143,7 @@ describe('FlowPreview ANC data', () => {
   let fixture: ComponentFixture<FlowPreview>;
   let http: HttpTestingController;
 
-  const ANC = 'a0d30000-0000-0000-0000-000000000001';
+  const ANC = 'a0d30000-0000-4000-8000-000000000001';
 
   const GRAIN = {
     flow: ANC,

@@ -3,7 +3,7 @@ import { OperatorFlow } from '../../core/api/models';
 import { OperatorFlowList } from './operator-flow-list';
 
 const VIDEO: OperatorFlow = {
-  id: 'b2000000-0000-0000-0000-000000000001',
+  id: 'b2000000-0000-4000-8000-000000000001',
   label: 'srt-ingest-1-video',
   format: 'video',
   grouphint: 'srt-ingest-1:Video',
