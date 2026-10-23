@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-rc.56](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.55...v1.0.0-rc.56) (2026-10-23)
+
+
+### Bug Fixes
+
+* **bookings:** show an RFC 9562 flow id in the parameters placeholder ([e8fa444](https://github.com/qvest-digital/dmf-app-qutil/commit/e8fa444b38a31b8b0022a55ba09ee7611fdaf6f0))
+* **chart:** give the demo writers and ingests RFC 9562 flow ids ([e8fa444](https://github.com/qvest-digital/dmf-app-qutil/commit/e8fa444b38a31b8b0022a55ba09ee7611fdaf6f0))
+
 ## [1.0.0-rc.55](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.54...v1.0.0-rc.55) (2026-10-22)
 
 
