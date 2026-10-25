@@ -29,6 +29,9 @@ const FABRIC_LABELS: Record<string, string> = {
           @for (fabric of fabrics(); track fabric) {
             <span class="badge fabric" title="Fabric this flow is mirrored over">{{ fabric }}</span>
           }
+          @if (role()) {
+            <span class="badge role" title="Its place in the redundancy set">{{ role() }}</span>
+          }
           {{ flow().label }}
           @if (format()) {
             <span class="badge" [class]="badgeClass()">{{ format() }}</span>
@@ -93,6 +96,8 @@ const FABRIC_LABELS: Record<string, string> = {
 })
 export class OperatorFlowRow {
   readonly flow = input.required<OperatorFlow>();
+  /** What the flow is to the redundancy set it is shown in: `output` or `member 1`. */
+  readonly role = input<string | null>(null);
 
   private readonly preview$ = inject(PreviewController);
 

@@ -39,6 +39,8 @@ export class MultiviewerPage {
   protected readonly gateways = computed(() => this.data()?.gateways ?? []);
   protected readonly services = computed(() => this.svc()?.services ?? []);
   protected readonly opFlows = computed(() => this.operatorFlows()?.flows ?? []);
+  protected readonly opSets = computed(() => this.operatorFlows()?.sets ?? []);
+  protected readonly opSetsError = computed(() => this.operatorFlows()?.setsError ?? null);
 
   /**
    * Null until a poll actually lands. A zero here would claim the fabric is

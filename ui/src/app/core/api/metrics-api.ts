@@ -42,7 +42,8 @@ export class MetricsApi {
     return this.http.get<ServicesResponse>('/api/services');
   }
 
-  /** Every MxlFlow CR the mxl-k8s operator knows about, demo-related or not. */
+  /** Every MxlFlow CR the mxl-k8s operator knows about, demo-related or not,
+   *  and the redundancy sets over them. */
   operatorFlows(): Observable<OperatorFlowsResponse> {
     return this.http.get<OperatorFlowsResponse>('/api/operator-flows');
   }
