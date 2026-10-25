@@ -903,8 +903,9 @@ def _set_output(rs):
 
 def _set_definition(rs, flows):
     """The definition the output is described by: the first member, in spec
-    order, that has an MxlFlow. Members of a valid set agree in format, rate
-    and geometry, so any of them describes it."""
+    order, that has an MxlFlow. While MembersReady is True the members agree
+    in format, rate and geometry, so it describes the output; otherwise
+    MembersReady names the members that differ."""
     by_name = {(f.get("metadata") or {}).get("name"): f for f in flows}
     for m in (rs.get("spec") or {}).get("members") or []:
         fl = by_name.get(_flow_name(m))
