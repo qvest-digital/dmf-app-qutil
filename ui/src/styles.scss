@@ -46,6 +46,7 @@ mv-multiviewer-page,
 mv-gateway-grid,
 mv-operator-flow-list,
 mv-flow-group-head,
+mv-set-bundle-box,
 mv-operator-flow-row,
 mv-operator-flow-detail,
 mv-flow-preview,
@@ -316,6 +317,57 @@ main {
 .fg-prev {
   white-space: nowrap;
   flex: none;
+}
+/* A redundancy set box is one block like a group box, holding a head per set
+   and per member group between its rows. Only the box's own head and its last
+   child keep corners; everything else meets the row above at a hairline. */
+.rs-bundle > mv-operator-flow-row .flow,
+.rs-bundle > .rs-head,
+.rs-bundle > .rs-missing,
+.rs-bundle > mv-flow-group-head .fg-head {
+  border-radius: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.rs-bundle > mv-operator-flow-row:last-child .flow,
+.rs-bundle > .rs-missing:last-child,
+.rs-bundle > mv-flow-group-head:last-child .fg-head {
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
+/* One set: its state, how it picks, and where it is merged. */
+.rs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px 14px;
+}
+.rs-name {
+  font-weight: 800;
+  font-size: 13px;
+  word-break: break-all;
+}
+.rs-meta {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.rs-warn {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--qv-orange);
+}
+.rs-missing {
+  opacity: 0.7;
+}
+.flow .badge.role {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--qv-white);
+  margin-left: 0;
+  margin-right: 6px;
+}
+.rs-missing .of-meta {
+  margin-left: 4px;
 }
 .flow .row {
   display: grid;

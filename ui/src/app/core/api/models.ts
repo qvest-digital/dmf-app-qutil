@@ -200,8 +200,38 @@ export interface OperatorFlow {
   originAge?: number | null;
 }
 
+/**
+ * One MxlFlowRedundancySet: an output flow served from several member flows,
+ * switching between them per grain wherever one fails to deliver.
+ */
+export interface RedundancySet {
+  name: string;
+  /** The MxlDomain of the output; null is the primary domain. */
+  domain?: string | null;
+  /** 'Ordered' | 'FirstArrival'. */
+  preference?: string | null;
+  granularity?: string | null;
+  skewBudget?: string | null;
+  /** Where a reader asked for the output, which is where it is merged. */
+  nodes?: string[];
+  /** Member flow ids, in order of preference. */
+  members: string[];
+  /** Whether the members can be merged at all. */
+  valid?: FlowCondition | null;
+  /** Whether every member is produced in the output's geometry; a False one
+   *  names the members the output is served without. */
+  membersReady?: FlowCondition | null;
+  /**
+   * The output as an inventory row. It has no MxlFlow: its media columns are
+   * the first member's that has one, its locations the nodes it is merged on,
+   * and it never has an origin.
+   */
+  output: OperatorFlow;
+}
+
 export interface OperatorFlowsResponse {
   flows: OperatorFlow[];
+  sets?: RedundancySet[];
 }
 
 // ── /api/preview/<uuid> ─────────────────────────────────────────────────────

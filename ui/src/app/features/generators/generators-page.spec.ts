@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Generator, GeneratorsResponse } from '../../core/api/models';
+import { Generator, GeneratorsResponse, OperatorFlowsResponse } from '../../core/api/models';
 import { GeneratorsPage } from './generators-page';
 
 function generator(over: Partial<Generator> = {}): Generator {
@@ -57,7 +57,7 @@ describe('GeneratorsPage', () => {
     return (fixture.nativeElement as HTMLElement).textContent ?? '';
   }
 
-  const FLOWS = {
+  const FLOWS: OperatorFlowsResponse = {
     flows: [
       { id: 'd4d00000-0000-4000-8000-000000000001', label: 'MXL-1', format: 'video' },
       { id: 'aea7b9e9-1e5b-4333-9ac4-8689053a77de', label: 'SRT audio', format: 'audio' },
@@ -338,6 +338,47 @@ describe('GeneratorsPage', () => {
     // Shown before the next poll, with the flows it reads.
     expect(text()).toContain('Readers of chosen flows');
     expect(text()).toContain('generator-r-flow-00aa');
+  });
+
+  /**
+   * A set's output has no MxlFlow, so it is not among the inventory's flows,
+   * and it is still what a reader of the set opens.
+   */
+  it("offers a redundancy set's output and says what each flow is to the set", async () => {
+    const output = 'c0000000-0000-4000-8000-0000000000c1';
+    FLOWS.sets = [
+      {
+        name: 'p-show.program',
+        members: ['d4d00000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-0000000000b1'],
+        output: { id: output, label: 'p-show.program', format: 'video' },
+      },
+    ];
+    try {
+      await load(response());
+    } finally {
+      delete FLOWS.sets;
+    }
+    const picker = () =>
+      Array.from(fixture.nativeElement.querySelectorAll('.rd-flow')) as HTMLElement[];
+    expect(picker().map((el) => el.textContent)).toEqual([
+      expect.stringContaining('member 1 of p-show.program'),
+      expect.stringContaining('output of p-show.program'),
+      expect.stringContaining('SRT audio'),
+    ]);
+
+    const box = picker()[1].querySelector('input') as HTMLInputElement;
+    box.checked = true;
+    box.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    (
+      [...fixture.nativeElement.querySelectorAll('mv-reader-form button')].find((b) =>
+        (b as HTMLButtonElement).textContent?.includes('Book reader'),
+      ) as HTMLButtonElement
+    ).click();
+
+    const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/readers');
+    expect(req.request.body.flows).toEqual([output]);
+    req.flush({ readers: [] });
   });
 
   it('narrows the picker by label, group or id', async () => {

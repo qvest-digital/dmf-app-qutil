@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { OperatorFlow } from '../../core/api/models';
+import { OperatorFlow, RedundancySet } from '../../core/api/models';
 import { OperatorFlowList } from './operator-flow-list';
 
 const VIDEO: OperatorFlow = {
@@ -75,6 +75,70 @@ describe('OperatorFlowList grouping', () => {
     mount([LONE]);
 
     expect(groups()[0].querySelector('.fg-head')).toBeNull();
+  });
+
+  describe('with a redundancy set', () => {
+    const MEMBER_A: OperatorFlow = {
+      id: '5fd00000-0000-4000-8000-0000000000a1',
+      label: 'program-a',
+      format: 'video',
+      grouphint: 'prog:Video',
+    };
+    const MEMBER_B: OperatorFlow = {
+      id: '5fd00000-0000-4000-8000-0000000000b1',
+      label: 'program-b',
+      format: 'video',
+      grouphint: 'prog-b:Video',
+    };
+    const SET: RedundancySet = {
+      name: 'p-show.prog-video',
+      members: [MEMBER_A.id, MEMBER_B.id],
+      output: { id: '5fd00000-0000-4000-8000-0000000000c1', label: 'program', format: 'video' },
+    };
+
+    function mountWithSet(flows: OperatorFlow[]): void {
+      fixture = TestBed.createComponent(OperatorFlowList);
+      fixture.componentRef.setInput('flows', flows);
+      fixture.componentRef.setInput('sets', [SET]);
+      fixture.detectChanges();
+    }
+
+    function allLabels(): string[] {
+      return Array.from(fixture.nativeElement.querySelectorAll('mv-operator-flow-row')).map((row) =>
+        ((row as HTMLElement).querySelector('.name')?.textContent ?? '').trim(),
+      );
+    }
+
+    /**
+     * Not the members and the output as three more entries: one box for the
+     * set, holding them, and the group-hint boxes as they were.
+     */
+    it('lists the set as one box holding its output and its members', () => {
+      mountWithSet([VIDEO, MEMBER_B, AUDIO, MEMBER_A, LONE]);
+
+      expect(groups()).toHaveLength(3);
+      expect(groups()[0].classList).toContain('rs-bundle');
+      expect(groups()[0].querySelector('.rs-name')?.textContent?.trim()).toBe(SET.name);
+      expect(labelsIn(groups()[1])).toEqual([VIDEO.label, AUDIO.label]);
+      expect(labelsIn(groups()[2])).toEqual([LONE.label]);
+    });
+
+    it('shows each member once, inside its set', () => {
+      mountWithSet([MEMBER_A, MEMBER_B, LONE]);
+
+      const labels = allLabels();
+      expect(labels.filter((l) => l.includes('program-a'))).toHaveLength(1);
+      expect(labels.filter((l) => l.includes('program-b'))).toHaveLength(1);
+      expect(labels.filter((l) => l.startsWith('output'))).toHaveLength(1);
+    });
+
+    it('counts the sets beside the flows', () => {
+      mountWithSet([MEMBER_A, MEMBER_B]);
+
+      expect(fixture.nativeElement.querySelector('.of-count').textContent).toBe(
+        '(2, 1 redundancy set)',
+      );
+    });
   });
 
   it('says so when the operator knows no flow at all', () => {

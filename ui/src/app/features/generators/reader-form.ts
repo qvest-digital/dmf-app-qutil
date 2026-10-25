@@ -23,6 +23,9 @@ import { validateFlowReaders } from './generator-validation';
  * Readers of any flows the cluster carries, chosen from the operator flow list:
  * a chart's writers, an SRT ingest, or a generator booked here. Each reader
  * holds every chosen flow open on its node, which mirrors them there.
+ *
+ * A redundancy set's output is offered beside the flows, though it has no
+ * MxlFlow: opening it is what has the set merged on the reader's node.
  */
 @Component({
   selector: 'mv-reader-form',
@@ -51,7 +54,7 @@ import { validateFlowReaders } from './generator-validation';
           type="text"
           [value]="filter()"
           (input)="filter.set(value($event))"
-          placeholder="filter by label, group or id"
+          placeholder="filter by label, group, set or id"
           spellcheck="false"
         />
         <div class="rd-flows">
@@ -65,7 +68,8 @@ import { validateFlowReaders } from './generator-validation';
               <span class="rd-flow-label">{{ flow.label || flow.id }}</span>
               <span class="badge" [class]="flow.format ?? ''">{{ flow.format ?? '?' }}</span>
               <span class="rd-flow-meta">
-                {{ flow.id }}{{ flow.originNode ? ' | on ' + flow.originNode : '' }}
+                {{ flow.id }}{{ flow.originNode ? ' | on ' + flow.originNode : ''
+                }}{{ roles().get(flow.id) ? ' | ' + roles().get(flow.id) : '' }}
               </span>
             </label>
           } @empty {
@@ -178,14 +182,31 @@ export class ReaderForm {
     effect(() => {
       const list = this.flowList();
       if (!list) return;
-      const known = new Set((list.flows ?? []).map((f) => f.id));
+      const known = new Set(this.flows().map((f) => f.id));
       untracked(() => this.chosen.update((ids) => ids.filter((id) => known.has(id))));
     });
   }
 
+  /** The inventory's flows and every set's output. */
+  private readonly flows = computed<OperatorFlow[]>(() => {
+    const list = this.flowList();
+    return [...(list?.flows ?? []), ...(list?.sets ?? []).map((set) => set.output)];
+  });
+
+  /** What a flow is to a redundancy set, so a member or an output is told apart. */
+  protected readonly roles = computed(() => {
+    const roles = new Map<string, string>();
+    for (const set of this.flowList()?.sets ?? []) {
+      roles.set(set.output.id, `output of ${set.name}`);
+      set.members.forEach((id, i) => roles.set(id, `member ${i + 1} of ${set.name}`));
+    }
+    return roles;
+  });
+
   protected readonly shown = computed<OperatorFlow[]>(() => {
     const needle = this.filter().trim().toLowerCase();
-    const flows = [...(this.flowList()?.flows ?? [])].sort((a, b) =>
+    const roles = this.roles();
+    const flows = [...this.flows()].sort((a, b) =>
       (a.label || a.id).localeCompare(b.label || b.id),
     );
     if (!needle) return flows;
@@ -195,7 +216,9 @@ export class ReaderForm {
     return flows.filter(
       (f) =>
         chosen.includes(f.id) ||
-        [f.label, f.grouphint, f.id].some((v) => (v ?? '').toLowerCase().includes(needle)),
+        [f.label, f.grouphint, f.id, roles.get(f.id)].some((v) =>
+          (v ?? '').toLowerCase().includes(needle),
+        ),
     );
   });
 
