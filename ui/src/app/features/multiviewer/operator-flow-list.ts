@@ -20,6 +20,9 @@ import { inventoryRows, ListRow } from './set-bundles';
         Operator flows <span class="of-count">{{ count() }}</span>
       </h2>
       <div class="flows">
+        @if (setsError()) {
+          <div class="gen-errors">Redundancy sets not shown: {{ setsError() }}</div>
+        }
         @for (item of rows(); track key(item)) {
           @if (item.kind === 'sets') {
             <mv-set-bundle-box [bundle]="item.bundle" />
@@ -43,6 +46,7 @@ import { inventoryRows, ListRow } from './set-bundles';
 export class OperatorFlowList {
   readonly flows = input<OperatorFlow[]>([]);
   readonly sets = input<RedundancySet[]>([]);
+  readonly setsError = input<string | null>(null);
 
   protected readonly count = computed(() => {
     const flows = this.flows().length;

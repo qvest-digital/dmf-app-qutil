@@ -122,6 +122,8 @@ export interface FlowCondition {
   reason?: string | null;
   message?: string | null;
   age?: number | null;
+  /** The spec generation it was written for, where the resource records one. */
+  observedGeneration?: number | null;
 }
 
 export interface DetailReceiver {
@@ -212,9 +214,12 @@ export interface RedundancySet {
   preference?: string | null;
   granularity?: string | null;
   skewBudget?: string | null;
-  /** Where a reader asked for the output, which is where it is merged. */
+  generation?: number | null;
+  observedGeneration?: number | null;
+  /** Where a reader wants the output, which is where it is merged. */
   nodes?: string[];
-  /** Member flow ids, in order of preference. */
+  /** Member MxlFlow names, in order of preference: `<domain>.<id>` outside
+   *  the primary domain, the bare id in it. */
   members: string[];
   /** Whether the members can be merged at all. */
   valid?: FlowCondition | null;
@@ -222,9 +227,9 @@ export interface RedundancySet {
    *  names the members the output is served without. */
   membersReady?: FlowCondition | null;
   /**
-   * The output as an inventory row. It has no MxlFlow: its media columns are
-   * the first member's that has one, its locations the nodes it is merged on,
-   * and it never has an origin.
+   * The output as an inventory row, its id named like a member. It has no
+   * MxlFlow: its media columns are the first member's that has one, its
+   * locations the nodes it is wanted on, and it never has an origin.
    */
   output: OperatorFlow;
 }
@@ -232,6 +237,8 @@ export interface RedundancySet {
 export interface OperatorFlowsResponse {
   flows: OperatorFlow[];
   sets?: RedundancySet[];
+  /** Why the sets could not be listed; the flows are still current. */
+  setsError?: string | null;
 }
 
 // ── /api/preview/<uuid> ─────────────────────────────────────────────────────

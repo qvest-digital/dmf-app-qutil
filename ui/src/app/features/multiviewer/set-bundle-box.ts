@@ -5,19 +5,33 @@ import { FlowGroupHead } from './flow-group-head';
 import { OperatorFlowRow } from './operator-flow-row';
 import { SetBundle } from './set-bundles';
 
+/**
+ * A condition's status, or null where it is missing or was written for an
+ * older generation of the set: then it says nothing about the spec now.
+ */
+export function currentStatus(
+  set: RedundancySet,
+  c: FlowCondition | null | undefined,
+): string | null {
+  if (!c?.status) return null;
+  const seen = c.observedGeneration ?? set.observedGeneration;
+  if (set.generation != null && seen != null && seen < set.generation) return null;
+  return c.status;
+}
+
 /** The set's dot: green while it merges every member, orange once the
- *  operator says it cannot, grey while it has said nothing. */
+ *  operator says it cannot, grey while it has said nothing current. */
 export function setState(set: RedundancySet): 'live' | 'bad' | '' {
-  const valid = set.valid?.status;
-  const ready = set.membersReady?.status;
+  const valid = currentStatus(set, set.valid);
+  const ready = currentStatus(set, set.membersReady);
   if (valid === 'False' || ready === 'False') return 'bad';
   if (valid === 'True' && ready === 'True') return 'live';
   return '';
 }
 
-function conditionText(c: FlowCondition | null | undefined, yes: string, no: string): string {
-  if (!c?.status) return `${yes}?`;
-  return c.status === 'True' ? yes : no;
+function conditionText(status: string | null, yes: string, no: string): string {
+  if (!status) return `${yes}?`;
+  return status === 'True' ? yes : no;
 }
 
 /**
@@ -48,26 +62,23 @@ function conditionText(c: FlowCondition | null | undefined, yes: string, no: str
           <span class="dot" [class]="state(view.set)" [title]="tooltip(view.set)"></span>
           <span class="rs-name">{{ view.set.name }}</span>
           <span class="rs-meta">
-            {{ conditions(view.set) }} · {{ view.set.preference || 'Ordered' }}
+            {{ conditions(view.set) }} | {{ view.set.preference || 'Ordered' }}
             @if (view.set.nodes?.length) {
-              · merged on {{ view.set.nodes!.join(', ') }}
+              | wanted on {{ view.set.nodes!.join(', ') }}
             }
           </span>
-          @if (view.set.membersReady?.status === 'False' && view.set.membersReady?.message) {
-            <span class="rs-warn">{{ view.set.membersReady!.message }}</span>
-          }
-          @if (view.set.valid?.status === 'False' && view.set.valid?.message) {
-            <span class="rs-warn">{{ view.set.valid!.message }}</span>
+          @for (text of warnings(view.set); track $index) {
+            <span class="rs-warn">{{ text }}</span>
           }
         </div>
-        <mv-operator-flow-row [flow]="view.set.output" role="output" />
-        @for (member of view.members; track member.id; let i = $index) {
+        <mv-operator-flow-row [flow]="view.output" role="output" />
+        @for (member of view.members; track $index; let i = $index) {
           @if (member.flow) {
             <mv-operator-flow-row [flow]="member.flow" [role]="'member ' + (i + 1)" />
           } @else {
             <div class="flow rs-missing">
               <span class="badge role">member {{ i + 1 }}</span>
-              <span class="of-meta">{{ member.id }} · no MxlFlow: nothing produces it</span>
+              <span class="of-meta">{{ member.id }} | no MxlFlow: nothing produces it</span>
             </div>
           }
         }
@@ -104,16 +115,27 @@ export class SetBundleBox {
 
   protected conditions(set: RedundancySet): string {
     return [
-      conditionText(set.valid, 'valid', 'invalid'),
-      conditionText(set.membersReady, 'members ready', 'members missing'),
-    ].join(' · ');
+      conditionText(currentStatus(set, set.valid), 'valid', 'invalid'),
+      conditionText(currentStatus(set, set.membersReady), 'members ready', 'members missing'),
+    ].join(' | ');
+  }
+
+  /** The operator's own words for what is wrong, from current conditions only. */
+  protected warnings(set: RedundancySet): string[] {
+    return [set.membersReady, set.valid]
+      .filter((c) => currentStatus(set, c) === 'False' && c?.message)
+      .map((c) => c!.message!);
   }
 
   protected tooltip(set: RedundancySet): string {
     return [set.valid, set.membersReady]
       .filter((c): c is FlowCondition => !!c)
-      .map((c) => `${c.type} ${c.status}: ${c.reason ?? ''}`)
-      .join(' · ');
+      .map(
+        (c) =>
+          `${c.type} ${currentStatus(set, c) ?? 'unknown'}: ${c.reason ?? ''}` +
+          (currentStatus(set, c) === null && c.status ? ' (written for an older spec)' : ''),
+      )
+      .join(' | ');
   }
 
   /** One path carrying both merged outputs, as a group head opens a pair. */

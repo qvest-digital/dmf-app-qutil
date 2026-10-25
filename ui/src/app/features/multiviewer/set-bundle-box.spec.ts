@@ -62,8 +62,8 @@ const AUDIO_SET: RedundancySet = {
   membersReady: {
     type: 'MembersReady',
     status: 'False',
-    reason: 'MembersMissing',
-    message: `served without ${B2.id}`,
+    reason: 'MemberMissing',
+    message: `member ${B2.id} has no producer`,
   },
   output: output('5fd00000-0000-4000-8000-0000000000c2', 'audio', 'p-show.prog-audio'),
 };
@@ -131,11 +131,47 @@ describe('SetBundleBox', () => {
 
     const heads = Array.from(el().querySelectorAll('.rs-head')) as HTMLElement[];
     expect(heads[0].querySelector('.dot')?.className).toContain('live');
-    expect(heads[0].textContent).toContain('valid · members ready');
-    expect(heads[0].textContent).toContain('merged on worker-1');
+    expect(heads[0].textContent).toContain('valid | members ready');
+    expect(heads[0].textContent).toContain('wanted on worker-1');
     expect(heads[1].querySelector('.dot')?.className).toContain('bad');
     expect(heads[1].textContent).toContain('members missing');
-    expect(heads[1].querySelector('.rs-warn')?.textContent).toContain(`served without ${B2.id}`);
+    expect(heads[1].querySelector('.rs-warn')?.textContent).toContain(
+      `member ${B2.id} has no producer`,
+    );
+  });
+
+  /** A condition from an older spec says nothing about this one. */
+  it('reads a condition written for an older generation as unknown', () => {
+    const stale: RedundancySet = {
+      ...VIDEO_SET,
+      generation: 3,
+      observedGeneration: 2,
+      valid: { ...READY, observedGeneration: 2 },
+      membersReady: {
+        type: 'MembersReady',
+        status: 'False',
+        reason: 'MembersMisaligned',
+        message: 'members differ in grain_rate',
+        observedGeneration: 2,
+      },
+    };
+    mount(bundleOf([A1, B1], [stale]));
+
+    const head = el().querySelector('.rs-head') as HTMLElement;
+    expect(head.querySelector('.dot')?.className).not.toMatch(/live|bad/);
+    expect(head.textContent).toContain('valid? | members ready?');
+    expect(head.querySelector('.rs-warn')).toBeNull();
+  });
+
+  /** A set naming one flow twice still renders each of its places. */
+  it('renders a member named twice in both places', () => {
+    mount(bundleOf([A1, B1], [{ ...VIDEO_SET, members: [A1.id, B1.id, A1.id] }]));
+
+    expect(rows().filter((r) => r.startsWith('member'))).toEqual([
+      'member 1 program video video',
+      'member 2 program video (engine b) video',
+      'member 3 program video video',
+    ]);
   });
 
   it('keeps a member nothing produces in its place', () => {
@@ -143,7 +179,7 @@ describe('SetBundleBox', () => {
 
     expect(rows()).toEqual([
       'output p-show.prog-video video',
-      `member 1 ${A1.id} · no MxlFlow: nothing produces it`,
+      `member 1 ${A1.id} | no MxlFlow: nothing produces it`,
       'member 2 program video (engine b) video',
     ]);
   });

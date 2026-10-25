@@ -352,6 +352,23 @@ describe('GeneratorsPage', () => {
         members: ['d4d00000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-0000000000b1'],
         output: { id: output, label: 'p-show.program', format: 'video' },
       },
+      // A member may be in several sets.
+      {
+        name: 'p-show.backup',
+        members: ['d4d00000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-0000000000b2'],
+        output: {
+          id: 'c0000000-0000-4000-8000-0000000000c3',
+          label: 'p-show.backup',
+          format: 'video',
+        },
+      },
+      // A reader reads the primary domain only.
+      {
+        name: 'p-show.studio',
+        domain: 'studio',
+        members: ['studio.b0000000-0000-4000-8000-0000000000b4'],
+        output: { id: 'studio.c0000000-0000-4000-8000-0000000000c4', label: 'p-show.studio' },
+      },
     ];
     try {
       await load(response());
@@ -361,12 +378,13 @@ describe('GeneratorsPage', () => {
     const picker = () =>
       Array.from(fixture.nativeElement.querySelectorAll('.rd-flow')) as HTMLElement[];
     expect(picker().map((el) => el.textContent)).toEqual([
-      expect.stringContaining('member 1 of p-show.program'),
+      expect.stringContaining('member 1 of p-show.program, member 1 of p-show.backup'),
+      expect.stringContaining('output of p-show.backup'),
       expect.stringContaining('output of p-show.program'),
       expect.stringContaining('SRT audio'),
     ]);
 
-    const box = picker()[1].querySelector('input') as HTMLInputElement;
+    const box = picker()[2].querySelector('input') as HTMLInputElement;
     box.checked = true;
     box.dispatchEvent(new Event('change'));
     fixture.detectChanges();

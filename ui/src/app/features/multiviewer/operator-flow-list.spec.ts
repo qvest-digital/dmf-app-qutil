@@ -123,13 +123,25 @@ describe('OperatorFlowList grouping', () => {
       expect(labelsIn(groups()[2])).toEqual([LONE.label]);
     });
 
-    it('shows each member once, inside its set', () => {
+    it('shows a member inside its set and outside none', () => {
       mountWithSet([MEMBER_A, MEMBER_B, LONE]);
 
       const labels = allLabels();
       expect(labels.filter((l) => l.includes('program-a'))).toHaveLength(1);
       expect(labels.filter((l) => l.includes('program-b'))).toHaveLength(1);
       expect(labels.filter((l) => l.startsWith('output'))).toHaveLength(1);
+    });
+
+    it('says so when the sets could not be listed', () => {
+      fixture = TestBed.createComponent(OperatorFlowList);
+      fixture.componentRef.setInput('flows', [LONE]);
+      fixture.componentRef.setInput('setsError', 'cannot list MxlFlowRedundancySets: 403');
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.gen-errors').textContent).toContain(
+        'cannot list MxlFlowRedundancySets: 403',
+      );
+      expect(labelsIn(groups()[0])).toEqual([LONE.label]);
     });
 
     it('counts the sets beside the flows', () => {

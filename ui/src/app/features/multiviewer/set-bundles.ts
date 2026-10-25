@@ -17,6 +17,12 @@ export interface SetMember {
 
 export interface SetView {
   set: RedundancySet;
+  /**
+   * The output's row: the set's own, or the MxlFlow on the output's name where
+   * there is one. That is a writer on the output id, which the gateway does not
+   * replace and the operator reports as OutputIsAFlow, so it is the live flow.
+   */
+  output: OperatorFlow;
   /** In spec order, which is the order of preference. */
   members: SetMember[];
 }
@@ -53,9 +59,8 @@ function groupOf(flow: OperatorFlow | null | undefined): string | null {
  * the sets its members share a group with, then every flow no set takes in,
  * grouped by hint as before.
  *
- * A member is shown inside its set and nowhere else, and so is an output: it
- * has no MxlFlow, and an MxlFlow that did carry its id would be the flow the
- * set's merge replaces.
+ * A member is shown inside each set that names it and outside none. An MxlFlow
+ * on an output's name is shown as that set's output row.
  */
 export function inventoryRows(
   flows: readonly OperatorFlow[],
@@ -64,6 +69,7 @@ export function inventoryRows(
   const byId = new Map(flows.map((f) => [f.id, f]));
   const views: SetView[] = sets.map((set) => ({
     set,
+    output: byId.get(set.output.id) ?? set.output,
     members: set.members.map((id) => ({ id, flow: byId.get(id) ?? null })),
   }));
 
@@ -109,8 +115,8 @@ export function inventoryRows(
 
     const outputs: FlowGroup = { name: bundled.map((v) => v.set.name).join(' + ') };
     for (const view of bundled) {
-      const track = flowTrack(view.set.output);
-      if (track && !outputs[track]) outputs[track] = view.set.output;
+      const track = flowTrack(view.output);
+      if (track && !outputs[track]) outputs[track] = view.output;
     }
     rows.push({
       kind: 'sets',

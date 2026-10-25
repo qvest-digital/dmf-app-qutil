@@ -63,17 +63,49 @@ describe('inventoryRows', () => {
     expect(bundle.others).toEqual([]);
   });
 
-  it('shows a member inside its set and nowhere else', () => {
+  it('shows a member inside its set and outside none', () => {
     const rows = inventoryRows([A1, A2, B1, B2, SRT_VIDEO, SRT_AUDIO], [VIDEO_SET, AUDIO_SET]);
 
     expect(flowIds(rows)).toEqual([['s1', 's2']]);
   });
 
-  /** An MxlFlow on an output's id is the flow the set's merge replaces. */
-  it('does not list an MxlFlow on an output id as a flow of its own', () => {
-    const rows = inventoryRows([A1, B1, flow('c1', null)], [VIDEO_SET]);
+  /**
+   * A writer on an output id is the live flow: the gateway does not replace a
+   * flow a writer holds, and the operator reports the set as OutputIsAFlow.
+   */
+  it("shows an MxlFlow on an output id as that set's output row", () => {
+    const writer = { ...flow('c1', null), label: 'a writer on c1', originFresh: true };
+    const rows = inventoryRows([A1, B1, writer], [VIDEO_SET]);
 
+    expect(bundles(rows)[0].sets[0].output).toBe(writer);
+    expect(bundles(rows)[0].outputs.video).toBe(writer);
     expect(flowIds(rows)).toEqual([]);
+  });
+
+  /** A set may name one flow twice, and two sets may share a member. */
+  it('shows a member in every set that names it', () => {
+    const shared = set('p.backup', ['a1', 'x1'], flow('x3', null));
+    const rows = inventoryRows([A1, B1, flow('x1', null)], [VIDEO_SET, shared]);
+
+    const [bundle, ...more] = bundles(rows);
+    expect(more).toEqual([]);
+    expect(bundle.sets.map((v) => v.members.map((m) => m.id))).toEqual([
+      ['a1', 'b1'],
+      ['a1', 'x1'],
+    ]);
+    expect(flowIds(rows)).toEqual([]);
+  });
+
+  /** Names as mxl-k8s builds them: `<domain>.<id>` outside the primary domain. */
+  it('matches members in another domain by their MxlFlow name', () => {
+    const studio = set('p.studio', ['studio.a1', 'studio.b1'], flow('studio.c1', null));
+    const rows = inventoryRows([flow('studio.a1', null), A1], [studio]);
+
+    expect(bundles(rows)[0].sets[0].members.map((m) => m.flow?.id ?? null)).toEqual([
+      'studio.a1',
+      null,
+    ]);
+    expect(flowIds(rows)).toEqual([['a1']]);
   });
 
   it('keeps a grouped flow no set takes in beside the set', () => {

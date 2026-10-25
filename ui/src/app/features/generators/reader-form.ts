@@ -69,7 +69,7 @@ import { validateFlowReaders } from './generator-validation';
               <span class="badge" [class]="flow.format ?? ''">{{ flow.format ?? '?' }}</span>
               <span class="rd-flow-meta">
                 {{ flow.id }}{{ flow.originNode ? ' | on ' + flow.originNode : ''
-                }}{{ roles().get(flow.id) ? ' | ' + roles().get(flow.id) : '' }}
+                }}{{ roles().has(flow.id) ? ' | ' + roles().get(flow.id)!.join(', ') : '' }}
               </span>
             </label>
           } @empty {
@@ -188,17 +188,26 @@ export class ReaderForm {
   }
 
   /** The inventory's flows and every set's output. */
+  /**
+   * The inventory's flows and every set output in the primary domain, the one
+   * a reader reads. An output an MxlFlow also names is listed once.
+   */
   private readonly flows = computed<OperatorFlow[]>(() => {
     const list = this.flowList();
-    return [...(list?.flows ?? []), ...(list?.sets ?? []).map((set) => set.output)];
+    const flows = new Map((list?.flows ?? []).map((f) => [f.id, f]));
+    for (const set of list?.sets ?? []) {
+      if (!set.domain && !flows.has(set.output.id)) flows.set(set.output.id, set.output);
+    }
+    return [...flows.values()];
   });
 
-  /** What a flow is to a redundancy set, so a member or an output is told apart. */
+  /** What a flow is to each redundancy set naming it: a member may be in several. */
   protected readonly roles = computed(() => {
-    const roles = new Map<string, string>();
+    const roles = new Map<string, string[]>();
+    const add = (id: string, role: string) => roles.set(id, [...(roles.get(id) ?? []), role]);
     for (const set of this.flowList()?.sets ?? []) {
-      roles.set(set.output.id, `output of ${set.name}`);
-      set.members.forEach((id, i) => roles.set(id, `member ${i + 1} of ${set.name}`));
+      add(set.output.id, `output of ${set.name}`);
+      set.members.forEach((id, i) => add(id, `member ${i + 1} of ${set.name}`));
     }
     return roles;
   });
@@ -216,7 +225,7 @@ export class ReaderForm {
     return flows.filter(
       (f) =>
         chosen.includes(f.id) ||
-        [f.label, f.grouphint, f.id, roles.get(f.id)].some((v) =>
+        [f.label, f.grouphint, f.id, ...(roles.get(f.id) ?? [])].some((v) =>
           (v ?? '').toLowerCase().includes(needle),
         ),
     );
