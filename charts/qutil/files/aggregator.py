@@ -855,30 +855,31 @@ def operator_flows():
         out.append(row)
     # Stable order: group by media format, then by uuid.
     out.sort(key=lambda f: ((f["format"] or "~"), f["id"] or ""))
-    sets, _ = redundancy_sets()
+    sets, err = redundancy_sets()
     return {"flows": out,
-            "sets": [redundancy_set_row(s, items) for s in sets or []]}
+            "sets": [redundancy_set_row(s, items) for s in sets or []],
+            "setsError": err}
 
 
 # -- Redundancy sets ----------------------------------------------------------
 # An MxlFlowRedundancySet serves one output flow from several member flows. The
-# output has no MxlFlow of its own: it exists only as a merge on the node that
-# reads it, in the geometry of its members. So everything this app needs to
-# know about it -- its format for a preview, that its id is taken -- comes from
-# the set and from its members' MxlFlows.
+# output has no MxlFlow: the gateway merges it on each node a reader wants it
+# on, from the members. So the set and its members' MxlFlows are all there is to
+# know it by.
 _SETS_API = "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowredundancysets"
 
 
 def redundancy_sets():
     """(items, None), or (None, error) when the sets cannot be listed.
 
-    A cluster whose mxl-k8s runs without mxlfs has no such CRD, and the API
-    answers 404 for the resource itself: that is a cluster with no sets, not a
-    failure.
+    A 404 for the resource itself means the API server does not serve it: an
+    mxl-k8s older than the CRD, or one installed with its CRDs skipped. That is
+    a cluster with no sets, not a failure.
     """
     try:
         return k8s(_SETS_API).get("items", []) or [], None
     except urllib.error.HTTPError as e:
+        e.close()
         if e.code == 404:
             return [], None
         return None, f"cannot list MxlFlowRedundancySets: {e}"
@@ -886,62 +887,76 @@ def redundancy_sets():
         return None, f"cannot list MxlFlowRedundancySets: {e}"
 
 
-def _set_ref(ref):
-    """(domain, flow id) of a set's member or output; "" is the primary domain."""
+def _flow_name(ref):
+    """The MxlFlow name of a set's member or output, as mxl-k8s builds it: the
+    bare id in the primary domain, <domain>.<id> in any other."""
     ref = ref or {}
-    return (ref.get("domain") or ""), (ref.get("flowID") or "").lower()
+    domain, flow_id = ref.get("domain") or "", (ref.get("flowID") or "").lower()
+    return f"{domain}.{flow_id}" if domain else flow_id
+
+
+def _set_output(rs):
+    """(domain, MxlFlow name) of a set's output; "" is the primary domain."""
+    out = (rs.get("spec") or {}).get("output") or {}
+    return out.get("domain") or "", _flow_name(out)
 
 
 def _set_definition(rs, flows):
-    """The definition the output takes: the first member, in spec order, that
-    has an MxlFlow. The operator reads MembersReady against the same member."""
-    by_id = {(f.get("metadata") or {}).get("name"): f for f in flows}
+    """The definition the output is described by: the first member, in spec
+    order, that has an MxlFlow. Members of a valid set agree in format, rate
+    and geometry, so any of them describes it."""
+    by_name = {(f.get("metadata") or {}).get("name"): f for f in flows}
     for m in (rs.get("spec") or {}).get("members") or []:
-        fl = by_id.get(_set_ref(m)[1])
+        fl = by_name.get(_flow_name(m))
         if fl:
             return (fl.get("spec") or {}).get("definition") or {}
     return None
 
 
 def _set_condition(rs, typ):
-    for c in _conditions(rs):
-        if c["type"] == typ:
-            return c
+    """One condition, with the generation it was written for: one older than
+    the set's own says nothing about the spec now."""
+    for c in (rs.get("status") or {}).get("conditions") or []:
+        if c.get("type") == typ:
+            return {"type": typ, "status": c.get("status"), "reason": c.get("reason"),
+                    "message": c.get("message"),
+                    "age": _age_secs(c.get("lastTransitionTime")),
+                    "observedGeneration": c.get("observedGeneration")}
     return None
 
 
 def redundancy_set_row(rs, flows):
-    """One set as the list renders it: its state, its member ids, and its output
-    shaped like an inventory row so it previews and books like any flow."""
+    """One set as the list renders it: its state, its member names, and its
+    output shaped like an inventory row so it previews and books like a flow."""
     spec, st = rs.get("spec") or {}, rs.get("status") or {}
-    name = (rs.get("metadata") or {}).get("name")
-    domain, out_id = _set_ref(spec.get("output"))
-    members = [_set_ref(m)[1] for m in spec.get("members") or []]
+    md = rs.get("metadata") or {}
+    name = md.get("name")
+    domain, out_name = _set_output(rs)
     d = _set_definition(rs, flows) or {}
     nodes = st.get("nodes") or []
-    media = flow_media(d)
     return {
         "name": name,
         "domain": domain or None,
         "preference": spec.get("preference"),
         "granularity": spec.get("granularity"),
         "skewBudget": spec.get("skewBudget"),
+        "generation": md.get("generation"),
+        "observedGeneration": st.get("observedGeneration"),
         "nodes": nodes,
-        "members": members,
+        "members": [_flow_name(m) for m in spec.get("members") or []],
         "valid": _set_condition(rs, "Valid"),
         "membersReady": _set_condition(rs, "MembersReady"),
         "output": {
-            "id": out_id,
+            "id": out_name,
             "label": name,
             "description": f"output of redundancy set {name}",
             **_definition_summary(d),
             "grouphint": None,
-            # Not a location the operator records: the nodes a reader asked
-            # for the output on, where the gateway merges it.
-            "locations": [{"node": n, "phase": "Merged"} for n in nodes],
+            # Not a location the operator records: the nodes a reader wants
+            # the output on, which the gateway there merges it for.
+            "locations": [{"node": n, "phase": "Wanted"} for n in nodes],
             # The member's description is about that member, not the output.
-            "detail": {"media": media,
-                       "conditions": _conditions(rs),
+            "detail": {"media": flow_media(d), "conditions": _conditions(rs),
                        "receivers": [], "mirrors": []},
             "originFresh": None,
             "originReason": "a redundancy set output has no origin",
@@ -951,20 +966,26 @@ def redundancy_set_row(rs, flows):
     }
 
 
-def _set_output_flow(uuid, flows):
+def _set_output_flow(uuid, flows, sets):
     """An MxlFlow-shaped stand-in for a set output in the primary domain, so a
-    preview reads its format, or None. None too while no member has an MxlFlow:
+    preview reads its format, or None. None for an output in another domain,
+    which the media server does not read, and while no member has an MxlFlow:
     then nothing says what the output carries."""
-    sets, _ = redundancy_sets()
     for rs in sets or []:
-        domain, out_id = _set_ref((rs.get("spec") or {}).get("output"))
-        if out_id != uuid or domain:
+        if _set_output(rs) != ("", uuid):
             continue
         d = _set_definition(rs, flows)
         if d is None:
             return None
         return {"metadata": {"name": uuid}, "spec": {"definition": d}}
     return None
+
+
+def _unknown_flow(what):
+    """The 404 for a flow neither an MxlFlow nor a set output names, saying so
+    where the sets could not be read to tell."""
+    _, err = redundancy_sets()
+    return f"{what} not known to the operator" + (f" ({err})" if err else "")
 
 
 # -- Per-flow preview (mediamtx control API) ---------------------------------
@@ -1361,7 +1382,7 @@ def _known_flow(uuid):
     for fl in flows:
         if fl.get("metadata", {}).get("name") == uuid:
             return fl
-    return _set_output_flow(uuid, flows)
+    return _set_output_flow(uuid, flows, redundancy_sets()[0])
 
 
 _PREVIEW_PREFIX = "preview-"
@@ -1518,7 +1539,7 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         return 400, {"error": "channels must be one or two 1-based numbers"}
     fl = _known_flow(uuid)
     if not fl:
-        return 404, {"error": "flow not known to the operator"}
+        return 404, {"error": _unknown_flow("flow")}
     d = fl.get("spec", {}).get("definition", {}) or {}
     fmt = (d.get("format") or "").rsplit(":", 1)[-1]
     if audio:
@@ -1627,7 +1648,7 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
 
     afl = _known_flow(audio_uuid)
     if not afl:
-        return 404, {"error": "audio flow not known to the operator"}
+        return 404, {"error": _unknown_flow("audio flow")}
     ad = afl.get("spec", {}).get("definition", {}) or {}
     afmt = (ad.get("format") or "").rsplit(":", 1)[-1]
     if afmt != "audio":
@@ -1799,7 +1820,7 @@ def _claim_flow_ids(claim):
     return found
 
 
-def _flow_ids_in_use():
+def _flow_ids_in_use(sets=None):
     """{flow id: what holds it}, or ("", error) when the index cannot be read.
 
     Two sources, because a flow exists at two different times: an MxlFlow CR is
@@ -1808,8 +1829,9 @@ def _flow_ids_in_use():
     and the SRT ingests before their pods have written anything.
 
     A redundancy set adds its output, which has no MxlFlow and is still a flow a
-    reader opens, and which a gateway building the output replaces wherever a
-    writer put it.
+    reader opens. A writer on it would leave the set invalid, and the gateway
+    does not replace a flow a writer holds. sets is the listing a caller has
+    already read, so one request does not list them twice.
     """
     used = {}
     flows = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows")
@@ -1820,13 +1842,14 @@ def _flow_ids_in_use():
         if name:
             used.setdefault(name.lower(), "a flow the operator already knows")
 
-    sets, err = redundancy_sets()
-    if err:
-        return None, err
+    if sets is None:
+        sets, err = redundancy_sets()
+        if err:
+            return None, err
     for rs in sets:
-        _, out_id = _set_ref((rs.get("spec") or {}).get("output"))
-        if out_id:
-            used.setdefault(out_id, f"redundancy set {(rs.get('metadata') or {}).get('name')}")
+        _, out_name = _set_output(rs)
+        if out_name:
+            used.setdefault(out_name, f"redundancy set {(rs.get('metadata') or {}).get('name')}")
 
     claims = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims")
     if "_error" in claims:
@@ -2128,8 +2151,10 @@ def _reader_claim(name, flows, req, window=None, generator=None, receivers=True)
 
     receivers=False books it without MxlReceivers. A receiver binds only to a
     flow with an MxlFlow and an Origin, which a redundancy set's output never
-    has, so one would stay Pending for the life of the booking. The reader's
-    intent shim still has every flow it opens materialised on its node."""
+    has, so one would stay Pending for the life of the booking. Without them
+    the other flows it opens are still materialised on its node: by the intent
+    shim on a hostPath domain, by the agent's mxlfs wanted-flow queue on a CSI
+    one."""
     parameters = {"flows": flows,
                   "receiver": {"provider": req.get("provider", "auto")}}
     if not receivers:
@@ -2695,15 +2720,19 @@ def flow_readers_create(req):
     if bad:
         return 400, {"error": bad}
     # A reader of a flow nobody writes waits for ever, so an id must name a
-    # flow the cluster knows or a claim that will write it.
-    used, err = _flow_ids_in_use()
+    # flow the cluster knows or a claim that will write it. An id is a bare
+    # UUID, so it names a flow, or a set output, in the primary domain only:
+    # the one a reader reads.
+    sets, err = redundancy_sets()
+    if err:
+        return 503, {"error": f"cannot check the flows: {err}"}
+    used, err = _flow_ids_in_use(sets)
     if err:
         return 503, {"error": f"cannot check the flows: {err}"}
     for flow_id in req["flows"]:
         if flow_id not in used:
             return 404, {"error": f"flow {flow_id} is not known to the cluster"}
-    outputs = {_set_ref((rs.get("spec") or {}).get("output"))[1]
-               for rs in redundancy_sets()[0] or []}
+    outputs = {_set_output(rs)[1] for rs in sets}
 
     stem = f"{GEN_PREFIX}r-{_gen_slug(req.get('label')) or 'flow'}-"
     rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req),

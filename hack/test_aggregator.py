@@ -183,9 +183,10 @@ class PreviewAddGuards(unittest.TestCase):
 
     def setUp(self):
         self.mtx = MtxRecorder()
-        p = mock.patch.object(agg, "_mtx", self.mtx)
-        p.start()
-        self.addCleanup(p.stop)
+        for p in (mock.patch.object(agg, "_mtx", self.mtx),
+                  mock.patch.object(agg, "redundancy_sets", lambda: ([], None))):
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_rejects_a_malformed_flow_id(self):
         code, res = agg.preview_add("not-a-uuid")
@@ -242,6 +243,7 @@ class JoinedPreview(unittest.TestCase):
         patches = [
             mock.patch.object(agg, "_mtx", self.mtx),
             mock.patch.object(agg, "_known_flow", lambda u: self.flows.get(u)),
+            mock.patch.object(agg, "redundancy_sets", lambda: ([], None)),
             mock.patch.object(agg, "_idle_since", {}),
         ]
         for p in patches:
@@ -712,7 +714,7 @@ class GeneratorBooking(unittest.TestCase):
 
         patches = [
             mock.patch.object(agg, "GEN_ENABLED", True),
-            mock.patch.object(agg, "_flow_ids_in_use", lambda: ({}, None)),
+            mock.patch.object(agg, "_flow_ids_in_use", lambda *a: ({}, None)),
             mock.patch.object(agg, "k8s_json", k8s_json),
             mock.patch.object(agg, "_gen_list", no_list),
             mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
@@ -880,7 +882,7 @@ class GeneratorReaders(unittest.TestCase):
 
         patches = [
             mock.patch.object(agg, "GEN_ENABLED", True),
-            mock.patch.object(agg, "_flow_ids_in_use", lambda: ({}, None)),
+            mock.patch.object(agg, "_flow_ids_in_use", lambda *a: ({}, None)),
             mock.patch.object(agg, "k8s_json", k8s_json),
             mock.patch.object(agg, "safe_k8s", safe_k8s),
             mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
@@ -1093,7 +1095,7 @@ class FlowReaders(unittest.TestCase):
 
         patches = [
             mock.patch.object(agg, "GEN_ENABLED", True),
-            mock.patch.object(agg, "_flow_ids_in_use", lambda: (self.known, None)),
+            mock.patch.object(agg, "_flow_ids_in_use", lambda *a: (self.known, None)),
             mock.patch.object(agg, "redundancy_sets", lambda: ([], None)),
             mock.patch.object(agg, "k8s_json", k8s_json),
             mock.patch.object(agg, "safe_k8s", safe_k8s),
@@ -1147,7 +1149,7 @@ class FlowReaders(unittest.TestCase):
         self.assertEqual(self.posted, [])
 
     def test_fails_closed_when_the_flows_cannot_be_listed(self):
-        with mock.patch.object(agg, "_flow_ids_in_use", lambda: (None, "forbidden")):
+        with mock.patch.object(agg, "_flow_ids_in_use", lambda *a: (None, "forbidden")):
             code, _ = agg.flow_readers_create({"flows": [self.A], "count": 1})
         self.assertEqual(code, 503)
         self.assertEqual(self.posted, [])
@@ -1178,9 +1180,9 @@ class FlowReaders(unittest.TestCase):
 class RedundancySets(unittest.TestCase):
     """MxlFlowRedundancySets: one output flow served from several members.
 
-    The output has no MxlFlow. It exists only as a merge on the node a reader
-    opens it on, in the geometry of its members, so the set and the members'
-    MxlFlows are all there is to know it by.
+    The output has no MxlFlow. The gateway merges it on each node a reader
+    wants it on, so the set and the members' MxlFlows are all there is to know
+    it by.
     """
 
     A1 = "5fd00000-0000-4000-8000-0000000000a1"
@@ -1192,19 +1194,21 @@ class RedundancySets(unittest.TestCase):
     @classmethod
     def rs(cls, name="p-show.video", members=(A1, B1), output=C1, domain=None,
            conditions=None):
-        out = {"flowID": output}
-        if domain:
-            out["domain"] = domain
+        def ref(flow_id):
+            return {"flowID": flow_id, **({"domain": domain} if domain else {})}
+
         return {
-            "metadata": {"name": name},
-            "spec": {"members": [{"flowID": m} for m in members], "output": out,
+            "metadata": {"name": name, "generation": 2},
+            "spec": {"members": [ref(m) for m in members], "output": ref(output),
                      "granularity": "Grain", "preference": "Ordered",
                      "skewBudget": "40ms"},
-            "status": {"nodes": ["worker-1"], "conditions": conditions or [
+            "status": {"nodes": ["worker-1"], "observedGeneration": 2,
+                       "conditions": conditions or [
                 {"type": "Valid", "status": "True", "reason": "MembersAligned",
-                 "message": "members agree in format, rate and geometry"},
-                {"type": "MembersReady", "status": "False", "reason": "MembersMissing",
-                 "message": "served without " + cls.A1},
+                 "message": "members agree in format, rate and geometry",
+                 "observedGeneration": 2},
+                {"type": "MembersReady", "status": "False", "reason": "MemberMissing",
+                 "message": f"member {cls.A1} has no MxlFlow", "observedGeneration": 1},
             ]},
         }
 
@@ -1228,32 +1232,57 @@ class RedundancySets(unittest.TestCase):
     def test_lists_each_set_with_its_state_members_and_output(self):
         res = agg.operator_flows()
         self.assertEqual([f["id"] for f in res["flows"]], [self.B1])
+        self.assertIsNone(res["setsError"])
         (row,) = res["sets"]
         self.assertEqual(row["name"], "p-show.video")
         self.assertEqual(row["members"], [self.A1, self.B1])
         self.assertEqual(row["nodes"], ["worker-1"])
         self.assertEqual((row["valid"]["status"], row["membersReady"]["status"]),
                          ("True", "False"))
-        self.assertEqual(row["membersReady"]["message"], "served without " + self.A1)
+        self.assertEqual(row["membersReady"]["message"], f"member {self.A1} has no MxlFlow")
         self.assertEqual(row["output"]["id"], self.C1)
 
-    def test_the_output_takes_the_geometry_of_the_first_member_with_a_flow(self):
-        """A1 has no MxlFlow, so B1 is what the output carries, as the operator
-        reads MembersReady against the first member that has one."""
+    def test_carries_the_generation_each_condition_was_written_for(self):
+        """A condition older than the spec says nothing about it; the page shows
+        it as unknown, and needs both numbers to tell."""
+        row = agg.operator_flows()["sets"][0]
+        self.assertEqual((row["generation"], row["observedGeneration"]), (2, 2))
+        self.assertEqual(row["valid"]["observedGeneration"], 2)
+        self.assertEqual(row["membersReady"]["observedGeneration"], 1)
+
+    def test_the_output_is_described_by_the_first_member_with_a_flow(self):
+        """A1 has no MxlFlow, so B1 describes the output."""
         out = agg.operator_flows()["sets"][0]["output"]
         self.assertEqual((out["format"], out["resolution"], out["rate"]),
                          ("video", "1920x1080", "50/1"))
         self.assertIsNone(out["grouphint"])
-        self.assertEqual(out["locations"], [{"node": "worker-1", "phase": "Merged"}])
+        self.assertEqual(out["locations"], [{"node": "worker-1", "phase": "Wanted"}])
 
     def test_an_output_no_member_describes_says_nothing_about_its_media(self):
         self.flows = []
         out = agg.operator_flows()["sets"][0]["output"]
         self.assertIsNone(out["format"])
 
-    def test_a_cluster_without_the_crd_has_no_sets(self):
-        """mxl-k8s without mxlfs installs no MxlFlowRedundancySet CRD, and the
-        API answers 404 for the resource: no sets, not a failure."""
+    def test_names_flows_in_another_domain_as_mxl_k8s_does(self):
+        """<domain>.<id>, the MxlFlow name of a flow outside the primary
+        domain. The operator refuses members outside the output's domain, so
+        members and output share one."""
+        self.sets = [self.rs(domain="studio")]
+        self.flows = [video_flow("studio." + self.B1, 50), video_flow(self.A1, 25)]
+        row = agg.operator_flows()["sets"][0]
+        self.assertEqual(row["domain"], "studio")
+        self.assertEqual(row["members"], ["studio." + self.A1, "studio." + self.B1])
+        self.assertEqual(row["output"]["id"], "studio." + self.C1)
+        # The primary-domain A1 is another flow; studio.B1 describes the output.
+        self.assertEqual(row["output"]["rate"], "50/1")
+        used, _ = agg._flow_ids_in_use()
+        self.assertIn("studio." + self.C1, used)
+        self.assertNotIn(self.C1, used)
+
+    def test_a_cluster_without_the_resource_has_no_sets(self):
+        """An mxl-k8s older than the CRD, or one installed with its CRDs
+        skipped, has the API answer 404 for the resource: no sets, not a
+        failure. Anything else is one."""
         def missing(path):
             raise urllib.error.HTTPError(path, 404, "Not Found", {}, io.BytesIO())
 
@@ -1266,6 +1295,11 @@ class RedundancySets(unittest.TestCase):
             items, err = self.LIST()
         self.assertIsNone(items)
         self.assertIn("403", err)
+
+    def test_a_listing_failure_is_reported_beside_the_flows(self):
+        with mock.patch.object(agg, "redundancy_sets", lambda: (None, "forbidden")):
+            res = agg.operator_flows()
+        self.assertEqual((res["sets"], res["setsError"]), ([], "forbidden"))
 
     def test_the_output_previews_though_it_has_no_mxlflow(self):
         mtx = MtxRecorder()
@@ -1286,13 +1320,23 @@ class RedundancySets(unittest.TestCase):
     def test_an_output_in_another_domain_is_not_previewed(self):
         """The media server reads the primary domain only."""
         self.sets = [self.rs(domain="studio")]
+        self.flows = [video_flow("studio." + self.B1, 50)]
         mtx = MtxRecorder()
         with mock.patch.object(agg, "_mtx", mtx):
             code, _ = agg.preview_add(self.C1)
         self.assertEqual(code, 404)
+        self.assertIsNone(mtx.added())
+
+    def test_a_preview_404_says_when_the_sets_could_not_be_read(self):
+        """Then the flow may be an output nobody could look up."""
+        mtx = MtxRecorder()
+        with mock.patch.object(agg, "redundancy_sets", lambda: (None, "forbidden")), \
+                mock.patch.object(agg, "_mtx", mtx):
+            code, res = agg.preview_add(self.C1)
+        self.assertEqual((code, res["error"]), (404, "flow not known to the operator (forbidden)"))
 
     def test_the_output_id_is_taken(self):
-        """A writer on the output's id would be overwritten by the merge, and a
+        """A writer on the output's id would leave the set invalid, and a
         reader of it is a reader of a flow that exists."""
         used, err = agg._flow_ids_in_use()
         self.assertIsNone(err)
@@ -1311,18 +1355,26 @@ class RedundancySetReaders(unittest.TestCase):
 
     def setUp(self):
         self.posted = []
+        self.listings = 0
 
         def k8s_json(path, method="GET", body=None):
             self.posted.append(body)
             return 201, body
 
-        sets = [RedundancySets.rs(members=(self.A1, RedundancySets.B1))]
-        known = {self.A1: "a flow the operator already knows",
-                 self.C1: "redundancy set p-show.video"}
+        def safe_k8s(path):
+            if path.endswith("/mxlflows"):
+                return {"items": [video_flow(self.A1)]}
+            return {"items": []}
+
+        def sets():
+            self.listings += 1
+            return (self.sets, None) if self.sets is not None else (None, "forbidden")
+
+        self.sets = [RedundancySets.rs(members=(self.A1, RedundancySets.B1))]
         patches = [
             mock.patch.object(agg, "GEN_ENABLED", True),
-            mock.patch.object(agg, "_flow_ids_in_use", lambda: (known, None)),
-            mock.patch.object(agg, "redundancy_sets", lambda: (sets, None)),
+            mock.patch.object(agg, "safe_k8s", safe_k8s),
+            mock.patch.object(agg, "redundancy_sets", sets),
             mock.patch.object(agg, "k8s_json", k8s_json),
             mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
         ]
@@ -1344,6 +1396,25 @@ class RedundancySetReaders(unittest.TestCase):
     def test_a_reader_of_members_alone_keeps_its_receivers(self):
         agg.flow_readers_create({"flows": [self.A1], "count": 1, "provider": "tcp"})
         self.assertEqual(self.receiver(), {"provider": "tcp"})
+
+    def test_lists_the_sets_once_per_booking(self):
+        agg.flow_readers_create({"flows": [self.C1], "count": 1})
+        self.assertEqual(self.listings, 1)
+
+    def test_refuses_an_output_in_another_domain(self):
+        """A reader reads the primary domain, and a bare id names a flow there,
+        so the id of an output in another domain names nothing it can read."""
+        self.sets = [RedundancySets.rs(domain="studio")]
+        code, res = agg.flow_readers_create({"flows": [self.C1], "count": 1})
+        self.assertEqual(code, 404)
+        self.assertIn(self.C1, res["error"])
+        self.assertEqual(self.posted, [])
+
+    def test_fails_closed_when_the_sets_cannot_be_listed(self):
+        self.sets = None
+        code, _ = agg.flow_readers_create({"flows": [self.A1], "count": 1})
+        self.assertEqual(code, 503)
+        self.assertEqual(self.posted, [])
 
 
 class ReaderDelivering(unittest.TestCase):
