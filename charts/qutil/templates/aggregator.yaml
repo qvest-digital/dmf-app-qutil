@@ -62,6 +62,10 @@ rules:
   - apiGroups: [mxl.qvest-digital.com]
     resources: [mxlflows, mxlreceivers, mxlflowmirrors]
     verbs: [get, list]
+  # A set's output has no MxlFlow; the set is the only record of it.
+  - apiGroups: [mxl.qvest-digital.com]
+    resources: [mxlflowredundancysets]
+    verbs: [get, list, watch]
   # Per-flow origin Leases, the freshness signal behind the flow-state dot.
   - apiGroups: [coordination.k8s.io]
     resources: [leases]

@@ -63,6 +63,15 @@ unlinks and recreates it on every restart.
 Cluster-scoped `MxlFlow` records each flow's origin and freshness;
 `MxlReceiver` and `MxlFlowMirror` are namespaced and track the consumer side.
 
+A cluster-scoped `MxlFlowRedundancySet` serves one output flow from several
+member flows, picking a member per grain. The output has no `MxlFlow`: the
+gateway merges it on each node a reader opens it on, in the members' geometry.
+The flow list shows a set as one box with its state, its output and its
+members, beside the members' own NMOS groups. A preview or a reader of the
+output takes its format from the first member that has an `MxlFlow`, and a
+reader of it is booked without `MxlReceiver`s, which bind only to a flow with
+an origin.
+
 ---
 
 ## 3. Serving a flow

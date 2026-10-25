@@ -13,7 +13,8 @@
 #
 # Endpoints:
 #   GET    /api/flows              -> the demo writer set, merged as above
-#   GET    /api/operator-flows     -> every MxlFlow the operator knows
+#   GET    /api/operator-flows     -> every MxlFlow the operator knows, and the
+#                                    MxlFlowRedundancySets over them
 #   GET    /api/booking            -> the per-booking instances and their story
 #   POST   /api/preview/<uuid>     -> provision a mediamtx path for a flow
 #   GET    /api/preview/<uuid>     -> whether an audio preview is producing yet
@@ -786,6 +787,33 @@ def flow_detail(fl, d, uuid, receivers, mirrors):
 # multiviewer's "operator flows" list renders this verbatim, so the demo shows
 # whatever is actually registered on the cluster (ST 2110 gateway, tcp-demo,
 # audio, ...), each with the media facts and origin health the operator tracks.
+def _definition_summary(d):
+    """The list row's media columns off one flow definition."""
+    # urn:x-nmos:format:video -> "video"; keep raw if it isn't a URN.
+    fmt = (d.get("format") or "").rsplit(":", 1)[-1] or None
+
+    resolution = None
+    if d.get("frame_width") and d.get("frame_height"):
+        resolution = f"{d['frame_width']}x{d['frame_height']}"
+
+    rate = None
+    gr = d.get("grain_rate") or {}
+    if gr.get("numerator"):
+        rate = f"{gr['numerator']}/{gr.get('denominator', 1)}"
+    sr = d.get("sample_rate") or {}
+    if sr.get("numerator"):
+        rate = f"{sr['numerator'] / max(1, sr.get('denominator', 1)) / 1000:g} kHz"
+
+    return {
+        "format": fmt,
+        "mediaType": d.get("media_type"),
+        "resolution": resolution,
+        "rate": rate,
+        "channels": d.get("channel_count"),
+        "colorspace": d.get("colorspace"),
+    }
+
+
 def operator_flows():
     items = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
@@ -801,20 +829,6 @@ def operator_flows():
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
         uuid = fl.get("metadata", {}).get("name") or fl.get("spec", {}).get("id")
-        # urn:x-nmos:format:video -> "video"; keep raw if it isn't a URN.
-        fmt = (d.get("format") or "").rsplit(":", 1)[-1] or None
-
-        resolution = None
-        if d.get("frame_width") and d.get("frame_height"):
-            resolution = f"{d['frame_width']}x{d['frame_height']}"
-
-        rate = None
-        gr = d.get("grain_rate") or {}
-        if gr.get("numerator"):
-            rate = f"{gr['numerator']}/{gr.get('denominator', 1)}"
-        sr = d.get("sample_rate") or {}
-        if sr.get("numerator"):
-            rate = f"{sr['numerator'] / max(1, sr.get('denominator', 1)) / 1000:g} kHz"
 
         origin = origin_health(fl, leases)
         locations = [
@@ -832,12 +846,7 @@ def operator_flows():
             "id": uuid,
             "label": d.get("label") or uuid,
             "description": d.get("description"),
-            "format": fmt,
-            "mediaType": d.get("media_type"),
-            "resolution": resolution,
-            "rate": rate,
-            "channels": d.get("channel_count"),
-            "colorspace": d.get("colorspace"),
+            **_definition_summary(d),
             "grouphint": grouphint,
             "locations": locations,
             "detail": flow_detail(fl, d, uuid, receivers, mirrors),
@@ -846,7 +855,116 @@ def operator_flows():
         out.append(row)
     # Stable order: group by media format, then by uuid.
     out.sort(key=lambda f: ((f["format"] or "~"), f["id"] or ""))
-    return {"flows": out}
+    sets, _ = redundancy_sets()
+    return {"flows": out,
+            "sets": [redundancy_set_row(s, items) for s in sets or []]}
+
+
+# -- Redundancy sets ----------------------------------------------------------
+# An MxlFlowRedundancySet serves one output flow from several member flows. The
+# output has no MxlFlow of its own: it exists only as a merge on the node that
+# reads it, in the geometry of its members. So everything this app needs to
+# know about it -- its format for a preview, that its id is taken -- comes from
+# the set and from its members' MxlFlows.
+_SETS_API = "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowredundancysets"
+
+
+def redundancy_sets():
+    """(items, None), or (None, error) when the sets cannot be listed.
+
+    A cluster whose mxl-k8s runs without mxlfs has no such CRD, and the API
+    answers 404 for the resource itself: that is a cluster with no sets, not a
+    failure.
+    """
+    try:
+        return k8s(_SETS_API).get("items", []) or [], None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return [], None
+        return None, f"cannot list MxlFlowRedundancySets: {e}"
+    except Exception as e:
+        return None, f"cannot list MxlFlowRedundancySets: {e}"
+
+
+def _set_ref(ref):
+    """(domain, flow id) of a set's member or output; "" is the primary domain."""
+    ref = ref or {}
+    return (ref.get("domain") or ""), (ref.get("flowID") or "").lower()
+
+
+def _set_definition(rs, flows):
+    """The definition the output takes: the first member, in spec order, that
+    has an MxlFlow. The operator reads MembersReady against the same member."""
+    by_id = {(f.get("metadata") or {}).get("name"): f for f in flows}
+    for m in (rs.get("spec") or {}).get("members") or []:
+        fl = by_id.get(_set_ref(m)[1])
+        if fl:
+            return (fl.get("spec") or {}).get("definition") or {}
+    return None
+
+
+def _set_condition(rs, typ):
+    for c in _conditions(rs):
+        if c["type"] == typ:
+            return c
+    return None
+
+
+def redundancy_set_row(rs, flows):
+    """One set as the list renders it: its state, its member ids, and its output
+    shaped like an inventory row so it previews and books like any flow."""
+    spec, st = rs.get("spec") or {}, rs.get("status") or {}
+    name = (rs.get("metadata") or {}).get("name")
+    domain, out_id = _set_ref(spec.get("output"))
+    members = [_set_ref(m)[1] for m in spec.get("members") or []]
+    d = _set_definition(rs, flows) or {}
+    nodes = st.get("nodes") or []
+    media = flow_media(d)
+    return {
+        "name": name,
+        "domain": domain or None,
+        "preference": spec.get("preference"),
+        "granularity": spec.get("granularity"),
+        "skewBudget": spec.get("skewBudget"),
+        "nodes": nodes,
+        "members": members,
+        "valid": _set_condition(rs, "Valid"),
+        "membersReady": _set_condition(rs, "MembersReady"),
+        "output": {
+            "id": out_id,
+            "label": name,
+            "description": f"output of redundancy set {name}",
+            **_definition_summary(d),
+            "grouphint": None,
+            # Not a location the operator records: the nodes a reader asked
+            # for the output on, where the gateway merges it.
+            "locations": [{"node": n, "phase": "Merged"} for n in nodes],
+            # The member's description is about that member, not the output.
+            "detail": {"media": media,
+                       "conditions": _conditions(rs),
+                       "receivers": [], "mirrors": []},
+            "originFresh": None,
+            "originReason": "a redundancy set output has no origin",
+            "originNode": None,
+            "originAge": None,
+        },
+    }
+
+
+def _set_output_flow(uuid, flows):
+    """An MxlFlow-shaped stand-in for a set output in the primary domain, so a
+    preview reads its format, or None. None too while no member has an MxlFlow:
+    then nothing says what the output carries."""
+    sets, _ = redundancy_sets()
+    for rs in sets or []:
+        domain, out_id = _set_ref((rs.get("spec") or {}).get("output"))
+        if out_id != uuid or domain:
+            continue
+        d = _set_definition(rs, flows)
+        if d is None:
+            return None
+        return {"metadata": {"name": uuid}, "spec": {"definition": d}}
+    return None
 
 
 # -- Per-flow preview (mediamtx control API) ---------------------------------
@@ -1239,11 +1357,11 @@ def _grain_payload(uuid, index):
 
 
 def _known_flow(uuid):
-    for fl in safe_k8s(
-            "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []):
+    flows = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
+    for fl in flows:
         if fl.get("metadata", {}).get("name") == uuid:
             return fl
-    return None
+    return _set_output_flow(uuid, flows)
 
 
 _PREVIEW_PREFIX = "preview-"
@@ -1688,6 +1806,10 @@ def _flow_ids_in_use():
     a flow that exists now, whoever wrote it, and a claim's parameters are a flow
     that will exist once it provisions. Only the second catches writer-mxl-1..4
     and the SRT ingests before their pods have written anything.
+
+    A redundancy set adds its output, which has no MxlFlow and is still a flow a
+    reader opens, and which a gateway building the output replaces wherever a
+    writer put it.
     """
     used = {}
     flows = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows")
@@ -1697,6 +1819,14 @@ def _flow_ids_in_use():
         name = (fl.get("metadata", {}) or {}).get("name")
         if name:
             used.setdefault(name.lower(), "a flow the operator already knows")
+
+    sets, err = redundancy_sets()
+    if err:
+        return None, err
+    for rs in sets:
+        _, out_id = _set_ref((rs.get("spec") or {}).get("output"))
+        if out_id:
+            used.setdefault(out_id, f"redundancy set {(rs.get('metadata') or {}).get('name')}")
 
     claims = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims")
     if "_error" in claims:
@@ -1992,11 +2122,18 @@ def _is_reader(claim):
             and labels.get(_GEN_LABEL_COMPONENT) == _READER_COMPONENT)
 
 
-def _reader_claim(name, flows, req, window=None, generator=None):
+def _reader_claim(name, flows, req, window=None, generator=None, receivers=True):
     """A claim of READER_CLASS reading flows. A reader of a generator carries
-    its name and expires with it: a reader outliving its flows reads nothing."""
+    its name and expires with it: a reader outliving its flows reads nothing.
+
+    receivers=False books it without MxlReceivers. A receiver binds only to a
+    flow with an MxlFlow and an Origin, which a redundancy set's output never
+    has, so one would stay Pending for the life of the booking. The reader's
+    intent shim still has every flow it opens materialised on its node."""
     parameters = {"flows": flows,
                   "receiver": {"provider": req.get("provider", "auto")}}
+    if not receivers:
+        parameters["receiver"]["enabled"] = False
     node = (req.get("node") or "").strip()
     if node:
         parameters["affinity"] = _node_affinity(node)
@@ -2476,7 +2613,7 @@ def _book_readers(generator, req):
     return _post_readers(f"{gen_name}-r", _claim_flow_ids(generator), req, window, gen_name)
 
 
-def _post_readers(stem, flows, req, window=None, generator=None):
+def _post_readers(stem, flows, req, window=None, generator=None, receivers=True):
     """POST req["count"] reader claims named <stem><4 hex>. (rows, error) where
     error names the first failure, after which nothing more is booked."""
     rows = []
@@ -2486,7 +2623,8 @@ def _post_readers(stem, flows, req, window=None, generator=None):
             if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
                 return rows, "that label or prefix does not make a usable reader name"
             code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
-                                 "POST", _reader_claim(name, flows, req, window, generator))
+                                 "POST", _reader_claim(name, flows, req, window, generator,
+                                                      receivers))
             if code in (200, 201):
                 rows.append(_reader_row(res))
                 break
@@ -2564,9 +2702,12 @@ def flow_readers_create(req):
     for flow_id in req["flows"]:
         if flow_id not in used:
             return 404, {"error": f"flow {flow_id} is not known to the cluster"}
+    outputs = {_set_ref((rs.get("spec") or {}).get("output"))[1]
+               for rs in redundancy_sets()[0] or []}
 
     stem = f"{GEN_PREFIX}r-{_gen_slug(req.get('label')) or 'flow'}-"
-    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req))
+    rows, err = _post_readers(stem, req["flows"], req, _ttl_window(req),
+                              receivers=not outputs.intersection(req["flows"]))
     if rows:
         snapshot_drop("generators")
     if not rows:
