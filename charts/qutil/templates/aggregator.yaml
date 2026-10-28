@@ -229,6 +229,12 @@ spec:
               value: {{ .Values.ancReader.claimName }}
             - name: ANC_READER_CLASS
               value: {{ .Values.ancReader.className }}
+            {{- with .Values.preview.domains }}
+            # The domains both claims above mount; a flow in any other is
+            # refused before a path is configured that could not open it.
+            - name: PREVIEW_DOMAINS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: GRAIN_READER_CLAIM
               value: {{ .Values.grainReader.claimName }}
             - name: GRAIN_READER_CLASS

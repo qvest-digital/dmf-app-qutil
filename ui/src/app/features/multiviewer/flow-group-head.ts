@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { FlowGroup } from '../preview/flow-groups';
 import { PreviewController, requestFor } from '../preview/preview-controller';
+import { unmountedDomain } from './operator-flow-row';
 
 /**
  * The head of one box in the flow list: what the producer called this group,
@@ -32,17 +33,18 @@ export class FlowGroupHead {
 
   private readonly preview$ = inject(PreviewController);
 
-  /** Picture and sound both, in the domain the media server reads, or
-   *  nothing to combine. */
+  /** Picture and sound both, in one domain the media server mounts, or
+   *  nothing to combine: one source reads both. */
   protected readonly pair = computed(() => {
     const { video, audio } = this.group();
-    return video && audio && !this.domain() ? { video, audio } : null;
+    if (!video || !audio || this.domain()) return null;
+    return (video.domain ?? null) === (audio.domain ?? null) ? { video, audio } : null;
   });
 
-  /** The MXL domain a member is in, when it is not the primary one. */
+  /** The MXL domain of a member the media server does not mount. */
   private readonly domain = computed(() => {
     const { video, audio } = this.group();
-    return video?.domain || audio?.domain || null;
+    return (video && unmountedDomain(video)) || (audio && unmountedDomain(audio)) || null;
   });
 
   protected readonly title = computed(() => {

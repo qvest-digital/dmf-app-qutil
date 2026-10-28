@@ -837,6 +837,7 @@ def operator_flows():
             for l in (fl.get("status", {}).get("locations") or [])
         ]
 
+        domain = fl.get("spec", {}).get("domain") or None
         grouphint = None
         gh = (d.get("tags") or {}).get("urn:x-nmos:tag:grouphint/v1.0")
         if isinstance(gh, list) and gh:
@@ -845,9 +846,9 @@ def operator_flows():
         row = {
             "id": uuid,
             # Outside the primary domain the name is <domain>.<id>, and the
-            # media server, which reads only the primary domain, cannot
-            # preview the flow.
-            "domain": fl.get("spec", {}).get("domain") or None,
+            # flow previews only if the media server mounts that domain.
+            "domain": domain,
+            "domainPreview": domain is None or domain in PREVIEW_DOMAINS,
             "label": d.get("label") or uuid,
             "description": d.get("description"),
             **_definition_summary(d),
@@ -1034,6 +1035,11 @@ ANC_PREVIEW_API = os.environ.get("ANC_PREVIEW_API")
 # which is a media function's job rather than this process's.
 GRAIN_READER_API = os.environ.get("GRAIN_READER_API")
 MXL_DOMAIN = os.environ.get("MXL_DOMAIN", "/run/mxl/domain")
+# MxlDomains besides the primary one that the media server and the ANC reader
+# mount, each at MXL_DOMAINS_DIR/<name>. A flow in one of them previews.
+MXL_DOMAINS_DIR = os.environ.get("MXL_DOMAINS_DIR", "/run/mxl/domains")
+PREVIEW_DOMAINS = frozenset(
+    d for d in os.environ.get("PREVIEW_DOMAINS", "").split(",") if d)
 
 # Where the claims live, and what they are called. The names come from chart
 # values; empty means "find the one claim of that class in the namespace",
@@ -1067,18 +1073,43 @@ _UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def _flow_id_error(ref):
-    """The refusal for a preview route's flow reference, or None when it is a
-    bare id. An MxlFlow outside the primary domain is named <domain>.<id>;
-    the media server and the ANC reader read only the primary domain, so such
-    a flow is refused by saying so rather than as a malformed id."""
+# An MxlDomain name, a DNS label. It ends up in a filesystem path.
+_DOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+
+def _split_ref(ref):
+    """(domain, id) of an MxlFlow name, "" for the primary domain, or None when
+    it is neither a bare id nor <domain>.<id>."""
     if _UUID_RE.match(ref or ""):
-        return None
+        return "", ref
     domain, _, flow_id = (ref or "").partition(".")
-    if domain and _UUID_RE.match(flow_id):
-        return 422, {"error": f"flow {flow_id} is in MXL domain {domain}; "
-                              "only flows in the primary domain preview"}
-    return 400, {"error": "bad flow id"}
+    if _DOMAIN_RE.match(domain) and _UUID_RE.match(flow_id):
+        return domain, flow_id
+    return None
+
+
+def _flow_id_error(ref):
+    """The refusal for a preview route's flow reference, or None when it names a
+    flow a preview can open. An MxlFlow outside the primary domain is named
+    <domain>.<id>; the media server and the ANC reader read only the domains
+    they mount, so a flow in any other is refused by saying so rather than as a
+    malformed id."""
+    split = _split_ref(ref)
+    if split is None:
+        return 400, {"error": "bad flow id"}
+    domain, flow_id = split
+    if domain and domain not in PREVIEW_DOMAINS:
+        return 422, {"error": f"flow {flow_id} is in MXL domain {domain}, "
+                              "which the media server does not mount"}
+    return None
+
+
+def _mxl_source(ref):
+    """The media server's source for a flow: its id below the directory its
+    domain is mounted at."""
+    domain, flow_id = _split_ref(ref)
+    root = f"{MXL_DOMAINS_DIR}/{domain}" if domain else MXL_DOMAIN
+    return f"mxl://{root}/{flow_id}"
 
 
 # Which channel pair an audio preview should publish, 1-based, as the
@@ -1606,9 +1637,11 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
     joined = _joined_path_for(uuid)
     if joined:
         _preview_track(joined)
+        audio_id = joined[len(_PREVIEW_PREFIX) + len(uuid) + 1:]
+        domain, _ = _split_ref(uuid)
         return 200, {"path": joined, "hls": f"/hls/{joined}/index.m3u8",
                      "whep": f"/webrtc/{joined}/whep", "format": "video",
-                     "audio": joined[len(_PREVIEW_PREFIX) + len(uuid) + 1:]}
+                     "audio": f"{domain}.{audio_id}" if domain else audio_id}
 
     name = _PREVIEW_PREFIX + uuid
     # Idempotent: reuse the path if the card was opened before.
@@ -1635,7 +1668,7 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
         # 25 fps whatever the flow's rate: previews share one media server,
         # and at the 50 fps house format their encodes filled its node and
         # made every preview drop frames. The flow keeps its own rate.
-        conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
+        conf = {"source": _mxl_source(uuid), "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
@@ -1658,10 +1691,17 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
 
     The path name cannot carry a "+": the media server accepts only
     [0-9a-zA-Z_-/.] in one, so the two ids are joined with the same hyphen
-    that already separates the prefix.
+    that already separates the prefix. The audio flow is named by its bare id
+    there, so _joined_path_for finds the path by the video's name alone.
+
+    Both flows are read through one source, so they have to share a domain.
     """
-    if not _UUID_RE.match(audio_uuid or ""):
+    split = _split_ref(audio_uuid)
+    if split is None:
         return 400, {"error": "bad audio flow id"}
+    if split[0] != _split_ref(video_uuid)[0]:
+        return 400, {"error": "a joined preview needs both flows in one MXL domain"}
+    audio_id = split[1]
     if audio_uuid == video_uuid:
         return 400, {"error": "a joined preview needs two different flows"}
     if video_fmt != "video":
@@ -1677,10 +1717,10 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
         return 415, {"error": f"the second flow of a joined preview must be "
                               f"audio; this one is {afmt or 'of unknown format'}"}
 
-    name = f"{_PREVIEW_PREFIX}{video_uuid}-{audio_uuid}"
+    name = f"{_PREVIEW_PREFIX}{video_uuid}-{audio_id}"
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
-        conf = {"source": f"mxl://{MXL_DOMAIN}/{video_uuid}?audio={audio_uuid}",
+        conf = {"source": f"{_mxl_source(video_uuid)}?audio={audio_id}",
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
                 "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
                 "mxlH264Preset": "superfast", "mxlH264Profile": "high",
@@ -1713,7 +1753,7 @@ def preview_add_audio(uuid, channels=""):
 
     suffix = f"-p{channels.replace(',', '-')}" if channels else ""
     name = _PREVIEW_PREFIX + uuid + suffix
-    conf = {"source": f"mxl://{MXL_DOMAIN}/{uuid}", "sourceOnDemand": True,
+    conf = {"source": _mxl_source(uuid), "sourceOnDemand": True,
             "sourceOnDemandCloseAfter": "10s",
             "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
     if channels:
@@ -1780,7 +1820,9 @@ def anc_grain(uuid):
     refused = _flow_id_error(uuid)
     if refused:
         return refused
-    return _anc_preview(f"/grain?flow={uuid}")
+    domain, flow_id = _split_ref(uuid)
+    query = f"/grain?flow={flow_id}"
+    return _anc_preview(query + (f"&domain={domain}" if domain else ""))
 
 
 def preview_del(uuid, owner="overlay"):

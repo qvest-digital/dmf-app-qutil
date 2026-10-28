@@ -1,4 +1,5 @@
 {{- if .Values.mediamtx.enabled }}
+{{- if and .Values.preview.domains (hasKey (.Values.mediamtx.parameters | default dict) "mxl") }}{{ fail "preview.domains sets the claim's mxl parameter; drop mxl from mediamtx.parameters" }}{{- end }}
 {{- /* The media server the multiviewer plays from. Booked rather than
        deployed: it is a catalog media function, and its image, MXL runtime
        volume and WebRTC UDP service all come from the class.
@@ -33,6 +34,13 @@ spec:
     hlsCDNSecret:
       secretName: {{ .Values.mediamtx.cdn.secretName }}
       key: {{ .Values.mediamtx.cdn.key }}
+    {{- end }}
+    {{- with .Values.preview.domains }}
+    # The domains whose flows preview, mounted beside the primary one.
+    mxl:
+      csi:
+        extraDomains:
+          {{- toYaml . | nindent 10 }}
     {{- end }}
     {{- with .Values.mediamtx.parameters }}
     {{- toYaml . | nindent 4 }}

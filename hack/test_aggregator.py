@@ -206,6 +206,16 @@ class PreviewAddGuards(unittest.TestCase):
             self.assertIn("MXL domain studio-x", res["error"], call.__name__)
         self.assertEqual(self.mtx.calls, [])
 
+    def test_refuses_another_domain_nothing_mounts_even_if_one_other_is(self):
+        """Only the domains the media server mounts preview; the rest still
+        refuse by name."""
+        name = "studio-y.5fd00000-0000-4000-8000-0000000000d1"
+        with mock.patch.object(agg, "PREVIEW_DOMAINS", frozenset({"studio-x"})):
+            code, res = agg.preview_add(name)
+        self.assertEqual(code, 422)
+        self.assertIn("MXL domain studio-y", res["error"])
+        self.assertEqual(self.mtx.calls, [])
+
     def test_rejects_a_flow_the_operator_does_not_know(self):
         with mock.patch.object(agg, "_known_flow", lambda u: None):
             code, _ = agg.preview_add("b2000000-0000-4000-8000-000000000001")
@@ -220,6 +230,76 @@ class PreviewAddGuards(unittest.TestCase):
             code, _ = agg.preview_add("b2000000-0000-4000-8000-000000000001")
         self.assertEqual(code, 415)
         self.assertIsNone(self.mtx.added())
+
+
+class PreviewInAnotherDomain(unittest.TestCase):
+    """A flow in an MxlDomain the media server and the ANC reader mount is read
+    from the directory that domain is mounted at, under its own name."""
+
+    VIDEO = "studio-x.5fd00000-0000-4000-8000-0000000000d1"
+    AUDIO = "studio-x.5fd00000-0000-4000-8000-0000000000d2"
+    DATA = "studio-x.5fd00000-0000-4000-8000-0000000000d3"
+
+    def setUp(self):
+        self.mtx = MtxRecorder()
+        flows = {self.VIDEO: video_flow(self.VIDEO), self.AUDIO: audio_flow(self.AUDIO),
+                 self.DATA: {"metadata": {"name": self.DATA}, "spec": {"definition": {
+                     "format": "urn:x-nmos:format:data", "media_type": "video/smpte291"}}}}
+        for p in (mock.patch.object(agg, "_mtx", self.mtx),
+                  mock.patch.object(agg, "PREVIEW_DOMAINS", frozenset({"studio-x"})),
+                  mock.patch.object(agg, "MXL_DOMAINS_DIR", "/run/mxl/domains"),
+                  mock.patch.object(agg, "_known_flow", flows.get)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_video_reads_the_mounted_domain(self):
+        code, res = agg.preview_add(self.VIDEO)
+        self.assertEqual(code, 200, res)
+        self.assertEqual(res["path"], "preview-" + self.VIDEO)
+        self.assertEqual(self.mtx.added()["source"],
+                         "mxl:///run/mxl/domains/studio-x/5fd00000-0000-4000-8000-0000000000d1")
+
+    def test_audio_reads_the_mounted_domain(self):
+        code, res = agg.preview_add(self.AUDIO, channels="1,2")
+        self.assertEqual(code, 200, res)
+        self.assertEqual(self.mtx.added()["source"],
+                         "mxl:///run/mxl/domains/studio-x/5fd00000-0000-4000-8000-0000000000d2")
+
+    def test_joined_names_the_audio_by_its_id_in_the_same_domain(self):
+        code, res = agg.preview_add(self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(code, 200, res)
+        self.assertEqual(res["path"], "preview-" + self.VIDEO + "-5fd00000-0000-4000-8000-0000000000d2")
+        self.assertEqual(self.mtx.added()["source"],
+                         "mxl:///run/mxl/domains/studio-x/5fd00000-0000-4000-8000-0000000000d1"
+                         "?audio=5fd00000-0000-4000-8000-0000000000d2")
+        # A later picture-only request finds the joined path and is told which
+        # audio flow it carries, by the name the inventory lists it under.
+        self.mtx.existing.add(res["path"])
+        code, again = agg.preview_add(self.VIDEO)
+        self.assertEqual((code, again["path"], again["audio"]), (200, res["path"], self.AUDIO))
+
+    def test_joined_refuses_flows_in_two_domains(self):
+        code, res = agg.preview_add(self.VIDEO, audio="5fd00000-0000-4000-8000-0000000000d2")
+        self.assertEqual(code, 400)
+        self.assertIn("one MXL domain", res["error"])
+        self.assertIsNone(self.mtx.added())
+
+    def test_anc_names_the_domain_to_the_reader(self):
+        seen = []
+        with mock.patch.object(agg, "_anc_preview", lambda q: seen.append(q) or (200, {})):
+            agg.anc_grain(self.DATA)
+        self.assertEqual(seen, ["/grain?flow=5fd00000-0000-4000-8000-0000000000d3&domain=studio-x"])
+
+    def test_the_primary_domain_is_read_as_before(self):
+        primary = "5fd00000-0000-4000-8000-0000000000e1"
+        with mock.patch.object(agg, "_known_flow", lambda u: video_flow(u)):
+            code, _ = agg.preview_add(primary)
+        self.assertEqual(code, 200)
+        self.assertEqual(self.mtx.added()["source"], "mxl:///run/mxl/domain/" + primary)
+        seen = []
+        with mock.patch.object(agg, "_anc_preview", lambda q: seen.append(q) or (200, {})):
+            agg.anc_grain(primary)
+        self.assertEqual(seen, ["/grain?flow=" + primary])
 
 
 class PathList:
@@ -1263,6 +1343,12 @@ class RedundancySets(unittest.TestCase):
         rows = {f["id"]: f for f in agg.operator_flows()["flows"]}
         self.assertIsNone(rows[self.B1]["domain"])
         self.assertEqual(rows["studio-x." + self.A1]["domain"], "studio-x")
+        self.assertTrue(rows[self.B1]["domainPreview"])
+        self.assertFalse(rows["studio-x." + self.A1]["domainPreview"])
+        with mock.patch.object(agg, "PREVIEW_DOMAINS", frozenset({"studio-x"})):
+            rows = {f["id"]: f for f in agg.operator_flows()["flows"]}
+        self.assertTrue(rows["studio-x." + self.A1]["domainPreview"],
+                        "a flow in a domain the media server mounts previews")
 
     def test_carries_the_generation_each_condition_was_written_for(self):
         """A condition older than the spec says nothing about it; the page shows
