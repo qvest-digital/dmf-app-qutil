@@ -1,4 +1,5 @@
 {{- if .Values.ancReader.enabled }}
+{{- if and .Values.preview.domains (hasKey (.Values.ancReader.parameters | default dict) "mxl") }}{{ fail "preview.domains sets the claim's mxl parameter; drop mxl from ancReader.parameters" }}{{- end }}
 {{- /* The reader behind the data previews. Ancillary data has no transport to a
        browser, so a card showing a `video/smpte291` flow is handed the decoded
        packets instead; this is what decodes them.
@@ -7,12 +8,13 @@
        the MXL runtime volume, the intent shim and the node tolerations belong
        to the MediaFunctionClass and are deliberately absent from the claim.
 
-       No parameters, and that is the whole point. The reader takes the flow per
-       request over its API rather than being bound to one at provision time, so
-       one booking serves every data flow the multiviewer lists. A parameter
-       naming a flow would put this back to one booking per flow, and a claim's
-       parameters are consumed at provision time anyway, so editing one would
-       not reach a bound claim. */ -}}
+       No flow among the parameters, and that is the whole point. The reader
+       takes the flow per request over its API rather than being bound to one at
+       provision time, so one booking serves every data flow the multiviewer
+       lists. A parameter naming a flow would put this back to one booking per
+       flow, and a claim's parameters are consumed at provision time anyway, so
+       editing one would not reach a bound claim. The domains it mounts are
+       parameters, because a mount is fixed at provision time. */ -}}
 apiVersion: dmf.qvest-digital.com/v1alpha1
 kind: MediaFunctionClaim
 metadata:
@@ -26,8 +28,16 @@ spec:
     reprovisionOnDrift: {{ .Values.booking.reprovisionOnDrift }}
   booking:
     jobRef: {{ .Values.booking.jobRef | quote }}
-  {{- with .Values.ancReader.parameters }}
+  {{- if or .Values.ancReader.parameters .Values.preview.domains }}
   parameters:
+    {{- with .Values.preview.domains }}
+    mxl:
+      csi:
+        extraDomains:
+          {{- toYaml . | nindent 10 }}
+    {{- end }}
+    {{- with .Values.ancReader.parameters }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 {{- end }}

@@ -17,6 +17,11 @@ const FABRIC_LABELS: Record<string, string> = {
   shm: 'SHM',
 };
 
+/** The flow's MXL domain when the media server does not mount it, else null. */
+export function unmountedDomain(flow: OperatorFlow): string | null {
+  return flow.domain && !flow.domainPreview ? flow.domain : null;
+}
+
 @Component({
   selector: 'mv-operator-flow-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -136,14 +141,14 @@ export class OperatorFlowRow {
    */
   protected readonly previewable = computed(
     () =>
-      !this.flow().domain &&
+      !unmountedDomain(this.flow()) &&
       (this.format() === 'video' || this.format() === 'audio' || this.format() === 'data'),
   );
 
-  /** Why the button is disabled: the media server reads only the primary
-   *  domain, so a flow in any other has no route whatever its format. */
+  /** Why the button is disabled: a flow in a domain the media server does
+   *  not mount has no route whatever its format. */
   protected readonly noPreviewReason = computed(() => {
-    const domain = this.flow().domain;
+    const domain = unmountedDomain(this.flow());
     if (domain) return `No preview route for a flow in MXL domain ${domain}`;
     return 'No preview route for a ' + (this.format() || 'flow of unknown format') + ' flow';
   });

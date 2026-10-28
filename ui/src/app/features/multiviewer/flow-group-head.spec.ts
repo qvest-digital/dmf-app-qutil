@@ -113,4 +113,23 @@ describe('FlowGroupHead', () => {
     expect(button().title).toBe('studio-x is in MXL domain studio-x, which does not preview');
     expect(controller.requests()).toEqual([]);
   });
+
+  it('opens a pair in a domain the media server mounts', () => {
+    const video = { ...VIDEO, id: 'studio-x.' + VIDEO.id, domain: 'studio-x', domainPreview: true };
+    const audio = { ...AUDIO, id: 'studio-x.' + AUDIO.id, domain: 'studio-x', domainPreview: true };
+    mount({ name: 'studio-x', video, audio });
+    button().click();
+
+    expect(controller.requests().map((r) => [r.id, r.audioId])).toEqual([[video.id, audio.id]]);
+  });
+
+  it('disables the preview for a pair split across two domains', () => {
+    // One media server source reads both flows, from one domain.
+    const video = { ...VIDEO, id: 'studio-x.' + VIDEO.id, domain: 'studio-x', domainPreview: true };
+    mount({ name: 'split', video, audio: AUDIO });
+    button().click();
+
+    expect(button().disabled).toBe(true);
+    expect(controller.requests()).toEqual([]);
+  });
 });

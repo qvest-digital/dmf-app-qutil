@@ -181,9 +181,12 @@ export interface OperatorFlow {
   /** The MxlFlow name: the bare id in the primary domain, `<domain>.<id>`
    *  in any other. */
   id: string;
-  /** MxlDomain of the flow; null is the primary domain, the only one the
-   *  media server reads. */
+  /** MxlDomain of the flow; null is the primary domain. */
   domain?: string | null;
+  /** Whether the media server mounts the flow's domain, which it always does
+   *  for the primary one. A flow in a domain it does not mount has no preview
+   *  route, whatever its format. */
+  domainPreview?: boolean | null;
   label: string;
   description?: string | null;
   /** 'video' | 'audio' | 'data' | … — the NMOS format URN's last segment. */

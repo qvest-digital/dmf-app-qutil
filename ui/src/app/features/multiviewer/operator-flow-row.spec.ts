@@ -114,6 +114,15 @@ describe('OperatorFlowRow preview button', () => {
     const disabled: HTMLButtonElement = fixture.nativeElement.querySelector('button[disabled]');
     expect(disabled.title).toBe('No preview route for a flow in MXL domain studio-x');
   });
+
+  it('previews a flow in a domain the media server mounts, by its domain-qualified id', () => {
+    const id = 'studio-x.' + VIDEO.id;
+    mount({ ...VIDEO, id, domain: 'studio-x', domainPreview: true });
+
+    previewButton()!.click();
+
+    expect(controller.requests().map((r) => r.id)).toEqual([id]);
+  });
 });
 
 /**

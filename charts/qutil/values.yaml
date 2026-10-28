@@ -310,6 +310,14 @@ bookings:
   # whatever the class reserves, which is RAM on a node.
   maxCount: 8
 
+# MxlDomains besides the primary one whose flows preview. Each is mounted into
+# the media server and the ANC reader through the catalog's
+# mxl.csi.extraDomains, which needs the catalog's mxl.csi.enabled, at
+# /run/mxl/domains/<name>. A flow in a domain not listed has no preview route
+# and its button says so.
+preview:
+  domains: []
+
 ancReader:
   enabled: false
   claimName: anc-reader
