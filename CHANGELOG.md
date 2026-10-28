@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.58](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.57...v1.0.0-rc.58) (2026-10-28)
+
+
+### Features
+
+* **ui:** preview flows in MXL domains the media server mounts ([#226](https://github.com/qvest-digital/dmf-app-qutil/issues/226)) ([e557e07](https://github.com/qvest-digital/dmf-app-qutil/commit/e557e072079d63816e2da419860118934f80ae3f))
+
+
+### Bug Fixes
+
+* **ui:** say a flow outside the primary domain does not preview ([#224](https://github.com/qvest-digital/dmf-app-qutil/issues/224)) ([feb4df8](https://github.com/qvest-digital/dmf-app-qutil/commit/feb4df8516386ad88b50852ec4c308e963f67ce1))
+
 ## [1.0.0-rc.57](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.56...v1.0.0-rc.57) (2026-10-25)
 
 
