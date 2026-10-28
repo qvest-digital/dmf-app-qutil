@@ -104,6 +104,16 @@ describe('OperatorFlowRow preview button', () => {
     expect(previewButton()).toBeNull();
     expect(controller.requests()).toHaveLength(0);
   });
+
+  it('offers no preview for a flow outside the primary domain, and says why', () => {
+    // The media server reads only the primary domain; the aggregator refused
+    // such a flow as a "bad flow id", which read as a fault.
+    mount({ ...VIDEO, id: 'studio-x.' + VIDEO.id, domain: 'studio-x' });
+
+    expect(previewButton()).toBeNull();
+    const disabled: HTMLButtonElement = fixture.nativeElement.querySelector('button[disabled]');
+    expect(disabled.title).toBe('No preview route for a flow in MXL domain studio-x');
+  });
 });
 
 /**

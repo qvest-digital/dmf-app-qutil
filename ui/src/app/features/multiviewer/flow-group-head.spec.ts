@@ -100,4 +100,17 @@ describe('FlowGroupHead', () => {
     expect(button().disabled).toBe(true);
     expect(controller.requests()).toEqual([]);
   });
+
+  it('disables the preview for a pair outside the primary domain', () => {
+    mount({
+      name: 'studio-x',
+      video: { ...VIDEO, id: 'studio-x.' + VIDEO.id, domain: 'studio-x' },
+      audio: { ...AUDIO, id: 'studio-x.' + AUDIO.id, domain: 'studio-x' },
+    });
+    button().click();
+
+    expect(button().disabled).toBe(true);
+    expect(button().title).toBe('studio-x is in MXL domain studio-x, which does not preview');
+    expect(controller.requests()).toEqual([]);
+  });
 });

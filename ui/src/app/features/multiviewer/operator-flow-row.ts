@@ -58,14 +58,7 @@ const FABRIC_LABELS: Record<string, string> = {
           @if (previewable()) {
             <button class="btn of-prev" type="button" (click)="preview()">Preview</button>
           } @else {
-            <button
-              class="btn"
-              type="button"
-              disabled
-              [title]="'No preview route for a ' + (format() || 'flow of unknown format') + ' flow'"
-            >
-              Preview
-            </button>
+            <button class="btn" type="button" disabled [title]="noPreviewReason()">Preview</button>
           }
         </span>
       </div>
@@ -142,8 +135,18 @@ export class OperatorFlowRow {
    * browser at all.
    */
   protected readonly previewable = computed(
-    () => this.format() === 'video' || this.format() === 'audio' || this.format() === 'data',
+    () =>
+      !this.flow().domain &&
+      (this.format() === 'video' || this.format() === 'audio' || this.format() === 'data'),
   );
+
+  /** Why the button is disabled: the media server reads only the primary
+   *  domain, so a flow in any other has no route whatever its format. */
+  protected readonly noPreviewReason = computed(() => {
+    const domain = this.flow().domain;
+    if (domain) return `No preview route for a flow in MXL domain ${domain}`;
+    return 'No preview route for a ' + (this.format() || 'flow of unknown format') + ' flow';
+  });
 
   protected readonly media = computed(() => {
     const f = this.flow();
