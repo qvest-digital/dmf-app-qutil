@@ -193,6 +193,19 @@ class PreviewAddGuards(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(self.mtx.calls, [])
 
+    def test_refuses_a_flow_in_another_domain_by_naming_the_domain(self):
+        """An MxlFlow outside the primary domain is named <domain>.<id>, and
+        the inventory lists it by that name. The media server reads only the
+        primary domain, so the refusal says that rather than "bad flow id",
+        which read as a parsing fault in the page."""
+        name = "studio-x.5fd00000-0000-4000-8000-0000000000d1"
+        for call in (agg.preview_add, agg.preview_status, agg.anc_grain,
+                     agg.preview_del):
+            code, res = call(name)
+            self.assertEqual(code, 422, call.__name__)
+            self.assertIn("MXL domain studio-x", res["error"], call.__name__)
+        self.assertEqual(self.mtx.calls, [])
+
     def test_rejects_a_flow_the_operator_does_not_know(self):
         with mock.patch.object(agg, "_known_flow", lambda u: None):
             code, _ = agg.preview_add("b2000000-0000-4000-8000-000000000001")
@@ -1241,6 +1254,15 @@ class RedundancySets(unittest.TestCase):
                          ("True", "False"))
         self.assertEqual(row["membersReady"]["message"], f"member {self.A1} has no MxlFlow")
         self.assertEqual(row["output"]["id"], self.C1)
+
+    def test_marks_a_flow_outside_the_primary_domain(self):
+        """The page cannot preview such a flow and has to know which it is."""
+        other = video_flow("studio-x." + self.A1, 50)
+        other["spec"]["domain"] = "studio-x"
+        self.flows.append(other)
+        rows = {f["id"]: f for f in agg.operator_flows()["flows"]}
+        self.assertIsNone(rows[self.B1]["domain"])
+        self.assertEqual(rows["studio-x." + self.A1]["domain"], "studio-x")
 
     def test_carries_the_generation_each_condition_was_written_for(self):
         """A condition older than the spec says nothing about it; the page shows

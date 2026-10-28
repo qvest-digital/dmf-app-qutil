@@ -32,15 +32,24 @@ export class FlowGroupHead {
 
   private readonly preview$ = inject(PreviewController);
 
-  /** Picture and sound both, or nothing to combine. */
+  /** Picture and sound both, in the domain the media server reads, or
+   *  nothing to combine. */
   protected readonly pair = computed(() => {
     const { video, audio } = this.group();
-    return video && audio ? { video, audio } : null;
+    return video && audio && !this.domain() ? { video, audio } : null;
+  });
+
+  /** The MXL domain a member is in, when it is not the primary one. */
+  private readonly domain = computed(() => {
+    const { video, audio } = this.group();
+    return video?.domain || audio?.domain || null;
   });
 
   protected readonly title = computed(() => {
     const pair = this.pair();
     if (pair) return `${pair.video.label} with ${pair.audio.label}`;
+    const domain = this.domain();
+    if (domain) return `${this.group().name} is in MXL domain ${domain}, which does not preview`;
     return `${this.group().name} published no video and audio pair`;
   });
 

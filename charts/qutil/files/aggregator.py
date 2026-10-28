@@ -844,6 +844,10 @@ def operator_flows():
 
         row = {
             "id": uuid,
+            # Outside the primary domain the name is <domain>.<id>, and the
+            # media server, which reads only the primary domain, cannot
+            # preview the flow.
+            "domain": fl.get("spec", {}).get("domain") or None,
             "label": d.get("label") or uuid,
             "description": d.get("description"),
             **_definition_summary(d),
@@ -1061,6 +1065,22 @@ _CLAIMS_API = "/apis/dmf.qvest-digital.com/v1alpha1"
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _flow_id_error(ref):
+    """The refusal for a preview route's flow reference, or None when it is a
+    bare id. An MxlFlow outside the primary domain is named <domain>.<id>;
+    the media server and the ANC reader read only the primary domain, so such
+    a flow is refused by saying so rather than as a malformed id."""
+    if _UUID_RE.match(ref or ""):
+        return None
+    domain, _, flow_id = (ref or "").partition(".")
+    if domain and _UUID_RE.match(flow_id):
+        return 422, {"error": f"flow {flow_id} is in MXL domain {domain}; "
+                              "only flows in the primary domain preview"}
+    return 400, {"error": "bad flow id"}
+
+
 # Which channel pair an audio preview should publish, 1-based, as the
 # audio-preview control API takes it. Validated rather than forwarded blind:
 # the value ends up in a query string built by hand.
@@ -1534,8 +1554,9 @@ def _preview_paths_for(flow_id):
 
 
 def preview_add(uuid, owner="overlay", channels="", audio=""):
-    if not _UUID_RE.match(uuid or ""):
-        return 400, {"error": "bad flow id"}
+    refused = _flow_id_error(uuid)
+    if refused:
+        return refused
     if channels and not _CHANNELS_RE.match(channels):
         return 400, {"error": "channels must be one or two 1-based numbers"}
     fl = _known_flow(uuid)
@@ -1722,8 +1743,9 @@ def preview_status(uuid):
     path: each pair asked for lives under its own preview-<uuid>-p<a>-<b>
     name instead, so this answers 404 for one.
     """
-    if not _UUID_RE.match(uuid or ""):
-        return 400, {"error": "bad flow id"}
+    refused = _flow_id_error(uuid)
+    if refused:
+        return refused
 
     name = _PREVIEW_PREFIX + uuid
     code, res = _mtx(f"/v3/paths/get/{name}")
@@ -1755,8 +1777,9 @@ def anc_grain(uuid):
     Proxied rather than parsed here: reading a grain needs libmxl and the node's
     domain, which is a media function's job and not this aggregator's.
     """
-    if not _UUID_RE.match(uuid or ""):
-        return 400, {"error": "bad flow id"}
+    refused = _flow_id_error(uuid)
+    if refused:
+        return refused
     return _anc_preview(f"/grain?flow={uuid}")
 
 
@@ -1772,8 +1795,9 @@ def preview_del(uuid, owner="overlay"):
     `owner` is kept so the route's contract does not change. It no longer
     identifies anything, because holders are no longer counted.
     """
-    if not _UUID_RE.match(uuid or ""):
-        return 400, {"error": "bad flow id"}
+    refused = _flow_id_error(uuid)
+    if refused:
+        return refused
     return 200, {"released": uuid}
 
 
