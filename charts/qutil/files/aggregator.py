@@ -1466,6 +1466,65 @@ SOURCE_START_TIMEOUT = "60s"
 # The frame rate a preview is encoded at, at most (mediamtx mxlH264MaxRate).
 PREVIEW_MAX_RATE = 25
 
+# The regexp paths a media server carries its own preview names under,
+# video/<flow>[/<audio-flow>]: read from MXL where it encodes them itself,
+# proxied where encoders of its own do. As the mediamtx chart renders them.
+_PREVIEW_NAME_PATHS = ("~^video/", "~^((?:domains/[^/]+/)?video/")
+
+
+def _encoded_preview_base():
+    """rtsp://127.0.0.1:<port> when the media server carries its own preview
+    names, None when it does not.
+
+    A server that carries them decides where the encode runs: on itself, or
+    on encoders it proxies to, which is what lets previews scale beyond one
+    server. A preview path pointed there reads it over RTSP from the server
+    itself, so the encode settings are the server's and not this app's. One
+    that does not carry them is read from MXL directly, as before.
+    """
+    code, res = _mtx("/v3/config/paths/list?itemsPerPage=10000")
+    if code != 200:
+        return None
+    if not any((item.get("name") or "").startswith(_PREVIEW_NAME_PATHS)
+               for item in (res.get("items") or [])):
+        return None
+    code, res = _mtx("/v3/config/global/get")
+    port = (res.get("rtspAddress") or "").rpartition(":")[2] if code == 200 else ""
+    return f"rtsp://127.0.0.1:{port}" if port.isdigit() else None
+
+
+def _video_source(ref, audio_id=""):
+    """The source half of a video preview path's configuration.
+
+    Both flows are read through one source, so they share ref's domain.
+    """
+    base = _encoded_preview_base()
+    if base:
+        domain, flow_id = _split_ref(ref)
+        name = (f"domains/{domain}/" if domain else "") + f"video/{flow_id}"
+        if audio_id:
+            name += f"/{audio_id}"
+        return {"source": f"{base}/{name}", "rtspTransport": "tcp"}
+    # No IDR period: the media server derives one from the rate the flow
+    # declares. A frame count stated here is right for one rate and wrong
+    # for every other, and a GOP the length of hlsSegmentDuration lands on
+    # the HLS muxer's own cut comparison, which is what makes segment
+    # durations alternate between one and two of them.
+    # superfast rather than veryfast: at 1080p59.94 and this bitrate it
+    # costs 30% less CPU for the same emitted rate and the same average
+    # QP, which is the difference between four and six cards open on one
+    # server before the encoders start competing. Not ultrafast, which
+    # turns CABAC and the deblocking filter off: the stream comes out
+    # Constrained Baseline whatever mxlH264Profile asks for, and the
+    # average QP goes from 28 to 37 at the same bitrate.
+    # 25 fps whatever the flow's rate: previews share one media server,
+    # and at the 50 fps house format their encodes filled its node and
+    # made every preview drop frames. The flow keeps its own rate.
+    source = _mxl_source(ref) + (f"?audio={audio_id}" if audio_id else "")
+    return {"source": source,
+            "mxlH264Preset": "superfast", "mxlH264Profile": "high",
+            "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
+
 REAP_GRACE = 30.0
 REAP_INTERVAL = 10.0
 
@@ -1647,32 +1706,15 @@ def preview_add(uuid, owner="overlay", channels="", audio=""):
     # Idempotent: reuse the path if the card was opened before.
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
-        # No IDR period: the media server derives one from the rate the flow
-        # declares. A frame count stated here is right for one rate and wrong
-        # for every other, and a GOP the length of hlsSegmentDuration lands on
-        # the HLS muxer's own cut comparison, which is what makes segment
-        # durations alternate between one and two of them.
         # On demand: the reader is what the encode is for, so a path with
         # nobody on it should not be running ffmpeg. Measured live, four of
         # seven preview paths were encoding for zero readers at about 1.4
         # cores each. It also removes the wait the card used to guess at, as
         # mediamtx holds a reader that arrives before the first frame instead
         # of refusing it.
-        # superfast rather than veryfast: at 1080p59.94 and this bitrate it
-        # costs 30% less CPU for the same emitted rate and the same average
-        # QP, which is the difference between four and six cards open on one
-        # server before the encoders start competing. Not ultrafast, which
-        # turns CABAC and the deblocking filter off: the stream comes out
-        # Constrained Baseline whatever mxlH264Profile asks for, and the
-        # average QP goes from 28 to 37 at the same bitrate.
-        # 25 fps whatever the flow's rate: previews share one media server,
-        # and at the 50 fps house format their encodes filled its node and
-        # made every preview drop frames. The flow keeps its own rate.
-        conf = {"source": _mxl_source(uuid), "sourceOnDemand": True,
+        conf = {**_video_source(uuid), "sourceOnDemand": True,
                 "sourceOnDemandCloseAfter": "10s",
-                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
-                "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
@@ -1720,11 +1762,9 @@ def preview_add_joined(video_uuid, video_fmt, audio_uuid):
     name = f"{_PREVIEW_PREFIX}{video_uuid}-{audio_id}"
     code, _ = _mtx(f"/v3/config/paths/get/{name}")
     if code != 200:
-        conf = {"source": f"{_mxl_source(video_uuid)}?audio={audio_id}",
+        conf = {**_video_source(video_uuid, audio_id),
                 "sourceOnDemand": True, "sourceOnDemandCloseAfter": "10s",
-                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT,
-                "mxlH264Preset": "superfast", "mxlH264Profile": "high",
-                "mxlH264Bitrate": 5000000, "mxlH264MaxRate": PREVIEW_MAX_RATE}
+                "sourceOnDemandStartTimeout": SOURCE_START_TIMEOUT}
         code, res = _mtx(f"/v3/config/paths/add/{name}", "POST", conf)
         if code != 200:
             return code, {"error": res.get("error") or "mediamtx add failed"}
