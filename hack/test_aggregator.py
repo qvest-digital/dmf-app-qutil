@@ -178,6 +178,104 @@ class PreviewPathConfig(unittest.TestCase):
         self.assertEqual(res["path"], "preview-" + self.uuid)
 
 
+class EncodingServer(MtxRecorder):
+    """A media server carrying its own preview names, as the mediamtx chart
+    renders them: read from MXL where it encodes itself, proxied to its
+    encoders where it does not."""
+
+    UNSPLIT = ("~^video/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}"
+               "-[0-9a-f]{12})$")
+    SPLIT = "~^((?:domains/[^/]+/)?video/.+)$"
+
+    def __init__(self, regexp=UNSPLIT, rtsp=":8554"):
+        super().__init__()
+        self.regexp = regexp
+        self.rtsp = rtsp
+
+    def __call__(self, path, method="GET", body=None):
+        if path.startswith("/v3/config/paths/list?"):
+            self.calls.append((path, method, body))
+            return 200, {"items": [{"name": self.regexp}]}
+        if path == "/v3/config/global/get":
+            self.calls.append((path, method, body))
+            return 200, {"rtspAddress": self.rtsp}
+        return super().__call__(path, method, body)
+
+
+class EncodedPreview(unittest.TestCase):
+    """A video preview on a server that decides where its encodes run.
+
+    Pointing the path at the server's own video/ name is what lets those
+    encodes move off the server onto encoders that scale with them. Encoding
+    it here as well would put the encode back on the server, so nothing about
+    the encode may be configured on such a path.
+    """
+
+    VIDEO = "b2000000-0000-4000-8000-000000000001"
+    AUDIO = "aea7b9e9-1e5b-4333-9ac4-8689053a77de"
+
+    def setUp(self):
+        self.flows = {self.VIDEO: video_flow(self.VIDEO),
+                      self.AUDIO: audio_flow(self.AUDIO),
+                      "studio-x." + self.VIDEO: video_flow("studio-x." + self.VIDEO)}
+        for p in (mock.patch.object(agg, "_known_flow", self.flows.get),
+                  mock.patch.object(agg, "PREVIEW_DOMAINS", frozenset({"studio-x"})),
+                  mock.patch.object(agg, "redundancy_sets", lambda: ([], None)),
+                  mock.patch.object(agg, "_idle_since", {})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def add(self, server, *args, **kwargs):
+        with mock.patch.object(agg, "_mtx", server):
+            code, _ = agg.preview_add(*args, **kwargs)
+        self.assertEqual(code, 200)
+        return server.added()
+
+    def test_a_video_preview_reads_the_servers_own_name(self):
+        for regexp in (EncodingServer.UNSPLIT, EncodingServer.SPLIT):
+            with self.subTest(regexp=regexp):
+                conf = self.add(EncodingServer(regexp), self.VIDEO)
+                self.assertEqual(conf["source"],
+                                 f"rtsp://127.0.0.1:8554/video/{self.VIDEO}")
+                self.assertEqual(conf["rtspTransport"], "tcp")
+                self.assertFalse([k for k in conf if k.startswith("mxl")])
+
+    def test_it_stays_on_demand_and_waits_for_a_mirror(self):
+        conf = self.add(EncodingServer(), self.VIDEO)
+        self.assertIs(conf["sourceOnDemand"], True)
+        self.assertEqual(conf["sourceOnDemandStartTimeout"], agg.SOURCE_START_TIMEOUT)
+
+    def test_a_joined_preview_names_both_flows(self):
+        conf = self.add(EncodingServer(), self.VIDEO, audio=self.AUDIO)
+        self.assertEqual(conf["source"],
+                         f"rtsp://127.0.0.1:8554/video/{self.VIDEO}/{self.AUDIO}")
+
+    def test_a_flow_in_another_domain_names_its_domain(self):
+        conf = self.add(EncodingServer(EncodingServer.SPLIT), "studio-x." + self.VIDEO)
+        self.assertEqual(
+            conf["source"],
+            f"rtsp://127.0.0.1:8554/domains/studio-x/video/{self.VIDEO}")
+
+    def test_the_port_is_the_servers_own(self):
+        conf = self.add(EncodingServer(rtsp="0.0.0.0:9554"), self.VIDEO)
+        self.assertTrue(conf["source"].startswith("rtsp://127.0.0.1:9554/"))
+
+    def test_audio_alone_is_still_read_from_mxl(self):
+        """The server's names carry video. An audio preview costs a percent of
+        a core and picks its channel pair per path, so it stays a direct read."""
+        conf = self.add(EncodingServer(), self.AUDIO)
+        self.assertEqual(conf["source"], f"mxl://{agg.MXL_DOMAIN}/{self.AUDIO}")
+
+    def test_a_server_without_the_names_encodes_as_before(self):
+        conf = self.add(EncodingServer(regexp="~^(.+)$"), self.VIDEO)
+        self.assertEqual(conf["source"], f"mxl://{agg.MXL_DOMAIN}/{self.VIDEO}")
+        self.assertEqual(conf["mxlH264MaxRate"], agg.PREVIEW_MAX_RATE)
+
+    def test_an_unreadable_port_falls_back_rather_than_guessing(self):
+        conf = self.add(EncodingServer(rtsp=""), self.VIDEO)
+        self.assertTrue(conf["source"].startswith("mxl://"))
+
+
 class PreviewAddGuards(unittest.TestCase):
     """Refusals that happen before anything is provisioned."""
 
