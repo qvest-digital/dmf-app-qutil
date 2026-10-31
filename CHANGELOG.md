@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-rc.59](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.58...v1.0.0-rc.59) (2026-10-31)
+
+
+### Features
+
+* **preview:** let the media server decide where a preview is encoded ([#228](https://github.com/qvest-digital/dmf-app-qutil/issues/228)) ([2824bbd](https://github.com/qvest-digital/dmf-app-qutil/commit/2824bbd23824812747f373cfc03959e93a4e559b))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump hono from 4.13.7 to 4.13.13 in /ui ([#217](https://github.com/qvest-digital/dmf-app-qutil/issues/217)) ([44eebde](https://github.com/qvest-digital/dmf-app-qutil/commit/44eebdef9a8e6958e5b98fdfa376eccc6ee66793))
+* **deps-dev:** bump proxy-addr from 2.0.7 to 2.0.8 in /ui ([#199](https://github.com/qvest-digital/dmf-app-qutil/issues/199)) ([2935c5d](https://github.com/qvest-digital/dmf-app-qutil/commit/2935c5ddf3d271508aa851351d0331027e439043))
+* **deps:** bump source-map-js from 1.2.1 to 1.2.2 in /ui ([#200](https://github.com/qvest-digital/dmf-app-qutil/issues/200)) ([6401fb2](https://github.com/qvest-digital/dmf-app-qutil/commit/6401fb2ce6a1ea66c5b02d17ff28ce0d0da5b42f))
+
 ## [1.0.0-rc.58](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.57...v1.0.0-rc.58) (2026-10-28)
 
 
