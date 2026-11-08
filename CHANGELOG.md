@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.60](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.59...v1.0.0-rc.60) (2026-11-08)
+
+
+### Features
+
+* **chart:** render ExternalSecrets at the external-secrets.io/v1 API ([#232](https://github.com/qvest-digital/dmf-app-qutil/issues/232)) ([3b4978e](https://github.com/qvest-digital/dmf-app-qutil/commit/3b4978e0ad0085ebf91f324a797cfc7d3c3c528f))
+
 ## [1.0.0-rc.59](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.58...v1.0.0-rc.59) (2026-10-31)
 
 
