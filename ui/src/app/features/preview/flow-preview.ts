@@ -87,11 +87,19 @@ const WHEP_STABLE_MS = 60000;
   selector: 'mv-flow-preview',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [VideoShell, AudioMeters, AncGrainView],
+  host: { '(document:keydown.escape)': 'leaveFull()' },
   template: `
-    <div class="pv-card">
+    <div class="pv-card" [class.full]="full()">
       <div class="pv-head">
         <span>{{ title() }}</span>
-        <button class="btn" type="button" (click)="close()">✕</button>
+        <span class="pv-actions">
+          @if (!isAudio() && !isData()) {
+            <button class="btn pv-full" type="button" (click)="full.set(!full())">
+              {{ full() ? 'Exit full window' : 'Full window' }}
+            </button>
+          }
+          <button class="btn pv-close" type="button" (click)="close()">✕</button>
+        </span>
       </div>
       @if (isData()) {
         <mv-anc-grain [grain]="anc()" />
@@ -152,6 +160,12 @@ export class FlowPreview {
   protected readonly measure = signal('');
   protected readonly isAudio = signal(false);
   protected readonly isData = signal(false);
+  /**
+   * The card covers the browser window, unlike the element's own fullscreen,
+   * which takes the whole screen. Only CSS moves: the <video> stays where it
+   * is, because re-parenting it would drop the player and its meters with it.
+   */
+  protected readonly full = signal(false);
   /** The grain the last poll returned, or null before the first one lands. */
   protected readonly anc = signal<AncGrain | null>(null);
   /** Selectable channel pairs, empty for video and for a flow no wider than one pair. */
@@ -210,6 +224,10 @@ export class FlowPreview {
       const visible = this.registry.visible();
       untracked(() => (visible ? this.resume() : this.hide()));
     });
+  }
+
+  protected leaveFull(): void {
+    this.full.set(false);
   }
 
   protected close(): void {
