@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.61](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.60...v1.0.0-rc.61) (2026-11-12)
+
+
+### Bug Fixes
+
+* **chart:** draw the ZUSPIELER 2 fractal as a sierpinski triangle ([#234](https://github.com/qvest-digital/dmf-app-qutil/issues/234)) ([8452af9](https://github.com/qvest-digital/dmf-app-qutil/commit/8452af95054192abda1ef66fec71f1098d22475b))
+
 ## [1.0.0-rc.60](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.59...v1.0.0-rc.60) (2026-11-08)
 
 
