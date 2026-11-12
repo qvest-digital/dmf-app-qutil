@@ -509,6 +509,28 @@ main {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
 }
+.pv-actions {
+  display: flex;
+  gap: 6px;
+}
+/* Fixed rather than moved: the card's ancestors set no transform, filter or
+   contain, so it escapes the scrolling column without its <video> leaving it. */
+.pv-card.full {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pv-card.full .vwrap {
+  flex: 1;
+}
+.pv-card.full .pv-video {
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
 .pv-video {
   width: 100%;
   aspect-ratio: 16/9;

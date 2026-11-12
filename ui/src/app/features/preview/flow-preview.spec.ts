@@ -259,3 +259,70 @@ describe('PreviewController', () => {
     expect(controller.requests().map((r) => r.id)).toEqual(['b']);
   });
 });
+
+/**
+ * The element's own fullscreen takes the whole screen, which hides every other
+ * window the operator is watching beside the browser. Full window covers only
+ * the browser window, and only by restyling the card: the <video> must stay the
+ * one the player is attached to.
+ */
+describe('FlowPreview full window', () => {
+  let fixture: ComponentFixture<FlowPreview>;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [FlowPreview],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    fixture.destroy();
+    http.match(() => true).forEach((req) => req.flush({}));
+    http.verify();
+  });
+
+  function open(format: 'video' | 'audio' | 'data'): void {
+    fixture = TestBed.createComponent(FlowPreview);
+    fixture.componentRef.setInput('request', { id: FLOW, label: 'cam-1', format, channels: 2 });
+    fixture.detectChanges();
+  }
+
+  const card = (): HTMLElement => fixture.nativeElement.querySelector('.pv-card');
+  const toggle = (): HTMLButtonElement | null => fixture.nativeElement.querySelector('.pv-full');
+  const video = (): HTMLVideoElement => fixture.nativeElement.querySelector('video');
+
+  it('fills the window and comes back without replacing the video', () => {
+    open('video');
+    const before = video();
+    toggle()!.click();
+    fixture.detectChanges();
+    expect(card().classList).toContain('full');
+    expect(video()).toBe(before);
+
+    toggle()!.click();
+    fixture.detectChanges();
+    expect(card().classList).not.toContain('full');
+    expect(video()).toBe(before);
+  });
+
+  it('leaves full window on Escape', () => {
+    open('video');
+    toggle()!.click();
+    fixture.detectChanges();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    fixture.detectChanges();
+    expect(card().classList).not.toContain('full');
+  });
+
+  it('offers no full window where there is no picture', () => {
+    open('audio');
+    expect(toggle()).toBeNull();
+    fixture.destroy();
+    http.match(() => true).forEach((req) => req.flush({}));
+    open('data');
+    expect(toggle()).toBeNull();
+  });
+});

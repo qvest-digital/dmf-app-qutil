@@ -88,7 +88,7 @@ describe('MultiviewerPage preview column', () => {
 
   it('keeps the column when the last card is closed', () => {
     open(FLOW);
-    (cards()[0].querySelector('.pv-head .btn') as HTMLButtonElement).click();
+    (cards()[0].querySelector('.pv-close') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     expect(cards()).toHaveLength(0);
