@@ -460,8 +460,8 @@ testSources:
       # feed.
       #
       # mandelbrot cannot do that job here. Its cost is unbounded -- it zooms
-      # from scale 3 to 0.3 with up to 7189 iterations per pixel, and lavfi
-      # source filters are single-threaded, so measured on sc it holds 30fps
+      # from scale 3 to 0.3 with up to 7189 iterations per pixel, and the
+      # filter is single-threaded, so measured it holds 30fps
       # for about three minutes of content and then decays to 0.47x and
       # falling, pinned at one core with five more idle. Bounding it trades one
       # failure for another: capping maxiter alone still decays, because the
@@ -470,38 +470,33 @@ testSources:
       # reaches realtime at all (0.54x), and the filter has no loop or
       # oscillate option to escape between those.
       #
-      # sierpinski animates indefinitely at a constant cost. Measured on sc:
-      # a steady 1.82 cores for the full paced pipeline, freezedetect clean
-      # over 300s of content, and the ingest at late=0 dup=0 resync=0.
-      pattern: "sierpinski=size=1920x1080:rate=50"
-      # This source regenerates every pixel of every frame, where smptebars
-      # repeats a static one, so it costs several times the default envelope
-      # and states its own.
+      # sierpinski scrolls indefinitely. Its triangle type costs one AND per
+      # pixel at any scroll position. The default carpet type loops over the
+      # base-3 digits of each pixel's position: it starts at about twice the
+      # triangle's cost and rises as the scroll wanders from the origin, and
+      # once the source falls behind realtime, -re catch-up keeps it pegged.
+      pattern: "sierpinski=size=1920x1080:rate=50:type=triangle"
+      # Every frame of this source differs from the last, where smptebars
+      # repeats a static one, so x264 costs several times as much and the
+      # source states its own envelope.
       #
-      # Measured on sc at 1296x720 30/1 for the whole paced pipeline --
-      # generation, both drawtext overlays, x264 veryfast and the AES-encrypted
-      # SRT send: a steady 1.82 cores, flat over three and a half minutes.
-      # Measuring the encode alone to /dev/null reads 1.14 and would size this
-      # at close to half what it needs; the SRT and encryption path is the rest.
+      # Measured for the whole paced pipeline -- generation, both drawtext
+      # overlays, x264 veryfast at 8 Mbit/s and the AES-encrypted SRT send --
+      # over 90s at realtime on a faster and a slower node type: the triangle
+      # draws 2.1 and 3.2 cores (5s peaks 3.1 and 3.7), the carpet 6.6 and
+      # 7.2 cores (5s peaks 8.1 and 8.0) at the very start of its scroll.
       #
-      # The limit clears that peak by a wide margin because CFS accounts per
-      # 100ms period and x264 bursts inside one even while the ten-second
-      # average sits under the limit: measured throttling was 6.5% of periods
-      # at a limit of 1, still 4.6% at 3, and effectively none at 4.
-      #
-      # At 1920x1080 50/1 on AWS it draws a steady 3.7 cores and a limit of 4
-      # throttles 4.3% of periods, so both move up by the same margin.
-      #
-      # It has since grown to 5.8 cores on AWS, and a limit of 6 throttled
-      # 10.2% of periods (78s over 2.4h): each throttled period is a stall at
-      # the source, seen on the ingest as late and duplicated grains. The
-      # limit takes the whole of a c5n.2xlarge, which is where it lands.
+      # The limit clears the peak by a wide margin because CFS accounts per
+      # 100ms period and x264 bursts inside one: on the slower node type the
+      # triangle was throttled in 44% of periods at a limit of 4, 1% at 5 and
+      # none at 6. Each throttled period is a stall at the source, seen on the
+      # ingest as late and duplicated grains.
       resources:
         requests:
-          cpu: "4"
+          cpu: 3500m
           memory: 256Mi
         limits:
-          cpu: "8"
+          cpu: "6"
           memory: 512Mi
     - name: srt-test-source-3
       claim: srt-ingest-3
@@ -509,10 +504,10 @@ testSources:
       label: ZUSPIELER 3
       pattern: "smptebars=size=1920x1080:rate=50"
   # Envelope for a source that does not state its own. Sized for a static
-  # pattern: smptebars measured 0.61 cores for the full paced pipeline on sc.
+  # pattern: smptebars measured 0.61 cores for the full paced pipeline.
   #
-  # A new source needs a pattern whose cost is bounded. lavfi generators are
-  # single-threaded, so one core is the ceiling no matter what is granted
+  # A new source needs a pattern whose cost is bounded. Most lavfi generators
+  # are single-threaded, so one core is the ceiling no matter what is granted
   # here, and a pattern that grows more expensive over time cannot be sized
   # for at all -- it just starves its SRT sender later instead of sooner.
   # A generator that cannot hold realtime starves its SRT sender, and the
@@ -535,7 +530,7 @@ rossSource:
   port: 9000
   label: ROSS QUELLE
   # Static, so its cost stays flat: smptebars measured 0.61 cores for the
-  # paced test-source pipeline on sc.
+  # paced test-source pipeline.
   pattern: "smptebars=size=1920x1080:rate=50"
   resources:
     requests:
