@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.62](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.61...v1.0.0-rc.62) (2026-11-12)
+
+
+### Features
+
+* **preview:** play a video card in full window ([#236](https://github.com/qvest-digital/dmf-app-qutil/issues/236)) ([569517f](https://github.com/qvest-digital/dmf-app-qutil/commit/569517fb12cb5fd72ce4667d121b82ef641599b1))
+
 ## [1.0.0-rc.61](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.60...v1.0.0-rc.61) (2026-11-12)
 
 
