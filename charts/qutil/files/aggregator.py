@@ -33,11 +33,15 @@
 #   GET    /api/bookings           -> the claims the booking page created
 #   POST   /api/bookings           -> book any class, parameters as sent
 #   DELETE /api/bookings/<name>    -> release one
+#   GET    /api/noisy              -> the noisy neighbours the page booked
+#   POST   /api/noisy              -> book one noisy neighbour
+#   POST   /api/noisy/pair         -> book a sink and a sender targeting it
+#   DELETE /api/noisy/<name>       -> release one, and the senders of a sink
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
 # mounted SA token + CA. Reads are cluster-wide; the writes it can do -- deleting
-# a writer pod and creating or deleting a generator claim -- are granted in the
+# a writer pod and creating or deleting a page-booked claim -- are granted in the
 # production namespace only. No pip deps so it runs on stock python:3-slim.
 import base64, json, os, re, secrets, ssl, threading, time, urllib.parse, urllib.request, urllib.error
 import uuid as uuid_mod
@@ -2980,6 +2984,598 @@ def generator_delete(name):
                  "error": "readers left behind: " + "; ".join(left) if left else None}
 
 
+# -- Noisy neighbours --------------------------------------------------------
+# Load generators of NOISY_CLASS, booked beside another booking to measure what
+# it suffers. The function serves its own UI and API, and the load is driven
+# there; this only books, lists, links and releases.
+#
+# Off unless the chart says otherwise, as with generators. More so here: the
+# function's API is unauthenticated, and its route hands load control to
+# whoever reaches the gateway host.
+NOISY_ENABLED = os.environ.get("NOISY_ENABLED", "") == "true"
+# From the environment, never from a request, for the reason GEN_CLASS is.
+NOISY_CLASS = os.environ.get("NOISY_CLASS", "noisy-neighbour")
+NOISY_JOB_REF = os.environ.get("NOISY_JOB_REF", "qutil/noisy")
+NOISY_PREFIX = os.environ.get("NOISY_PREFIX", "noisy-")
+NOISY_MAX = int(os.environ.get("NOISY_MAX") or "4")
+# A component of its own, so neither this page's delete nor any other page's
+# can reach the other's claims.
+_NOISY_COMPONENT = "noisy-neighbour"
+# A sender carries the sink it targets: a sender outliving its sink sends to
+# nothing, so releasing the sink releases it.
+_NOISY_LABEL_SINK = "qutil.qvest-digital.com/noisy-sink"
+_NOISY_ROLES = ("aggressor", "sender", "sink")
+_NOISY_OPT_INS = ("rdma-lossless", "multicast", "line-rate")
+# What a catalog chart labels its pods with. The provisioner names the Helm
+# release after the claim, so this label names the claim a pod belongs to.
+_INSTANCE_LABEL = "app.kubernetes.io/instance"
+# Ceilings on what one booking reserves. A request is what the scheduler sets
+# aside on a node, and a booking larger than any node never schedules.
+_NOISY_MAX_CPU_MILLI = 32000
+_NOISY_MAX_MEMORY = 64 << 30
+_NOISY_MAX_STORAGE = 500 << 30
+_NOISY_MAX_DURATION = 7200
+_NOISY_DEFAULT_DURATION = "15m"
+_CPU_RE = re.compile(r"^([0-9]+)m$|^([0-9]+)(\.[0-9]{1,3})?$")
+_MEMORY_RE = re.compile(r"^[0-9]+(Ki|Mi|Gi)$")
+_STORAGE_RE = re.compile(r"^[0-9]+(Mi|Gi)$")
+_DURATION_RE = re.compile(r"^(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?$")
+# The k8s.v1.cni.cncf.io/networks annotation: [namespace/]name[@interface],
+# comma separated.
+_NETWORKS_RE = re.compile(r"^[a-z0-9]([-a-z0-9./@,]*[a-z0-9])?$")
+_RDMA_DEVICE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# How long a pair waits for its sink to publish the address its sender needs.
+_NOISY_PEER_WAIT = 60.0
+_NOISY_PEER_POLL = 2.0
+
+_NOISY_FIELDS = {"role", "label", "ttl", "placement", "resources", "storage", "gpu",
+                 "fabric", "network", "limits", "ingress", "peer"}
+_NOISY_PAIR_FIELDS = {"label", "ttl", "sink", "sender", "fabric", "network", "limits",
+                      "ingress"}
+_NOISY_SIDE_FIELDS = {"placement", "resources"}
+
+
+def _unknown(obj, allowed, where):
+    extra = sorted(set(obj) - set(allowed))
+    if extra:
+        return f"unknown field {extra[0]} in {where}"
+    return None
+
+
+def _cpu_milli(quantity):
+    m = _CPU_RE.match(quantity) if isinstance(quantity, str) else None
+    if not m:
+        return None
+    if m.group(1) is not None:
+        return int(m.group(1))
+    return int(m.group(2)) * 1000 + int(((m.group(3) or ".")[1:] + "000")[:3])
+
+
+def _duration_seconds(text):
+    m = _DURATION_RE.match(text) if isinstance(text, str) else None
+    if not text or not m:
+        return None
+    h, mi, s = (int(g or 0) for g in m.groups())
+    return h * 3600 + mi * 60 + s
+
+
+def _validate_block(req, key, allowed, where=None):
+    """(block, error) for an optional mapping in req. where names it in a
+    message, for a block nested below the top."""
+    where = where or key
+    block = req.get(key)
+    if block is None:
+        return {}, None
+    if not isinstance(block, dict):
+        return None, f"{where} must be a mapping"
+    return block, _unknown(block, allowed, where)
+
+
+def _validate_noisy_side(req):
+    """placement and resources: what differs between a pair's two claims."""
+    placement, bad = _validate_block(req, "placement", {"nodeName", "victim"})
+    if bad:
+        return bad
+    node = placement.get("nodeName") or ""
+    victim = placement.get("victim") or ""
+    if node and victim:
+        return "placement takes a node or a victim, not both"
+    bad = _validate_node(node)
+    if bad:
+        return bad
+    if not isinstance(victim, str) or (victim and (
+            len(victim) > _GEN_MAX_NAME or not _GEN_NAME_RE.match(victim))):
+        return "victim must be the name of a claim"
+
+    resources, bad = _validate_block(req, "resources", {"requests"})
+    if bad:
+        return bad
+    requests, bad = _validate_block(resources, "requests", {"cpu", "memory"},
+                                    "resources.requests")
+    if bad:
+        return bad
+    if "cpu" in requests:
+        milli = _cpu_milli(requests["cpu"])
+        if not milli or milli > _NOISY_MAX_CPU_MILLI:
+            return (f"cpu must be a quantity such as 500m or 2, at most "
+                    f"{_NOISY_MAX_CPU_MILLI // 1000} cores")
+    if "memory" in requests:
+        memory = requests["memory"]
+        if (not isinstance(memory, str) or not _MEMORY_RE.match(memory)
+                or not 0 < _bytes(memory) <= _NOISY_MAX_MEMORY):
+            return (f"memory must be a quantity such as 512Mi or 2Gi, at most "
+                    f"{_NOISY_MAX_MEMORY >> 30}Gi")
+    return None
+
+
+def _validate_noisy_shared(req):
+    """Everything a pair's two claims share."""
+    if not isinstance(req.get("label", ""), str):
+        return "label must be text"
+    ttl = req.get("ttl", "1h")
+    if not isinstance(ttl, str) or ttl not in _GEN_TTLS:
+        return "expiry must be one of " + ", ".join(_GEN_TTLS)
+
+    fabric, bad = _validate_block(req, "fabric", {"enabled", "networks", "hostNetwork"})
+    if bad:
+        return bad
+    for key in ("enabled", "hostNetwork"):
+        if not isinstance(fabric.get(key, False), bool):
+            return f"fabric.{key} must be true or false"
+    networks = fabric.get("networks", "")
+    if not isinstance(networks, str) or (networks and (
+            len(networks) > 253 or not _NETWORKS_RE.match(networks))):
+        return "fabric.networks must be a network attachment such as fabric/roce"
+    if networks and fabric.get("hostNetwork"):
+        return "fabric takes networks or hostNetwork, not both"
+
+    network, bad = _validate_block(req, "network", {"rdmaDevice", "rdmaGidIndex"})
+    if bad:
+        return bad
+    device = network.get("rdmaDevice", "")
+    if not isinstance(device, str) or (device and not _RDMA_DEVICE_RE.match(device)):
+        return "rdmaDevice must be a verbs device name such as mlx5_0"
+    gid = network.get("rdmaGidIndex")
+    if gid is not None and (isinstance(gid, bool) or not isinstance(gid, int)
+                            or not 0 <= gid <= 255):
+        return "rdmaGidIndex must be between 0 and 255"
+
+    limits, bad = _validate_block(req, "limits", {"maxDuration", "optIns"})
+    if bad:
+        return bad
+    seconds = _duration_seconds(limits.get("maxDuration", _NOISY_DEFAULT_DURATION))
+    if not seconds or seconds > _NOISY_MAX_DURATION:
+        return "maxDuration must be a duration such as 15m or 1h30m, at most 2h"
+    opt_ins = limits.get("optIns", [])
+    if (not isinstance(opt_ins, list) or not all(o in _NOISY_OPT_INS for o in opt_ins)
+            or len(set(opt_ins)) != len(opt_ins)):
+        return "optIns must be a subset of " + ", ".join(_NOISY_OPT_INS)
+
+    ingress, bad = _validate_block(req, "ingress", {"httproute"})
+    if bad:
+        return bad
+    route, bad = _validate_block(ingress, "httproute", {"enabled"}, "ingress.httproute")
+    if bad:
+        return bad
+    if not isinstance(route.get("enabled", True), bool):
+        return "ingress.httproute.enabled must be true or false"
+    return None
+
+
+def _validate_noisy(req):
+    """The first thing wrong with a booking of one claim, or None.
+
+    Every message here is mirrored word for word in the UI's
+    noisy-validation.ts. This side is the authority.
+    """
+    if not isinstance(req, dict):
+        return "body must be a JSON object of at most 8 KiB"
+    bad = _unknown(req, _NOISY_FIELDS, "the request")
+    if bad:
+        return bad
+    role = req.get("role")
+    if role not in _NOISY_ROLES:
+        return "role must be one of " + ", ".join(_NOISY_ROLES)
+    peer = req.get("peer", "")
+    if role == "sender":
+        if not isinstance(peer, str) or not peer:
+            return "a sender needs the sink it sends to"
+        if not peer.startswith(NOISY_PREFIX) or not _GEN_NAME_RE.match(peer):
+            return "the sink must be one booked from this page"
+    elif peer:
+        return "only a sender takes a sink"
+    for key in ("storage", "gpu"):
+        block, bad = _validate_block(req, key, {"enabled", "size"} if key == "storage"
+                                     else {"enabled"})
+        if bad:
+            return bad
+        if not isinstance(block.get("enabled", False), bool):
+            return f"{key}.enabled must be true or false"
+    size = (req.get("storage") or {}).get("size")
+    if size is not None and (not isinstance(size, str) or not _STORAGE_RE.match(size)
+                             or not 0 < _bytes(size) <= _NOISY_MAX_STORAGE):
+        return (f"storage size must be a quantity such as 20Gi, at most "
+                f"{_NOISY_MAX_STORAGE >> 30}Gi")
+    return _validate_noisy_side(req) or _validate_noisy_shared(req)
+
+
+def _validate_noisy_pair(req):
+    """The first thing wrong with a booking of a sink and its sender, or None."""
+    if not isinstance(req, dict):
+        return "body must be a JSON object of at most 8 KiB"
+    bad = _unknown(req, _NOISY_PAIR_FIELDS, "the request")
+    if bad:
+        return bad
+    for side in ("sink", "sender"):
+        block, bad = _validate_block(req, side, _NOISY_SIDE_FIELDS)
+        if bad:
+            return bad
+        bad = _validate_noisy_side(block)
+        if bad:
+            return f"{side}: {bad}"
+    return _validate_noisy_shared(req)
+
+
+def _noisy_name(label, role):
+    stem = _gen_slug(label) or role
+    return f"{NOISY_PREFIX}{stem}-{secrets.token_hex(2)}"
+
+
+def _noisy_claim(name, role, side, shared, placement, peer_url=None, sink=None):
+    """The claim to POST. spec.parameters are the noisy-neighbour chart's
+    values, which the provisioner merges over the class's, so what is left out
+    keeps the chart default."""
+    parameters = {"role": role}
+    requests = ((side.get("resources") or {}).get("requests")) or {}
+    if requests:
+        parameters["resources"] = {"requests": dict(requests)}
+    if placement:
+        parameters["placement"] = placement
+    limits = shared.get("limits") or {}
+    parameters["limits"] = {
+        "maxDuration": limits.get("maxDuration") or _NOISY_DEFAULT_DURATION,
+        "optIns": list(limits.get("optIns") or []),
+    }
+    for key in ("storage", "gpu"):
+        block = side.get(key) or {}
+        if block.get("enabled"):
+            parameters[key] = {k: v for k, v in block.items() if k in ("enabled", "size")}
+    fabric = shared.get("fabric") or {}
+    if fabric.get("enabled"):
+        parameters["fabric"] = {"enabled": True}
+        if fabric.get("networks"):
+            parameters["fabric"]["networks"] = fabric["networks"]
+        if fabric.get("hostNetwork"):
+            parameters["fabric"]["hostNetwork"] = True
+    network = {k: v for k, v in (shared.get("network") or {}).items()
+               if v is not None and v != ""}
+    if peer_url:
+        network["peer"] = peer_url
+    if network:
+        parameters["network"] = network
+    # On by default: the page's link is the function's UI, and only the route
+    # gives that an address a browser reaches. The gateway and cluster domain
+    # are the catalog's globals for the class.
+    route = ((shared.get("ingress") or {}).get("httproute") or {}).get("enabled", True)
+    parameters["ingress"] = {"httproute": {"enabled": route}}
+
+    booking = {"jobRef": NOISY_JOB_REF}
+    window = _ttl_window(shared)
+    if window:
+        booking["window"] = window
+    labels = {_GEN_LABEL_MANAGED: GEN_MANAGER, _GEN_LABEL_COMPONENT: _NOISY_COMPONENT}
+    if sink:
+        labels[_NOISY_LABEL_SINK] = sink
+    return {
+        "apiVersion": "dmf.qvest-digital.com/v1alpha1",
+        "kind": "MediaFunctionClaim",
+        "metadata": {"name": name, "namespace": CLAIM_NS, "labels": labels},
+        "spec": {
+            "className": NOISY_CLASS,
+            # Nothing re-applies these, and a reprovision would restart the
+            # load in the middle of a measurement.
+            "lifecycle": {"reprovisionOnDrift": False},
+            "booking": booking,
+            "parameters": parameters,
+        },
+    }
+
+
+def _is_noisy(claim):
+    labels = (claim.get("metadata", {}) or {}).get("labels") or {}
+    return (labels.get(_GEN_LABEL_MANAGED) == GEN_MANAGER
+            and labels.get(_GEN_LABEL_COMPONENT) == _NOISY_COMPONENT)
+
+
+def _node_names():
+    res = safe_k8s("/api/v1/nodes")
+    if "_error" in res:
+        return None, res["_error"]
+    return sorted((n.get("metadata") or {}).get("name") for n in res.get("items", []) or []
+                  if (n.get("metadata") or {}).get("name")), None
+
+
+def _noisy_placement(side):
+    """(placement values, code, error) for one side, checked against the cluster.
+
+    A victim is a claim in CLAIM_NS. Its pods carry the claim's name as their
+    instance label, and the chart turns that selector into a required pod
+    affinity on the node, so the claim must have a pod to sit beside or this
+    one stays Pending.
+    """
+    placement = side.get("placement") or {}
+    node = (placement.get("nodeName") or "").strip()
+    victim = placement.get("victim") or ""
+    if node:
+        names, err = _node_names()
+        if err:
+            return None, 503, f"cannot list nodes: {err}"
+        if node not in names:
+            return None, 404, f"no node named {node}"
+        return {"nodeName": node}, None, None
+    if victim:
+        claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{victim}")
+        if "_error" in claim:
+            return None, 404, f"no claim named {victim} in {CLAIM_NS}"
+        if _is_noisy(claim):
+            return None, 400, "the victim must be a booking other than a noisy neighbour"
+        selector = urllib.parse.quote(f"{_INSTANCE_LABEL}={victim}", safe="=")
+        pods = safe_k8s(f"/api/v1/namespaces/{CLAIM_NS}/pods?labelSelector={selector}")
+        if "_error" in pods:
+            return None, 503, f"cannot list the pods of {victim}: {pods['_error']}"
+        if not pods.get("items"):
+            return None, 409, f"{victim} has no pod to sit beside"
+        return {"victimSelector": {"matchLabels": {_INSTANCE_LABEL: victim}},
+                "victimNamespaces": [CLAIM_NS]}, None, None
+    return None, None, None
+
+
+def _noisy_post(label, role, build):
+    """POST the claim build(name) makes. (code, claim) or (code, {"error"})."""
+    for attempt in (1, 2):
+        name = _noisy_name(label, role)
+        if not _GEN_NAME_RE.match(name) or len(name) > _GEN_MAX_NAME:
+            return 400, {"error": "that label does not make a usable claim name"}
+        code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims",
+                             "POST", build(name))
+        if code in (200, 201):
+            return 201, res
+        if res.get("reason") != "AlreadyExists" or attempt == 2:
+            if code == 403:
+                return 403, {"error": f"not allowed to create claims in {CLAIM_NS}"}
+            return code, {"error": res.get("error") or "claim create failed"}
+    return 409, {"error": "could not find a free claim name"}
+
+
+def _noisy_peer_url(claim):
+    """The address a sender is given for a sink, or None until it is published.
+
+    The service root, from the ui endpoint: the sender appends /api/v1/sink
+    itself, so the api endpoint, which already ends in /api/v1/, would double
+    it. Not gated on handle.ready: the url is rendered from the class template
+    at provision time, and the sender reads it only when its engine starts.
+    """
+    handle = (claim.get("status") or {}).get("handle") or {}
+    for ep in handle.get("endpoints") or []:
+        if ep.get("name") == "ui" and ep.get("url"):
+            return ep["url"]
+    return None
+
+
+def _noisy_wait_peer(name):
+    deadline = time.monotonic() + _NOISY_PEER_WAIT
+    while True:
+        claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}")
+        url = None if "_error" in claim else _noisy_peer_url(claim)
+        if url or time.monotonic() >= deadline:
+            return url
+        time.sleep(_NOISY_PEER_POLL)
+
+
+def _noisy_release(name):
+    code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}",
+                         "DELETE")
+    return None if code in (200, 202, 404) else (res.get("error") or "delete failed")
+
+
+def _noisy_room(want):
+    claims, err = _page_claims(_NOISY_COMPONENT)
+    if err:
+        return 503, f"cannot list noisy neighbours in {CLAIM_NS}: {err}"
+    if len(claims) + want > NOISY_MAX:
+        return 409, f"at most {NOISY_MAX} noisy neighbours at once; release one first"
+    return None, None
+
+
+def _noisy_pods(names):
+    """{claim name: the node its pod runs on}."""
+    if not names:
+        return {}
+    selector = urllib.parse.quote(f"{_INSTANCE_LABEL} in ({','.join(names)})", safe="")
+    pods = safe_k8s(f"/api/v1/namespaces/{CLAIM_NS}/pods?labelSelector={selector}")
+    out = {}
+    for pod in pods.get("items", []) or []:
+        meta = pod.get("metadata") or {}
+        node = (pod.get("spec") or {}).get("nodeName")
+        if node and not meta.get("deletionTimestamp"):
+            out[(meta.get("labels") or {}).get(_INSTANCE_LABEL)] = node
+    return out
+
+
+def _noisy_row(claim, pods=None):
+    meta = claim.get("metadata", {}) or {}
+    spec = claim.get("spec", {}) or {}
+    status = claim.get("status", {}) or {}
+    handle = status.get("handle") or {}
+    parameters = spec.get("parameters") or {}
+    placement = parameters.get("placement") or {}
+    victim = ((placement.get("victimSelector") or {}).get("matchLabels") or {}).get(
+        _INSTANCE_LABEL)
+    if placement.get("nodeName"):
+        where = f"on {placement['nodeName']}"
+    elif victim:
+        where = f"beside {victim}"
+    else:
+        where = "any node"
+    endpoints = [{"name": e.get("name"), "url": e.get("url"),
+                  "externalUrl": e.get("externalUrl")}
+                 for e in handle.get("endpoints") or []
+                 if e.get("name") in ("ui", "api", "metrics")]
+    ui = next((e.get("externalUrl") for e in endpoints if e["name"] == "ui"), None)
+    if not ui or urllib.parse.urlsplit(ui).scheme not in ("http", "https"):
+        ui = None
+    return {
+        "name": meta.get("name"),
+        "role": parameters.get("role"),
+        "sink": (meta.get("labels") or {}).get(_NOISY_LABEL_SINK),
+        "node": (pods or {}).get(meta.get("name")) or placement.get("nodeName"),
+        "placement": where,
+        "victim": victim,
+        "phase": status.get("phase"),
+        "ready": bool(handle.get("ready")),
+        "deleting": bool(meta.get("deletionTimestamp")),
+        "endpoints": endpoints,
+        "uiUrl": ui if handle.get("ready") else None,
+        "created": meta.get("creationTimestamp"),
+        "expiresAt": ((spec.get("booking") or {}).get("window") or {}).get("end"),
+    }
+
+
+def noisy():
+    rows, nodes, victims, err = [], [], [], None
+    if NOISY_ENABLED:
+        claims, err = _page_claims(_NOISY_COMPONENT)
+        if not err:
+            pods = _noisy_pods([(c.get("metadata") or {}).get("name") for c in claims])
+            rows = sorted((_noisy_row(c, pods) for c in claims),
+                          key=lambda r: (r["created"] or "", r["name"] or ""), reverse=True)
+        nodes, node_err = _node_names()
+        err = err or node_err
+        listing = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims")
+        victims = sorted((c.get("metadata") or {}).get("name")
+                         for c in listing.get("items", []) or []
+                         if not _is_noisy(c)
+                         and not (c.get("metadata") or {}).get("deletionTimestamp"))
+        err = err or listing.get("_error")
+    return {"namespace": CLAIM_NS, "className": NOISY_CLASS, "enabled": NOISY_ENABLED,
+            "max": NOISY_MAX, "roles": list(_NOISY_ROLES), "optIns": list(_NOISY_OPT_INS),
+            "ttls": list(_GEN_TTLS), "nodes": nodes or [], "victims": victims,
+            "noisy": rows, "error": err}
+
+
+def noisy_create(req):
+    if not NOISY_ENABLED:
+        return 403, {"error": "noisy neighbours are disabled on this install"}
+    bad = _validate_noisy(req)
+    if bad:
+        return 400, {"error": bad}
+    code, err = _noisy_room(1)
+    if code:
+        return code, {"error": err}
+    placement, code, err = _noisy_placement(req)
+    if code:
+        return code, {"error": err}
+
+    peer_url = sink = None
+    if req["role"] == "sender":
+        sink = req["peer"]
+        claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{sink}")
+        if ("_error" in claim or not _is_noisy(claim)
+                or ((claim.get("spec") or {}).get("parameters") or {}).get("role") != "sink"):
+            return 404, {"error": f"no sink named {sink} was booked from this page"}
+        peer_url = _noisy_peer_url(claim)
+        if not peer_url:
+            return 409, {"error": f"{sink} has not published its address yet"}
+
+    code, res = _noisy_post(req.get("label") or "", req["role"],
+                            lambda name: _noisy_claim(name, req["role"], req, req, placement,
+                                                      peer_url, sink))
+    if code != 201:
+        return code, res
+    snapshot_drop("noisy")
+    return 201, _noisy_row(res)
+
+
+def noisy_pair_create(req):
+    """Book a sink, wait for the address it publishes, then book a sender
+    targeting it. The address is the provisioner's to render, so nothing is
+    derived here: a sink that publishes none in time is released again."""
+    if not NOISY_ENABLED:
+        return 403, {"error": "noisy neighbours are disabled on this install"}
+    bad = _validate_noisy_pair(req)
+    if bad:
+        return 400, {"error": bad}
+    code, err = _noisy_room(2)
+    if code:
+        return code, {"error": err}
+    # Both resolved before anything is booked, so a bad sender placement does
+    # not leave a sink behind.
+    placements = {}
+    for side in ("sink", "sender"):
+        placements[side], code, err = _noisy_placement(req.get(side) or {})
+        if code:
+            return code, {"error": f"{side}: {err}"}
+
+    label = req.get("label") or ""
+    code, sink = _noisy_post(label, "sink", lambda name: _noisy_claim(
+        name, "sink", req.get("sink") or {}, req, placements["sink"]))
+    if code != 201:
+        return code, sink
+    sink_name = sink["metadata"]["name"]
+    snapshot_drop("noisy")
+
+    peer_url = _noisy_wait_peer(sink_name)
+    if not peer_url:
+        left = _noisy_release(sink_name)
+        return 504, {"error": f"{sink_name} published no address within "
+                              f"{int(_NOISY_PEER_WAIT)}s"
+                              + (f"; releasing it failed: {left}" if left else
+                                 " and was released")}
+    code, sender = _noisy_post(label, "sender", lambda name: _noisy_claim(
+        name, "sender", req.get("sender") or {}, req, placements["sender"],
+        peer_url, sink_name))
+    if code != 201:
+        left = _noisy_release(sink_name)
+        return code, {"error": f"sender: {sender.get('error')}"
+                               + (f"; releasing {sink_name} failed: {left}" if left else
+                                  f"; {sink_name} was released")}
+    snapshot_drop("noisy")
+    return 201, {"noisy": [_noisy_row(sink), _noisy_row(sender)]}
+
+
+def noisy_delete(name):
+    if not NOISY_ENABLED:
+        return 403, {"error": "noisy neighbours are disabled on this install"}
+    if not name or not _GEN_NAME_RE.match(name) or not name.startswith(NOISY_PREFIX):
+        return 400, {"error": "not a noisy neighbour name"}
+    # Read before deleting: a label selector bounds a list, not a delete by name.
+    claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}")
+    if "_error" in claim:
+        return 404, {"error": f"no noisy neighbour named {name}"}
+    if not _is_noisy(claim):
+        return 403, {"error": f"{name} was not booked from this page"}
+    code, res = k8s_json(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{name}",
+                         "DELETE")
+    if code not in (200, 202):
+        return code, {"error": res.get("error") or "claim delete failed"}
+
+    left = []
+    if ((claim.get("spec") or {}).get("parameters") or {}).get("role") == "sink":
+        senders, err = _page_claims(_NOISY_COMPONENT, f",{_NOISY_LABEL_SINK}={name}")
+        if err:
+            left.append(f"cannot list its senders: {err}")
+        for sender in senders or []:
+            if not _is_noisy(sender):
+                continue
+            sender_name = sender["metadata"]["name"]
+            err = _noisy_release(sender_name)
+            if err:
+                left.append(f"{sender_name}: {err}")
+    snapshot_drop("noisy")
+    return 200, {"deleted": name,
+                 "error": "senders left behind: " + "; ".join(left) if left else None}
+
+
 # -- Serving under load ------------------------------------------------------
 # Everything the panels poll answers the same thing to everybody: it reports
 # cluster state, and nothing in it depends on who asked. Answering each poll on
@@ -3176,6 +3772,11 @@ class H(BaseHTTPRequestHandler):
                 self._send_body(200, snapshot("bookings", bookings))
             except Exception as e:
                 self._send(500, {"error": str(e)})
+        elif urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/noisy":
+            try:
+                self._send_body(200, snapshot("noisy", noisy))
+            except Exception as e:
+                self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/grains/"):
             # What the ring holds for this flow: how many grains, and which
             # indices are still in it. The button row is built from this.
@@ -3281,7 +3882,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(code, res)
         for prefix, release in (("/api/generators/", generator_delete),
                                 ("/api/readers/", reader_delete),
-                                ("/api/bookings/", booking_delete)):
+                                ("/api/bookings/", booking_delete),
+                                ("/api/noisy/", noisy_delete)):
             if self.path.startswith(prefix):
                 name = urllib.parse.unquote(
                     urllib.parse.urlsplit(self.path).path.rstrip("/").rsplit("/", 1)[1])
@@ -3295,6 +3897,17 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/api/grains/"):
             return self._do_capture()
+        for route, create in (("/api/noisy", noisy_create),
+                              ("/api/noisy/pair", noisy_pair_create)):
+            if urllib.parse.urlsplit(self.path).path.rstrip("/") == route:
+                body = self._json_body()
+                if body is None:
+                    return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+                try:
+                    code, res = create(body)
+                except Exception as e:
+                    code, res = 500, {"error": str(e)}
+                return self._send(code, res)
         if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/bookings":
             body = self._json_body()
             if body is None:

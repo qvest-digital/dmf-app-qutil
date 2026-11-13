@@ -16,6 +16,10 @@ import {
   GeneratorsResponse,
   GrainMeta,
   GrainRing,
+  NoisyNeighbour,
+  NoisyPairRequest,
+  NoisyRequest,
+  NoisyResponse,
   OperatorFlowsResponse,
   PreviewSession,
   PreviewStatus,
@@ -90,6 +94,26 @@ export class MetricsApi {
 
   deleteBooking(name: string) {
     return this.http.delete(`/api/bookings/${encodeURIComponent(name)}`);
+  }
+
+  /** The noisy neighbours the page booked, and what the server will accept. */
+  noisy(): Observable<NoisyResponse> {
+    return this.http.get<NoisyResponse>('/api/noisy');
+  }
+
+  createNoisy(request: NoisyRequest): Observable<NoisyNeighbour> {
+    return this.http.post<NoisyNeighbour>('/api/noisy', request);
+  }
+
+  /** A sink and a sender targeting it. Answers once the sender is booked,
+   *  which waits for the sink to publish its address. */
+  createNoisyPair(request: NoisyPairRequest): Observable<{ noisy: NoisyNeighbour[] }> {
+    return this.http.post<{ noisy: NoisyNeighbour[] }>('/api/noisy/pair', request);
+  }
+
+  /** Release one; a sink takes its senders with it. */
+  deleteNoisy(name: string): Observable<unknown> {
+    return this.http.delete(`/api/noisy/${encodeURIComponent(name)}`);
   }
 
   generators(): Observable<GeneratorsResponse> {

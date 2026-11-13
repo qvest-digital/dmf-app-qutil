@@ -461,6 +461,73 @@ export interface BookingsResponse {
   error?: string | null;
 }
 
+/** One noisy-neighbour claim the Noisy neighbour page booked. */
+export interface NoisyNeighbour {
+  name: string;
+  /** aggressor | sender | sink. */
+  role?: string | null;
+  /** For a sender, the sink it targets; released with it. */
+  sink?: string | null;
+  /** The node its pod runs on, else the node it was pinned to. */
+  node?: string | null;
+  /** "on <node>", "beside <claim>" or "any node". */
+  placement?: string | null;
+  victim?: string | null;
+  phase?: string | null;
+  ready?: boolean | null;
+  deleting?: boolean;
+  endpoints?: { name: string; url: string; externalUrl?: string | null }[];
+  /** The function's own UI, set only once the handle is ready and routed. */
+  uiUrl?: string | null;
+  created?: string | null;
+  expiresAt?: string | null;
+}
+
+export interface NoisyResponse {
+  namespace: string;
+  className: string;
+  enabled: boolean;
+  /** Claims at once; a pair counts as two. */
+  max: number;
+  roles: string[];
+  optIns: string[];
+  ttls: string[];
+  nodes: string[];
+  /** Claims in the namespace a noisy neighbour may sit beside. */
+  victims: string[];
+  noisy: NoisyNeighbour[];
+  error?: string | null;
+}
+
+/** What differs between the two claims of a pair. */
+export interface NoisySide {
+  placement?: { nodeName?: string; victim?: string };
+  resources?: { requests: { cpu?: string; memory?: string } };
+}
+
+/** What both claims of a pair share. */
+export interface NoisyShared {
+  label: string;
+  ttl: string;
+  fabric?: { enabled: boolean; networks?: string; hostNetwork?: boolean };
+  network?: { rdmaDevice?: string; rdmaGidIndex?: number };
+  limits: { maxDuration: string; optIns: string[] };
+  ingress: { httproute: { enabled: boolean } };
+}
+
+export interface NoisyRequest extends NoisyShared, NoisySide {
+  role: string;
+  /** For a sender, the name of a sink booked from the page. */
+  peer?: string;
+  storage?: { enabled: boolean; size?: string };
+  gpu?: { enabled: boolean };
+}
+
+export interface NoisyPairRequest extends NoisyShared {
+  sink: NoisySide;
+  sender: NoisySide;
+}
+
 export interface GeneratorsResponse {
   namespace: string;
   className: string;

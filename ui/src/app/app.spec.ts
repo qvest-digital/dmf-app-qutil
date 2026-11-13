@@ -1,5 +1,5 @@
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { App } from './app';
@@ -43,5 +43,24 @@ describe('App', () => {
       'Bookings',
     ]);
     expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book']);
+  });
+
+  /** The page books load onto shared nodes, so its tab appears only where the
+   *  install turned it on. */
+  it('offers the Noisy neighbour tab only when the aggregator has it on', async () => {
+    for (const enabled of [false, true]) {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()],
+      });
+      const fixture = TestBed.createComponent(App);
+      TestBed.inject(HttpTestingController)
+        .match('/api/noisy')
+        .forEach((req) => req.flush({ enabled }));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      const tabs = [...fixture.nativeElement.querySelectorAll('.tab')] as HTMLAnchorElement[];
+      expect(tabs.some((t) => t.getAttribute('href') === '/noisy')).toBe(enabled);
+    }
   });
 });

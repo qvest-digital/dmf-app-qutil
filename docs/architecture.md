@@ -35,11 +35,18 @@ the writers this chart books restart when their parameters change and the
 generators booked from the UI, which set it false, do not. Either way nothing
 that has to change while a function runs belongs in them.
 
-The chart is no longer the only thing that renders claims: the Generators page
-books writers at runtime through the aggregator, where the install has enabled
-it. Those claims carry a `managed-by` label of their own, are named with a
-reserved prefix, and expire through `booking.window.end`, because neither Helm
-nor Flux prunes an object it never rendered.
+The chart is no longer the only thing that renders claims: the Generators,
+Bookings and Noisy neighbour pages book at runtime through the aggregator, where
+the install has enabled them. Those claims carry a `managed-by` label of their
+own and a component label per page, are named with a reserved prefix, and
+expire through `booking.window.end`, because neither Helm nor Flux prunes an
+object it never rendered.
+
+The Noisy neighbour page books `noisy-neighbour` load generators on a node or
+beside another claim's pods, and links the UI the function serves; the load is
+driven there, not from this app. A sender is given the address its sink's
+claim publishes, so a pair books the sink first and the sender once that
+address exists.
 
 ---
 
@@ -129,7 +136,8 @@ not here.
 **Aggregator.** A dependency-free Python HTTP server. It merges flow state
 from the Kubernetes API and the MXL resources into the metrics panel, drives the
 mediamtx API to open and close preview paths, and -- where the install enables it
--- creates and deletes the writer claims the Generators page books. Its reads are
+-- creates and deletes the claims the Generators, Bookings and Noisy neighbour
+pages book. Its reads are
 cluster-wide; both of its write grants are Roles in the production namespace, and
 it refuses to delete a claim that does not carry the label it stamps on its own.
 

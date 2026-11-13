@@ -47,7 +47,7 @@ subjects:
 # Cluster-wide reads the per-flow panels need. MxlFlow is cluster-scoped, and
 # a flow's consumers can sit in any namespace, so an all-namespaces list is
 # only authorized here. Reads only: every write this app can do -- deleting a
-# writer pod, creating and deleting a generator claim -- is granted in the
+# writer pod, creating and deleting a page-booked claim -- is granted in the
 # production namespace by the Roles below instead.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -78,6 +78,13 @@ rules:
   - apiGroups: [helm.toolkit.fluxcd.io]
     resources: [helmreleases]
     verbs: [get, list]
+  {{- if .Values.noisy.enabled }}
+  # The node picker, and the check that a pinned node exists before a claim
+  # names it.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -124,10 +131,10 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "qutil.fullname" . }}-aggregator
     namespace: {{ .Release.Namespace }}
-{{- if or .Values.generators.enabled .Values.bookings.enabled }}
+{{- if or .Values.generators.enabled .Values.bookings.enabled .Values.noisy.enabled }}
 ---
-# Claim create and delete in the production namespace only, for the Generators
-# and Bookings pages. Reads come from the ClusterRole above; this adds nothing
+# Claim create and delete in the production namespace only, for the Generators,
+# Bookings and Noisy neighbour pages. Reads come from the ClusterRole above; this adds nothing
 # but the two writes, and only where the functions are booked.
 #
 # RBAC cannot scope a delete to the claims this app created, so the aggregator
@@ -245,6 +252,12 @@ spec:
             - name: ANC_PREVIEW_API
               value: {{ . | quote }}
             {{- end }}
+            {{- if or .Values.generators.enabled .Values.bookings.enabled .Values.noisy.enabled }}
+            # The marker a page-booked claim carries, and the only thing that
+            # separates one from the claims this chart renders.
+            - name: GEN_MANAGER
+              value: {{ include "qutil.fullname" . }}-aggregator
+            {{- end }}
             {{- if .Values.generators.enabled }}
             # The Generators page books writers by creating claims. Off means the
             # endpoints refuse rather than the apiserver forbidding them, so an
@@ -259,10 +272,6 @@ spec:
               value: {{ .Values.generators.jobRef | quote }}
             - name: GEN_PREFIX
               value: {{ .Values.generators.namePrefix | quote }}
-            # The marker a page-booked claim carries, and the only thing that
-            # separates one from the claims this chart renders.
-            - name: GEN_MANAGER
-              value: {{ include "qutil.fullname" . }}-aggregator
             # Stamped onto every page-booked claim: the class envelope is sized
             # for 1080p50, and an animated pattern needs a limit a still one
             # does not. See the generators.resources comment in values.yaml.
@@ -284,12 +293,20 @@ spec:
               value: {{ .Values.bookings.namePrefix | quote }}
             - name: BOOKING_MAX
               value: {{ .Values.bookings.maxCount | quote }}
-            {{- if not .Values.generators.enabled }}
-            # GEN_MANAGER names the marker for both pages, so an install running
-            # only the Bookings page still needs it.
-            - name: GEN_MANAGER
-              value: {{ include "qutil.fullname" . }}-aggregator
             {{- end }}
+            {{- if .Values.noisy.enabled }}
+            # The Noisy neighbour page books load generators. Off means the
+            # endpoints refuse rather than the apiserver forbidding them.
+            - name: NOISY_ENABLED
+              value: "true"
+            - name: NOISY_CLASS
+              value: {{ .Values.noisy.className | quote }}
+            - name: NOISY_JOB_REF
+              value: {{ .Values.noisy.jobRef | quote }}
+            - name: NOISY_PREFIX
+              value: {{ .Values.noisy.namePrefix | quote }}
+            - name: NOISY_MAX
+              value: {{ .Values.noisy.maxCount | quote }}
             {{- end }}
           ports:
             - name: http

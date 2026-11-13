@@ -310,6 +310,25 @@ bookings:
   # whatever the class reserves, which is RAM on a node.
   maxCount: 8
 
+# Booking noisy-neighbour load generators from the Noisy neighbour tab, beside a
+# booking or on a node, to measure what that booking suffers. The function
+# serves its own UI and API and the load is driven there; the page books,
+# links and releases. Off by default: the function's API is unauthenticated,
+# and the route the page books for its UI hands load control to anyone who
+# reaches the gateway host.
+noisy:
+  enabled: false
+  # The class the catalog registers the function under.
+  className: noisy-neighbour
+  jobRef: qutil/noisy
+  # Every claim the page books starts with this, and it refuses to delete one
+  # that does not. A component label of its own keeps generators, readers and
+  # bookings out of its reach and it out of theirs.
+  namePrefix: noisy-
+  # Claims at once, a sink and its sender counting as two. Each one is load on
+  # a node somebody else is measuring on.
+  maxCount: 4
+
 # MxlDomains besides the primary one whose flows preview. Each is mounted into
 # the media server and the ANC reader through the catalog's
 # mxl.csi.extraDomains, which needs the catalog's mxl.csi.enabled, at
