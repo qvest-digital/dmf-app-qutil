@@ -1,5 +1,5 @@
 {
-  "//": "Local development against a real cluster. Run `kubectl -n mxl-system port-forward svc/mediamtx 8080:80` first, then `npm start`: Caddy in the pod serves /api, /hls, /webrtc and /stats.json, and everything else falls through to the dev server's own build output.",
+  "//": "Local development against a real cluster: port-forward the deployed UI Service to localhost:8080 first (see README.md), then `npm start`. Caddy in that pod serves /api, /hls, /webrtc and /stats.json; everything else is the dev server's own build output.",
   "/api": { "target": "http://localhost:8080", "secure": false },
   "/hls": { "target": "http://localhost:8080", "secure": false },
   "/webrtc": { "target": "http://localhost:8080", "secure": false },

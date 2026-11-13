@@ -10,7 +10,7 @@ reverse-proxies the APIs the app polls, so everything is same-origin:
 
 | Path          | Backend                                                                                |
 | ------------- | -------------------------------------------------------------------------------------- |
-| `/api/*`      | `demo-metrics` — the Python aggregator (`charts/qutil/files/aggregator.py`)              |
+| `/api/*`      | `demo-metrics` -- the Python aggregator (`charts/qutil/files/aggregator.py`)              |
 | `/hls/*`      | mediamtx HLS on `:8888`                                                                 |
 | `/webrtc/*`   | mediamtx WHEP signalling on `:8889` (ICE media bypasses Caddy via the UDP LoadBalancer) |
 | `/stats.json` | the compositor's raw stats server                                                       |
@@ -22,11 +22,13 @@ this is only needed for working locally.
 
 ## Running against a real cluster
 
-The app has no mock data — it is a window onto a running demo. Point it at one:
+The app has no mock data -- it is a window onto a running demo. Point it at one:
 
 ```bash
-kubectl -n mxl-system port-forward svc/mediamtx 8080:80   # in one shell
-npm install && npm start                                  # in another
+kubectl get httproutes -A -l app.kubernetes.io/name=qutil \
+  -o jsonpath='{range .items[*]}{.metadata.namespace} {.spec.rules[0].backendRefs[0].name}{"\n"}{end}'
+kubectl -n <namespace> port-forward svc/<service> 8080:80   # in one shell
+npm install && npm start                                    # in another
 ```
 
 `proxy.conf.json` forwards `/api`, `/hls`, `/webrtc` and `/stats.json` to that
@@ -48,7 +50,7 @@ docker build -t ghcr.io/qvest-digital/mxl-dmf-demo-app/ui:dev .
 ```
 
 The image is `caddy:2-alpine` with `dist/mxl-multiviewer/browser` copied to
-`/srv`. The Caddyfile is deliberately **not** baked in — it stays a
+`/srv`. The Caddyfile is deliberately **not** baked in -- it stays a
 ConfigMap the chart renders from `charts/qutil/files/Caddyfile`, so the routes
 above stay editable through GitOps without rebuilding. To serve the image by
 hand:
@@ -63,7 +65,7 @@ CI (`.github/workflows/build-ui.yml`) runs the tests and pushes the image to GHC
 on every change under `ui/`.
 
 Each tab is a route (`/` and `/gen`), and anything else redirects to the first,
-which is why the Caddyfile needs `try_files {path} /index.html` — without it a
+which is why the Caddyfile needs `try_files {path} /index.html` -- without it a
 reload on `/gen` 404s against the file server before the router ever sees it.
 
 ## How it is put together
@@ -103,7 +105,7 @@ Three things are less obvious than they look, and all three were bugs once:
   from one that is upstream of the browser.
 - **Origin freshness is three-state.** Green means an origin Lease is being
   renewed, orange means the claim outlived its Lease, grey means nothing claims
-  Origin at all. Grey is _unknown_, not broken — most flows carry no
+  Origin at all. Grey is _unknown_, not broken -- most flows carry no
   `OriginFresh` condition, and reading its absence as "stale" painted red dots on
   healthy flows. See `shared/origin-state.ts`.
 - **Not everything on screen is measured.** Nominal bitrates are arithmetic off
