@@ -9,6 +9,10 @@
        openh264, whose frame rate reads 0/1), video on PID 65 and audio on
        PID 66 (ffmpeg defaults to 256/257), and an audio track at all.
 
+       -pes_payload_size 0 writes one PES per AAC frame. ffmpeg's default
+       fills an audio PES to 2930 bytes, about 180 ms at 128 kb/s, and a
+       receiver holds video back to the newest audio burst it has.
+
        No passphrase: the SSG chart carries none. The Service is ClusterIP
        only, so the stream never leaves the cluster.
 
@@ -56,7 +60,7 @@ spec:
                   -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p \
                   -b:v 8000k -g 50 -bf 0 \
                   -c:a aac -b:a 128k -ar 48000 \
-                  -streamid 0:65 -streamid 1:66 \
+                  -streamid 0:65 -streamid 1:66 -pes_payload_size 0 \
                   -f mpegts "srt://0.0.0.0:{{ .Values.rossSource.port }}?mode=listener" || true
                 echo "caller left, listening again in 2s"
                 sleep 2
