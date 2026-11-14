@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.64](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.63...v1.0.0-rc.64) (2026-11-14)
+
+
+### Bug Fixes
+
+* **chart:** give a noisy fabric booking the RDMA resource of its node ([#244](https://github.com/qvest-digital/dmf-app-qutil/issues/244)) ([5f0fc63](https://github.com/qvest-digital/dmf-app-qutil/commit/5f0fc63c0aaf0743fc32c61aae9ed513f7651320))
+
 ## [1.0.0-rc.63](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.62...v1.0.0-rc.63) (2026-11-14)
 
 
