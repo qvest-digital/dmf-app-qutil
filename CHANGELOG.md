@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.65](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.64...v1.0.0-rc.65) (2026-11-14)
+
+
+### Features
+
+* **monitor:** watch every reader, its flows and their replication ([#212](https://github.com/qvest-digital/dmf-app-qutil/issues/212)) ([4195e70](https://github.com/qvest-digital/dmf-app-qutil/commit/4195e70dc01f9ad00ef1a3aae5bad2efc36c2b91))
+
+
+### Bug Fixes
+
+* **deps:** move every Angular package to 22.2 together ([#246](https://github.com/qvest-digital/dmf-app-qutil/issues/246)) ([dbc1700](https://github.com/qvest-digital/dmf-app-qutil/commit/dbc1700a7790c8df93719c2cb1011a95ec18334d))
+
 ## [1.0.0-rc.64](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.63...v1.0.0-rc.64) (2026-11-14)
 
 
