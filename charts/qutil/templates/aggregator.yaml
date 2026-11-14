@@ -307,6 +307,10 @@ spec:
               value: {{ .Values.noisy.namePrefix | quote }}
             - name: NOISY_MAX
               value: {{ .Values.noisy.maxCount | quote }}
+            {{- with .Values.noisy.fabric }}
+            - name: NOISY_FABRIC
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- end }}
           ports:
             - name: http

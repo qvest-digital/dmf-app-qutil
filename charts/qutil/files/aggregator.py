@@ -3024,6 +3024,18 @@ _DURATION_RE = re.compile(r"^(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?$")
 # comma separated.
 _NETWORKS_RE = re.compile(r"^[a-z0-9]([-a-z0-9./@,]*[a-z0-9])?$")
 _RDMA_DEVICE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# What a fabric booking needs from the node it lands on. A cluster with more
+# than one kind of RDMA NIC offers each through its own device-plugin resource,
+# so the chart values depend on the node, which only the booking knows:
+#   nodeLabel    label whose value names the node's kind of RDMA NIC
+#   kinds        per label value, chart fabric values (resourceName, ...)
+#   hostNetwork  every fabric booking shares the node's network namespace
+#   fabricCidr   the fabric subnet, where the sink finds its data address
+# Empty leaves the chart's fabric defaults, for a cluster with one kind.
+try:
+    NOISY_FABRIC = json.loads(os.environ.get("NOISY_FABRIC") or "{}")
+except ValueError:
+    NOISY_FABRIC = {}
 # How long a pair waits for its sink to publish the address its sender needs.
 _NOISY_PEER_WAIT = 60.0
 _NOISY_PEER_POLL = 2.0
@@ -3221,7 +3233,8 @@ def _noisy_name(label, role):
     return f"{NOISY_PREFIX}{stem}-{secrets.token_hex(2)}"
 
 
-def _noisy_claim(name, role, side, shared, placement, peer_url=None, sink=None):
+def _noisy_claim(name, role, side, shared, placement, peer_url=None, sink=None,
+                 fabric_extra=None, network_extra=None):
     """The claim to POST. spec.parameters are the noisy-neighbour chart's
     values, which the provisioner merges over the class's, so what is left out
     keeps the chart default."""
@@ -3247,8 +3260,10 @@ def _noisy_claim(name, role, side, shared, placement, peer_url=None, sink=None):
             parameters["fabric"]["networks"] = fabric["networks"]
         if fabric.get("hostNetwork"):
             parameters["fabric"]["hostNetwork"] = True
-    network = {k: v for k, v in (shared.get("network") or {}).items()
-               if v is not None and v != ""}
+        parameters["fabric"].update(fabric_extra or {})
+    network = dict(network_extra or {})
+    network.update({k: v for k, v in (shared.get("network") or {}).items()
+                    if v is not None and v != ""})
     if peer_url:
         network["peer"] = peer_url
     if network:
@@ -3296,7 +3311,9 @@ def _node_names():
 
 
 def _noisy_placement(side):
-    """(placement values, code, error) for one side, checked against the cluster.
+    """(placement values, node, code, error) for one side, checked against the
+    cluster. node is where the pod will run: the pinned node, or the node of
+    the victim's pod, or None when the scheduler picks.
 
     A victim is a claim in CLAIM_NS. Its pods carry the claim's name as their
     instance label, and the chart turns that selector into a required pod
@@ -3309,25 +3326,54 @@ def _noisy_placement(side):
     if node:
         names, err = _node_names()
         if err:
-            return None, 503, f"cannot list nodes: {err}"
+            return None, None, 503, f"cannot list nodes: {err}"
         if node not in names:
-            return None, 404, f"no node named {node}"
-        return {"nodeName": node}, None, None
+            return None, None, 404, f"no node named {node}"
+        return {"nodeName": node}, node, None, None
     if victim:
         claim = safe_k8s(f"{_CLAIMS_API}/namespaces/{CLAIM_NS}/mediafunctionclaims/{victim}")
         if "_error" in claim:
-            return None, 404, f"no claim named {victim} in {CLAIM_NS}"
+            return None, None, 404, f"no claim named {victim} in {CLAIM_NS}"
         if _is_noisy(claim):
-            return None, 400, "the victim must be a booking other than a noisy neighbour"
+            return None, None, 400, "the victim must be a booking other than a noisy neighbour"
         selector = urllib.parse.quote(f"{_INSTANCE_LABEL}={victim}", safe="=")
         pods = safe_k8s(f"/api/v1/namespaces/{CLAIM_NS}/pods?labelSelector={selector}")
         if "_error" in pods:
-            return None, 503, f"cannot list the pods of {victim}: {pods['_error']}"
+            return None, None, 503, f"cannot list the pods of {victim}: {pods['_error']}"
         if not pods.get("items"):
-            return None, 409, f"{victim} has no pod to sit beside"
+            return None, None, 409, f"{victim} has no pod to sit beside"
+        on = next(((p.get("spec") or {}).get("nodeName") for p in pods["items"]
+                   if (p.get("spec") or {}).get("nodeName")), None)
         return {"victimSelector": {"matchLabels": {_INSTANCE_LABEL: victim}},
-                "victimNamespaces": [CLAIM_NS]}, None, None
-    return None, None, None
+                "victimNamespaces": [CLAIM_NS]}, on, None, None
+    return None, None, None, None
+
+
+def _noisy_fabric(shared, node):
+    """(chart values to merge into fabric and network, code, error) for a fabric
+    booking that will run on node. Nothing without a fabric or a NOISY_FABRIC."""
+    if not (shared.get("fabric") or {}).get("enabled") or not NOISY_FABRIC:
+        return {}, {}, None, None
+    fabric, network = {}, {}
+    if NOISY_FABRIC.get("hostNetwork") and not (shared.get("fabric") or {}).get("networks"):
+        fabric["hostNetwork"] = True
+    if NOISY_FABRIC.get("fabricCidr"):
+        network["fabricCidr"] = NOISY_FABRIC["fabricCidr"]
+    label = NOISY_FABRIC.get("nodeLabel")
+    if not label:
+        return fabric, network, None, None
+    if not node:
+        return None, None, 400, ("a fabric booking needs a node or a victim: the RDMA "
+                                 "device it asks for differs between nodes")
+    res = safe_k8s(f"/api/v1/nodes/{node}")
+    if "_error" in res:
+        return None, None, 503, f"cannot read node {node}: {res['_error']}"
+    kind = ((res.get("metadata") or {}).get("labels") or {}).get(label, "")
+    values = (NOISY_FABRIC.get("kinds") or {}).get(kind)
+    if not isinstance(values, dict):
+        return None, None, 409, f"{node} has no RDMA fabric this page knows ({label}={kind or 'unset'})"
+    fabric.update(values)
+    return fabric, network, None, None
 
 
 def _noisy_post(label, role, build):
@@ -3472,7 +3518,10 @@ def noisy_create(req):
     code, err = _noisy_room(1)
     if code:
         return code, {"error": err}
-    placement, code, err = _noisy_placement(req)
+    placement, node, code, err = _noisy_placement(req)
+    if code:
+        return code, {"error": err}
+    fabric_extra, network_extra, code, err = _noisy_fabric(req, node)
     if code:
         return code, {"error": err}
 
@@ -3489,7 +3538,8 @@ def noisy_create(req):
 
     code, res = _noisy_post(req.get("label") or "", req["role"],
                             lambda name: _noisy_claim(name, req["role"], req, req, placement,
-                                                      peer_url, sink))
+                                                      peer_url, sink, fabric_extra,
+                                                      network_extra))
     if code != 201:
         return code, res
     snapshot_drop("noisy")
@@ -3510,15 +3560,20 @@ def noisy_pair_create(req):
         return code, {"error": err}
     # Both resolved before anything is booked, so a bad sender placement does
     # not leave a sink behind.
-    placements = {}
+    placements, fabrics = {}, {}
     for side in ("sink", "sender"):
-        placements[side], code, err = _noisy_placement(req.get(side) or {})
+        placements[side], node, code, err = _noisy_placement(req.get(side) or {})
         if code:
             return code, {"error": f"{side}: {err}"}
+        fab, net, code, err = _noisy_fabric(req, node)
+        if code:
+            return code, {"error": f"{side}: {err}"}
+        fabrics[side] = (fab, net)
 
     label = req.get("label") or ""
     code, sink = _noisy_post(label, "sink", lambda name: _noisy_claim(
-        name, "sink", req.get("sink") or {}, req, placements["sink"]))
+        name, "sink", req.get("sink") or {}, req, placements["sink"],
+        fabric_extra=fabrics["sink"][0], network_extra=fabrics["sink"][1]))
     if code != 201:
         return code, sink
     sink_name = sink["metadata"]["name"]
@@ -3533,7 +3588,7 @@ def noisy_pair_create(req):
                                  " and was released")}
     code, sender = _noisy_post(label, "sender", lambda name: _noisy_claim(
         name, "sender", req.get("sender") or {}, req, placements["sender"],
-        peer_url, sink_name))
+        peer_url, sink_name, fabrics["sender"][0], fabrics["sender"][1]))
     if code != 201:
         left = _noisy_release(sink_name)
         return code, {"error": f"sender: {sender.get('error')}"

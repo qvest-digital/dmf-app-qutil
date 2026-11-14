@@ -328,6 +328,17 @@ noisy:
   # Claims at once, a sink and its sender counting as two. Each one is load on
   # a node somebody else is measuring on.
   maxCount: 4
+  # What a booking with the RDMA fabric gets on top of the chart's fabric
+  # defaults. Where a cluster has more than one kind of RDMA NIC, each kind is
+  # a different device-plugin resource, so the values follow the node the
+  # booking lands on:
+  #   nodeLabel: label naming a node's kind of RDMA NIC
+  #   kinds: {<label value>: {resourceName: ..., mountInfiniband: ...}}
+  #   hostNetwork: true to reach the fabric through the node's interfaces
+  #   fabricCidr: the fabric subnet, where a sink finds its data address
+  # With nodeLabel set, a fabric booking needs a node or a victim, and a node
+  # of no listed kind is refused. Empty leaves the chart defaults.
+  fabric: {}
 
 # MxlDomains besides the primary one whose flows preview. Each is mounted into
 # the media server and the ANC reader through the catalog's
