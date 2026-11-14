@@ -46,7 +46,10 @@ The Noisy neighbour page books `noisy-neighbour` load generators on a node or
 beside another claim's pods, and links the UI the function serves; the load is
 driven there, not from this app. A sender is given the address its sink's
 claim publishes, so a pair books the sink first and the sender once that
-address exists.
+address exists. A booking with the RDMA fabric gets the chart values for the
+kind of RDMA NIC on the node it lands on, from `noisy.fabric`: each kind is a
+different device-plugin resource, and a pod asking for one its node does not
+offer never starts.
 
 ---
 

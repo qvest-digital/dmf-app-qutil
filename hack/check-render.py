@@ -72,6 +72,11 @@ CASES = {
     },
     # On, the Role and GEN_MANAGER again, and a node read in the ClusterRole.
     "noisy-only": {"noisy": {"enabled": True}},
+    # The fabric values per kind of RDMA NIC, carried as one JSON env value.
+    "noisy-fabric": {"noisy": {"enabled": True, "fabric": {
+        "nodeLabel": "fabric-kind", "hostNetwork": True, "fabricCidr": "192.0.2.0/24",
+        "kinds": {"a": {"resourceName": "rdma/a"}, "b": {"resourceName": "rdma/b",
+                                                          "mountInfiniband": False}}}}},
 }
 
 

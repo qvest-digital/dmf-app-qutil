@@ -2382,10 +2382,11 @@ class FakeClaims:
     k8s_json. A POSTed claim is stored as sent; publish names the claims whose
     handle carries endpoints once they exist."""
 
-    def __init__(self, claims=(), pods=(), nodes=("worker-1", "worker-2")):
+    def __init__(self, claims=(), pods=(), nodes=("worker-1", "worker-2"), node_labels=None):
         self.claims = {c["metadata"]["name"]: c for c in claims}
         self.pods = list(pods)
         self.nodes = list(nodes)
+        self.node_labels = node_labels or {}
         self.calls = []
         self.publish = True
 
@@ -2402,6 +2403,11 @@ class FakeClaims:
         base, _, query = path.partition("?")
         if base == "/api/v1/nodes":
             return {"items": [{"metadata": {"name": n}} for n in self.nodes]}
+        if base.startswith("/api/v1/nodes/"):
+            n = base.rsplit("/", 1)[1]
+            if n not in self.nodes:
+                return {"_error": "404"}
+            return {"metadata": {"name": n, "labels": self.node_labels.get(n, {})}}
         if base.endswith("/pods"):
             selector = urllib.parse.parse_qs(query).get("labelSelector", [""])[0]
             key, _, values = selector.partition(" in (")
@@ -2777,3 +2783,76 @@ class NoisyListing(NoisyBase):
             self.assertEqual(agg.noisy_create({"role": "sink"})[0], 403)
             self.assertEqual(agg.noisy_pair_create({})[0], 403)
             self.assertEqual(agg.noisy_delete("noisy-a-0001")[0], 403)
+
+
+FABRIC = {"nodeLabel": "fabric-kind", "hostNetwork": True, "fabricCidr": "192.168.100.0/24",
+          "kinds": {"verbs": {"resourceName": "rdma/hca_shared_devices"},
+                    "irdma": {"resourceName": "rdma/irdma_shared_devices",
+                              "mountInfiniband": False}}}
+
+
+class NoisyFabricPerNode(NoisyBase):
+    """Each kind of RDMA NIC is its own device-plugin resource. A booking that
+    asked for the wrong one on a pinned node was rejected by the kubelet in a
+    loop, so the values must follow the node the booking lands on."""
+
+    def setUp(self):
+        p = mock.patch.object(agg, "NOISY_FABRIC", FABRIC)
+        p.start()
+        self.addCleanup(p.stop)
+        self.cluster(nodes=("n05", "n06", "n09"),
+                     node_labels={"n05": {"fabric-kind": "verbs"},
+                                  "n06": {"fabric-kind": "irdma"}},
+                     claims=[{"metadata": {"name": "victim", "labels": {}},
+                              "spec": {"className": "mxl-writer"}}],
+                     pods=[{"metadata": {"name": "victim-x",
+                                         "labels": {agg._INSTANCE_LABEL: "victim"}},
+                            "spec": {"nodeName": "n06"}}])
+
+    def params(self, name):
+        return self.k8s.claims[name]["spec"]["parameters"]
+
+    def test_pinned_node_gets_its_kinds_resource(self):
+        code, row = agg.noisy_create({"role": "aggressor", "fabric": {"enabled": True},
+                                      "placement": {"nodeName": "n06"}})
+        self.assertEqual(code, 201, row)
+        p = self.params(row["name"])
+        self.assertEqual(p["fabric"], {"enabled": True, "hostNetwork": True,
+                                       "resourceName": "rdma/irdma_shared_devices",
+                                       "mountInfiniband": False})
+        self.assertEqual(p["network"]["fabricCidr"], "192.168.100.0/24")
+
+    def test_victim_placement_uses_the_victims_node(self):
+        code, row = agg.noisy_create({"role": "aggressor", "fabric": {"enabled": True},
+                                      "placement": {"victim": "victim"}})
+        self.assertEqual(code, 201, row)
+        self.assertEqual(self.params(row["name"])["fabric"]["resourceName"],
+                         "rdma/irdma_shared_devices")
+
+    def test_pair_resolves_each_side_on_its_own_node(self):
+        code, res = agg.noisy_pair_create({"fabric": {"enabled": True},
+                                           "sink": {"placement": {"nodeName": "n06"}},
+                                           "sender": {"placement": {"nodeName": "n05"}}})
+        self.assertEqual(code, 201, res)
+        sink, sender = (self.params(r["name"]) for r in res["noisy"])
+        self.assertEqual(sink["fabric"]["resourceName"], "rdma/irdma_shared_devices")
+        self.assertEqual(sender["fabric"]["resourceName"], "rdma/hca_shared_devices")
+
+    def test_node_without_a_known_fabric_is_refused_before_booking(self):
+        code, res = agg.noisy_create({"role": "aggressor", "fabric": {"enabled": True},
+                                      "placement": {"nodeName": "n09"}})
+        self.assertEqual(code, 409)
+        self.assertIn("n09 has no RDMA fabric", res["error"])
+        self.assertEqual(self.k8s.posted(), [])
+
+    def test_fabric_without_a_node_is_refused(self):
+        code, res = agg.noisy_create({"role": "aggressor", "fabric": {"enabled": True}})
+        self.assertEqual(code, 400)
+        self.assertIn("needs a node or a victim", res["error"])
+
+    def test_without_fabric_nothing_is_added(self):
+        code, row = agg.noisy_create({"role": "aggressor", "placement": {"nodeName": "n09"}})
+        self.assertEqual(code, 201, row)
+        p = self.params(row["name"])
+        self.assertNotIn("fabric", p)
+        self.assertNotIn("network", p)
