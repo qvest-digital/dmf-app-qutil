@@ -27,5 +27,10 @@ export const routes: Routes = [
     title: 'Qutil - Bookings',
     loadComponent: () => import('./features/bookings/bookings-page').then((m) => m.BookingsPage),
   },
+  {
+    path: 'noisy',
+    title: 'Qutil - Noisy neighbour',
+    loadComponent: () => import('./features/noisy/noisy-page').then((m) => m.NoisyPage),
+  },
   { path: '**', redirectTo: '' },
 ];

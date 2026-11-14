@@ -70,6 +70,8 @@ CASES = {
         "bookings": {"enabled": True},
         "generators": {"enabled": False},
     },
+    # On, the Role and GEN_MANAGER again, and a node read in the ClusterRole.
+    "noisy-only": {"noisy": {"enabled": True}},
 }
 
 

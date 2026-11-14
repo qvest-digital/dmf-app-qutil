@@ -1,0 +1,358 @@
+<main class="gen-main">
+  <aside class="panel">
+    <div class="gwbar">
+      <h2>Book a noisy neighbour</h2>
+      @if (enabled()) {
+        <form class="gen-form" (submit)="book($event)">
+          <div class="gen-field">
+            <label class="gen-label" for="nn-role">Role</label>
+            <select
+              id="nn-role"
+              name="role"
+              class="gen-select"
+              [value]="role()"
+              (change)="role.set(value($event))"
+            >
+              @for (r of roles(); track r) {
+                <option [value]="r" [selected]="r === role()">
+                  {{ r === 'pair' ? 'sink + sender pair' : r }}
+                </option>
+              }
+            </select>
+            <div class="gen-hint">
+              An aggressor loads its own node. A sender loads the network towards a sink.
+            </div>
+          </div>
+
+          <div class="gen-field">
+            <label class="gen-label" for="nn-label">Label <em>optional</em></label>
+            <input
+              id="nn-label"
+              name="label"
+              class="gen-input"
+              type="text"
+              [value]="label()"
+              (input)="label.set(value($event))"
+              placeholder="names the claim"
+              autocomplete="off"
+            />
+          </div>
+
+          @if (role() === 'sender') {
+            <div class="gen-field">
+              <label class="gen-label" for="nn-peer">Sink</label>
+              <select
+                id="nn-peer"
+                name="peer"
+                class="gen-select"
+                [value]="peer()"
+                (change)="peer.set(value($event))"
+              >
+                <option value="">choose a sink booked here</option>
+                @for (s of sinks(); track s.name) {
+                  <option [value]="s.name" [selected]="s.name === peer()">{{ s.name }}</option>
+                }
+              </select>
+            </div>
+          }
+
+          @for (s of sides(); track s.key) {
+            @if (s.title) {
+              <h3>{{ s.title }}</h3>
+            }
+            <div class="gen-field">
+              <label class="gen-label" [for]="'nn-' + s.key + '-mode'">Placement</label>
+              <select
+                [id]="'nn-' + s.key + '-mode'"
+                [name]="s.key + '-mode'"
+                class="gen-select"
+                [value]="s.mode()"
+                (change)="s.mode.set(value($event))"
+              >
+                <option value="any" [selected]="s.mode() === 'any'">any node</option>
+                <option value="node" [selected]="s.mode() === 'node'">on a node</option>
+                <option value="victim" [selected]="s.mode() === 'victim'">beside a booking</option>
+              </select>
+            </div>
+            @if (s.mode() === 'node') {
+              <div class="gen-field">
+                <select
+                  [name]="s.key + '-node'"
+                  class="gen-select"
+                  [value]="s.node()"
+                  (change)="s.node.set(value($event))"
+                >
+                  <option value="">choose a node</option>
+                  @for (n of nodes(); track n) {
+                    <option [value]="n" [selected]="n === s.node()">{{ n }}</option>
+                  }
+                </select>
+              </div>
+            }
+            @if (s.mode() === 'victim') {
+              <div class="gen-field">
+                <select
+                  [name]="s.key + '-victim'"
+                  class="gen-select"
+                  [value]="s.victim()"
+                  (change)="s.victim.set(value($event))"
+                >
+                  <option value="">choose a booking</option>
+                  @for (v of victims(); track v) {
+                    <option [value]="v" [selected]="v === s.victim()">{{ v }}</option>
+                  }
+                </select>
+                <div class="gen-hint">Required on the node a pod of that claim runs on.</div>
+              </div>
+            }
+            <div class="gen-actions">
+              <input
+                [name]="s.key + '-cpu'"
+                class="gen-input"
+                type="text"
+                [value]="s.cpu()"
+                (input)="s.cpu.set(value($event))"
+                placeholder="cpu, e.g. 2"
+                autocomplete="off"
+              />
+              <input
+                [name]="s.key + '-memory'"
+                class="gen-input"
+                type="text"
+                [value]="s.memory()"
+                (input)="s.memory.set(value($event))"
+                placeholder="memory, e.g. 2Gi"
+                autocomplete="off"
+              />
+            </div>
+            <div class="gen-hint">Requests only; empty keeps the class default.</div>
+          }
+
+          @if (aggressor()) {
+            <div class="gen-field">
+              <label class="gen-check">
+                <input
+                  type="checkbox"
+                  name="storage"
+                  [checked]="storageOn()"
+                  (change)="storageOn.set(checked($event))"
+                />
+                Storage volume for the disk engine
+              </label>
+              @if (storageOn()) {
+                <input
+                  name="storageSize"
+                  class="gen-input"
+                  type="text"
+                  [value]="storageSize()"
+                  (input)="storageSize.set(value($event))"
+                />
+              }
+            </div>
+            <div class="gen-field">
+              <label class="gen-check">
+                <input
+                  type="checkbox"
+                  name="gpu"
+                  [checked]="gpuOn()"
+                  (change)="gpuOn.set(checked($event))"
+                />
+                GPU
+              </label>
+            </div>
+          }
+
+          @if (network()) {
+            <div class="gen-field">
+              <label class="gen-check">
+                <input
+                  type="checkbox"
+                  name="fabric"
+                  [checked]="fabricOn()"
+                  (change)="fabricOn.set(checked($event))"
+                />
+                Fabric (RDMA)
+              </label>
+            </div>
+            @if (fabricOn()) {
+              <div class="gen-field">
+                <select
+                  name="fabricVia"
+                  class="gen-select"
+                  [value]="fabricVia()"
+                  (change)="fabricVia.set(value($event))"
+                >
+                  <option value="none" [selected]="fabricVia() === 'none'">pod network</option>
+                  <option value="networks" [selected]="fabricVia() === 'networks'">
+                    secondary network
+                  </option>
+                  <option value="host" [selected]="fabricVia() === 'host'">host network</option>
+                </select>
+                @if (fabricVia() === 'networks') {
+                  <input
+                    name="networks"
+                    class="gen-input"
+                    type="text"
+                    [value]="networks()"
+                    (input)="networks.set(value($event))"
+                    placeholder="fabric/roce"
+                  />
+                }
+              </div>
+              <div class="gen-actions">
+                <input
+                  name="rdmaDevice"
+                  class="gen-input"
+                  type="text"
+                  [value]="rdmaDevice()"
+                  (input)="rdmaDevice.set(value($event))"
+                  placeholder="device, e.g. mlx5_0"
+                />
+                <input
+                  name="rdmaGidIndex"
+                  class="gen-input"
+                  type="text"
+                  [value]="rdmaGidIndex()"
+                  (input)="rdmaGidIndex.set(value($event))"
+                  placeholder="GID index"
+                />
+              </div>
+            }
+          }
+
+          <div class="gen-field">
+            <label class="gen-label" for="nn-duration">Engine timeout</label>
+            <input
+              id="nn-duration"
+              name="maxDuration"
+              class="gen-input"
+              type="text"
+              [value]="maxDuration()"
+              (input)="maxDuration.set(value($event))"
+            />
+            <div class="gen-hint">An engine stops this long after it was last set; at most 2h.</div>
+          </div>
+
+          <div class="gen-field">
+            <span class="gen-label">Opt-ins</span>
+            @for (o of optInChoices(); track o) {
+              <label class="gen-check">
+                <input
+                  type="checkbox"
+                  [name]="'optin-' + o"
+                  [checked]="optIns().includes(o)"
+                  (change)="toggleOptIn(o, checked($event))"
+                />
+                {{ o }}
+              </label>
+            }
+          </div>
+
+          <div class="gen-field">
+            <label class="gen-label" for="nn-ttl">Expiry</label>
+            <select
+              id="nn-ttl"
+              name="ttl"
+              class="gen-select"
+              [value]="ttl()"
+              (change)="ttl.set(value($event))"
+            >
+              @for (t of ttls(); track t) {
+                <option [value]="t" [selected]="t === ttl()">{{ t }}</option>
+              }
+            </select>
+          </div>
+
+          <div class="gen-field">
+            <label class="gen-check">
+              <input
+                type="checkbox"
+                name="routed"
+                [checked]="routed()"
+                (change)="routed.set(checked($event))"
+              />
+              Route the UI through the gateway
+            </label>
+            <div class="gen-hint">
+              Without it the page has no link to open. The function's API is unauthenticated, so the
+              route hands load control to anyone who reaches the gateway host.
+            </div>
+          </div>
+
+          @if (formError(); as text) {
+            <div class="gen-errors" aria-live="polite">{{ text }}</div>
+          }
+
+          <button type="submit" class="gen-book" [disabled]="submitting() || full()">
+            {{ submitting() ? 'Booking...' : 'Book' }}
+          </button>
+
+          @if (full()) {
+            <div class="flow empty">
+              As many noisy neighbours as this install allows at once. Release one first.
+            </div>
+          }
+        </form>
+      } @else {
+        <div class="flow empty">
+          Noisy neighbours are switched off on this install. Booking one grants the aggregator claim
+          create and delete in the production namespace, and nothing in front of this API
+          authenticates.
+        </div>
+      }
+    </div>
+  </aside>
+
+  <aside class="panel">
+    <div class="gwbar">
+      <h2>
+        Booked here
+        <span class="of-count">{{ booked().length ? '(' + booked().length + ')' : '' }}</span>
+      </h2>
+      @if (deleteError(); as text) {
+        <div class="gen-errors" aria-live="polite">{{ text }}</div>
+      }
+      @if (listError(); as text) {
+        <div class="gen-errors">{{ text }}</div>
+      }
+      <div class="flows">
+        @for (n of booked(); track n.name) {
+          <div class="flow">
+            <div class="gen-head">
+              @if (n.uiUrl; as ui) {
+                <a class="ring-link" [href]="ui" target="_blank" rel="noopener noreferrer"
+                  ><b>{{ n.name }}</b></a
+                >
+              } @else {
+                <b>{{ n.name }}</b>
+              }
+              <span class="of-count">{{ n.role }}</span>
+              <span class="pill">{{
+                n.deleting ? 'Releasing' : n.ready ? 'Ready' : n.phase || 'Pending'
+              }}</span>
+            </div>
+            <div class="gen-note">
+              {{ n.node ? 'on ' + n.node : 'not scheduled' }} | {{ n.placement }}
+              @if (n.sink) {
+                | sends to {{ n.sink }}
+              }
+            </div>
+            <button
+              type="button"
+              class="gen-drop"
+              [disabled]="isDeleting(n.name) || n.deleting"
+              (click)="remove(n.name)"
+            >
+              {{ isDeleting(n.name) ? 'Releasing...' : 'Release' }}
+            </button>
+          </div>
+        } @empty {
+          <div class="flow empty">
+            Nothing booked from this page. Claims booked elsewhere are not listed here, and cannot
+            be released from here.
+          </div>
+        }
+      </div>
+    </div>
+  </aside>
+</main>

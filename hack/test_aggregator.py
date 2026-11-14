@@ -2376,3 +2376,404 @@ class BookedServices(unittest.TestCase):
 
         self.assertEqual(got[0]["claim"], "mcm")
 
+
+class FakeClaims:
+    """A claim namespace, its pods and the node list, behind safe_k8s and
+    k8s_json. A POSTed claim is stored as sent; publish names the claims whose
+    handle carries endpoints once they exist."""
+
+    def __init__(self, claims=(), pods=(), nodes=("worker-1", "worker-2")):
+        self.claims = {c["metadata"]["name"]: c for c in claims}
+        self.pods = list(pods)
+        self.nodes = list(nodes)
+        self.calls = []
+        self.publish = True
+
+    def _selected(self, query):
+        selector = urllib.parse.unquote(urllib.parse.parse_qs(query).get("labelSelector",
+                                                                          [""])[0])
+        want = dict(term.split("=", 1) for term in selector.split(",") if "=" in term)
+        return [c for c in self.claims.values()
+                if all((c["metadata"].get("labels") or {}).get(k) == v
+                       for k, v in want.items())]
+
+    def safe_k8s(self, path):
+        self.calls.append(("GET", path))
+        base, _, query = path.partition("?")
+        if base == "/api/v1/nodes":
+            return {"items": [{"metadata": {"name": n}} for n in self.nodes]}
+        if base.endswith("/pods"):
+            selector = urllib.parse.parse_qs(query).get("labelSelector", [""])[0]
+            key, _, values = selector.partition(" in (")
+            if values:
+                wanted = values.rstrip(")").split(",")
+            else:
+                key, _, value = selector.partition("=")
+                wanted = [value]
+            return {"items": [p for p in self.pods
+                              if p["metadata"]["labels"].get(key) in wanted]}
+        if base.endswith("/mediafunctionclaims"):
+            return {"items": self._selected(query) if query else list(self.claims.values())}
+        name = base.rsplit("/", 1)[1]
+        claim = self.claims.get(name)
+        if not claim:
+            return {"_error": "404"}
+        if self.publish and agg._is_noisy(claim):
+            claim.setdefault("status", {})["handle"] = {"endpoints": [
+                {"name": "ui", "url": f"http://{name}.ns:8080/"},
+                {"name": "api", "url": f"http://{name}.ns:8080/api/v1/"}]}
+        return claim
+
+    def k8s_json(self, path, method="GET", body=None):
+        self.calls.append((method, path))
+        if method == "POST":
+            self.claims[body["metadata"]["name"]] = body
+            return 201, body
+        if method == "DELETE":
+            self.claims.pop(path.rsplit("/", 1)[1], None)
+            return 200, {}
+        return 405, {}
+
+    def posted(self):
+        return [p for m, p in self.calls if m == "POST"]
+
+    def deleted(self):
+        return [p.rsplit("/", 1)[1] for m, p in self.calls if m == "DELETE"]
+
+
+def noisy_claim(name, role="aggressor", component=None, **labels):
+    return {"metadata": {"name": name, "labels": {
+        agg._GEN_LABEL_MANAGED: agg.GEN_MANAGER,
+        agg._GEN_LABEL_COMPONENT: component or agg._NOISY_COMPONENT, **labels}},
+        "spec": {"className": "noisy-neighbour", "parameters": {"role": role}}}
+
+
+class NoisyBase(unittest.TestCase):
+    def cluster(self, *args, **kwargs):
+        self.k8s = FakeClaims(*args, **kwargs)
+        patches = [
+            mock.patch.object(agg, "NOISY_ENABLED", True),
+            mock.patch.object(agg, "safe_k8s", self.k8s.safe_k8s),
+            mock.patch.object(agg, "k8s_json", self.k8s.k8s_json),
+            mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return self.k8s
+
+
+class NoisyValidation(unittest.TestCase):
+    """The aggregator is the authority on what reaches the claim: the class's
+    API is unauthenticated, so a booking that reserves more than a node holds
+    or names a field the chart does not know is refused here."""
+
+    def check(self, req, fragment):
+        bad = agg._validate_noisy(req)
+        self.assertIsNotNone(bad, req)
+        self.assertIn(fragment, bad)
+
+    def test_accepts_a_full_aggressor(self):
+        self.assertIsNone(agg._validate_noisy({
+            "role": "aggressor", "label": "cpu", "ttl": "1h",
+            "placement": {"victim": "writer-mxl-1"},
+            "resources": {"requests": {"cpu": "1500m", "memory": "2Gi"}},
+            "storage": {"enabled": True, "size": "20Gi"}, "gpu": {"enabled": False},
+            "limits": {"maxDuration": "1h30m", "optIns": ["line-rate"]},
+            "ingress": {"httproute": {"enabled": True}}}))
+
+    def test_refuses_an_unknown_role(self):
+        for role in (None, "victim", "", 1):
+            self.check({"role": role}, "role must be one of")
+
+    def test_refuses_unknown_fields_at_every_level(self):
+        self.check({"role": "sink", "replicas": 3}, "unknown field replicas")
+        self.check({"role": "sink", "fabric": {"enabled": True, "privileged": True}},
+                   "unknown field privileged in fabric")
+        self.check({"role": "sink", "resources": {"limits": {}}},
+                   "unknown field limits in resources")
+        self.check({"role": "sink", "ingress": {"httproute": {"enabled": True, "x": 1}}},
+                   "unknown field x in ingress.httproute")
+
+    def test_placement_is_a_node_or_a_victim(self):
+        self.check({"role": "aggressor",
+                    "placement": {"nodeName": "worker-1", "victim": "writer-mxl-1"}},
+                   "not both")
+        self.check({"role": "aggressor", "placement": {"nodeName": "Worker_1"}},
+                   "node must be a Kubernetes node name")
+        self.check({"role": "aggressor", "placement": {"victim": "a/b"}},
+                   "victim must be the name of a claim")
+
+    def test_bounds_the_resources(self):
+        for cpu in ("0", "33", "40000m", "2 cores", 2, "1.2345"):
+            self.check({"role": "aggressor", "resources": {"requests": {"cpu": cpu}}},
+                       "cpu must be a quantity")
+        for memory in ("65Gi", "1G", "0Mi", 512):
+            self.check({"role": "aggressor", "resources": {"requests": {"memory": memory}}},
+                       "memory must be a quantity")
+        self.check({"role": "aggressor", "storage": {"enabled": True, "size": "1Ti"}},
+                   "storage size must be")
+
+    def test_bounds_the_duration_at_two_hours(self):
+        for duration in ("2h1m", "3h", "0m", "", "15 minutes", 900):
+            self.check({"role": "aggressor", "limits": {"maxDuration": duration}},
+                       "maxDuration must be")
+        self.assertIsNone(agg._validate_noisy(
+            {"role": "aggressor", "limits": {"maxDuration": "2h"}}))
+
+    def test_opt_ins_are_a_subset(self):
+        self.check({"role": "aggressor", "limits": {"optIns": ["unbounded"]}},
+                   "optIns must be a subset")
+        self.check({"role": "aggressor", "limits": {"optIns": ["multicast", "multicast"]}},
+                   "optIns must be a subset")
+
+    def test_fabric_takes_networks_or_host_network(self):
+        self.check({"role": "sink", "fabric": {"enabled": True, "networks": "fabric/roce",
+                                               "hostNetwork": True}}, "not both")
+        self.check({"role": "sink", "fabric": {"networks": "a b"}}, "fabric.networks")
+        self.check({"role": "sink", "network": {"rdmaGidIndex": 256}}, "rdmaGidIndex")
+        self.check({"role": "sink", "network": {"rdmaDevice": "mlx5;0"}}, "rdmaDevice")
+
+    def test_a_sender_names_a_sink_booked_here(self):
+        self.check({"role": "sender"}, "needs the sink")
+        self.check({"role": "sender", "peer": "writer-mxl-1"}, "booked from this page")
+        self.check({"role": "sink", "peer": "noisy-x-0000"}, "only a sender")
+
+    def test_a_pair_checks_each_side(self):
+        bad = agg._validate_noisy_pair({"sink": {"placement": {"nodeName": "-x"}}})
+        self.assertTrue(bad.startswith("sink: node must be"))
+        bad = agg._validate_noisy_pair({"sender": {"storage": {"enabled": True}}})
+        self.assertEqual(bad, "unknown field storage in sender")
+        self.assertIn("unknown field role",
+                      agg._validate_noisy_pair({"role": "sink"}))
+
+
+class NoisyClaim(NoisyBase):
+    """What a booking becomes: the chart's values interface, nothing more."""
+
+    def test_an_aggressor_beside_a_victim(self):
+        k8s = self.cluster(
+            claims=[{"metadata": {"name": "writer-mxl-1"}, "spec": {}}],
+            pods=[{"metadata": {"labels": {agg._INSTANCE_LABEL: "writer-mxl-1"}},
+                   "spec": {"nodeName": "worker-2"}}])
+        code, row = agg.noisy_create({
+            "role": "aggressor", "label": "Cache", "placement": {"victim": "writer-mxl-1"},
+            "resources": {"requests": {"cpu": "2"}}, "gpu": {"enabled": True}})
+        self.assertEqual(code, 201, row)
+        claim = k8s.claims[row["name"]]
+        self.assertTrue(row["name"].startswith("noisy-cache-"))
+        params = claim["spec"]["parameters"]
+        self.assertEqual(claim["spec"]["className"], agg.NOISY_CLASS)
+        self.assertEqual(params["role"], "aggressor")
+        # The chart turns this into a required pod affinity on the node.
+        self.assertEqual(params["placement"], {
+            "victimSelector": {"matchLabels": {agg._INSTANCE_LABEL: "writer-mxl-1"}},
+            "victimNamespaces": [agg.CLAIM_NS]})
+        self.assertEqual(params["resources"], {"requests": {"cpu": "2"}})
+        self.assertEqual(params["gpu"], {"enabled": True})
+        self.assertEqual(params["limits"], {"maxDuration": "15m", "optIns": []})
+        # The page links the function's UI, which only the route makes reachable.
+        self.assertEqual(params["ingress"], {"httproute": {"enabled": True}})
+        self.assertNotIn("storage", params)
+        self.assertIn("window", claim["spec"]["booking"])
+        self.assertEqual(claim["metadata"]["labels"][agg._GEN_LABEL_COMPONENT],
+                         agg._NOISY_COMPONENT)
+        self.assertEqual(row["placement"], "beside writer-mxl-1")
+
+    def test_refuses_a_victim_with_no_pod(self):
+        """Required pod affinity to nothing leaves the booking Pending for good."""
+        k8s = self.cluster(claims=[{"metadata": {"name": "mediamtx"}, "spec": {}}])
+        code, res = agg.noisy_create({"role": "aggressor", "placement": {"victim": "mediamtx"}})
+        self.assertEqual(code, 409)
+        self.assertIn("no pod", res["error"])
+        self.assertEqual(k8s.posted(), [])
+
+    def test_refuses_a_node_the_cluster_does_not_have(self):
+        k8s = self.cluster()
+        code, res = agg.noisy_create({"role": "aggressor", "placement": {"nodeName": "worker-9"}})
+        self.assertEqual(code, 404)
+        self.assertEqual(k8s.posted(), [])
+        code, _ = agg.noisy_create({"role": "aggressor", "placement": {"nodeName": "worker-2"}})
+        self.assertEqual(code, 201)
+        claim = next(iter(k8s.claims.values()))
+        self.assertEqual(claim["spec"]["parameters"]["placement"], {"nodeName": "worker-2"})
+
+    def test_fabric_options_reach_the_chart(self):
+        k8s = self.cluster()
+        agg.noisy_create({"role": "sink", "fabric": {"enabled": True, "networks": "fabric/roce"},
+                          "network": {"rdmaDevice": "mlx5_bond_0", "rdmaGidIndex": 0},
+                          "ingress": {"httproute": {"enabled": False}}})
+        params = next(iter(k8s.claims.values()))["spec"]["parameters"]
+        self.assertEqual(params["fabric"], {"enabled": True, "networks": "fabric/roce"})
+        # GID index 0 is a choice, not an absence.
+        self.assertEqual(params["network"], {"rdmaDevice": "mlx5_bond_0", "rdmaGidIndex": 0})
+        self.assertEqual(params["ingress"], {"httproute": {"enabled": False}})
+
+    def test_stops_at_the_install_ceiling(self):
+        k8s = self.cluster(claims=[noisy_claim(f"noisy-a-{i}") for i in range(agg.NOISY_MAX)])
+        code, res = agg.noisy_create({"role": "aggressor"})
+        self.assertEqual(code, 409)
+        self.assertIn("release one first", res["error"])
+        self.assertEqual(k8s.posted(), [])
+
+    def test_a_sender_targets_the_sinks_service_root(self):
+        """The sender appends /api/v1/sink itself, so the api endpoint, which
+        already ends in /api/v1/, would make it ask for /api/v1/api/v1/sink."""
+        k8s = self.cluster(claims=[noisy_claim("noisy-s-0001", role="sink")])
+        code, row = agg.noisy_create({"role": "sender", "peer": "noisy-s-0001"})
+        self.assertEqual(code, 201, row)
+        claim = k8s.claims[row["name"]]
+        self.assertEqual(claim["spec"]["parameters"]["network"]["peer"],
+                         "http://noisy-s-0001.ns:8080/")
+        self.assertEqual(claim["metadata"]["labels"][agg._NOISY_LABEL_SINK], "noisy-s-0001")
+        self.assertEqual(row["sink"], "noisy-s-0001")
+
+    def test_a_sender_refuses_a_sink_from_elsewhere(self):
+        self.cluster(claims=[noisy_claim("noisy-s-0001", role="aggressor"),
+                             noisy_claim("noisy-g-0001", role="sink",
+                                         component=agg._GEN_COMPONENT)])
+        for peer in ("noisy-s-0001", "noisy-g-0001", "noisy-none-0001"):
+            code, _ = agg.noisy_create({"role": "sender", "peer": peer})
+            self.assertEqual(code, 404, peer)
+
+
+class NoisyPair(NoisyBase):
+    """A pair books the sink first and gives the sender the address the sink's
+    claim publishes, rather than one derived from its name."""
+
+    def setUp(self):
+        self.k8s = self.cluster()
+        self.clock = [0.0]
+        for target, fake in (("monotonic", lambda: self.clock[0]),
+                             ("sleep", lambda s: self.clock.__setitem__(0, self.clock[0] + s))):
+            p = mock.patch.object(agg.time, target, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_books_the_sink_before_the_sender(self):
+        code, res = agg.noisy_pair_create({
+            "label": "rdma", "sink": {"placement": {"nodeName": "worker-1"}},
+            "sender": {"placement": {"nodeName": "worker-2"}},
+            "fabric": {"enabled": True, "hostNetwork": True}})
+        self.assertEqual(code, 201, res)
+        sink, sender = res["noisy"]
+        self.assertEqual((sink["role"], sender["role"]), ("sink", "sender"))
+        bodies = list(self.k8s.claims.values())
+        self.assertEqual([b["spec"]["parameters"]["role"] for b in bodies],
+                         ["sink", "sender"])
+        sender_claim = self.k8s.claims[sender["name"]]
+        self.assertEqual(sender_claim["spec"]["parameters"]["network"]["peer"],
+                         f"http://{sink['name']}.ns:8080/")
+        self.assertEqual(sender_claim["metadata"]["labels"][agg._NOISY_LABEL_SINK],
+                         sink["name"])
+        for b in bodies:
+            self.assertEqual(b["spec"]["parameters"]["fabric"],
+                             {"enabled": True, "hostNetwork": True})
+
+    def test_releases_the_sink_when_it_publishes_no_address(self):
+        self.k8s.publish = False
+        code, res = agg.noisy_pair_create({})
+        self.assertEqual(code, 504)
+        self.assertIn("was released", res["error"])
+        self.assertEqual(len(self.k8s.posted()), 1)
+        self.assertEqual(self.k8s.claims, {})
+        self.assertGreaterEqual(self.clock[0], agg._NOISY_PEER_WAIT)
+
+    def test_books_nothing_when_a_placement_does_not_resolve(self):
+        code, res = agg.noisy_pair_create({"sender": {"placement": {"nodeName": "worker-9"}}})
+        self.assertEqual(code, 404)
+        self.assertTrue(res["error"].startswith("sender: "))
+        self.assertEqual(self.k8s.posted(), [])
+
+    def test_needs_room_for_both(self):
+        for i in range(agg.NOISY_MAX - 1):
+            self.k8s.claims[f"noisy-a-{i}"] = noisy_claim(f"noisy-a-{i}")
+        code, _ = agg.noisy_pair_create({})
+        self.assertEqual(code, 409)
+        self.assertEqual(self.k8s.posted(), [])
+
+
+class NoisyRelease(NoisyBase):
+    """Ownership: the prefix and the component label both have to match, so no
+    other page's claims and none of the chart's are in reach."""
+
+    def test_refuses_a_name_without_the_prefix(self):
+        k8s = self.cluster(claims=[noisy_claim("writer-mxl-1")])
+        code, _ = agg.noisy_delete("writer-mxl-1")
+        self.assertEqual(code, 400)
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_refuses_another_components_claim(self):
+        for component in (agg._GEN_COMPONENT, agg._BOOKING_COMPONENT, agg._READER_COMPONENT):
+            k8s = self.cluster(claims=[noisy_claim("noisy-x-0001", component=component)])
+            code, _ = agg.noisy_delete("noisy-x-0001")
+            self.assertEqual(code, 403, component)
+            self.assertEqual(k8s.deleted(), [])
+
+    def test_no_other_page_reaches_a_noisy_neighbour(self):
+        self.cluster(claims=[noisy_claim("generator-x-0001"), noisy_claim("booked-x-0001")])
+        with mock.patch.object(agg, "GEN_ENABLED", True), \
+                mock.patch.object(agg, "BOOKING_ENABLED", True):
+            self.assertEqual(agg.generator_delete("generator-x-0001")[0], 403)
+            self.assertEqual(agg.reader_delete("generator-x-0001")[0], 403)
+            self.assertEqual(agg.booking_delete("booked-x-0001")[0], 403)
+        self.assertEqual(self.k8s.deleted(), [])
+
+    def test_releasing_a_sink_releases_its_senders(self):
+        k8s = self.cluster(claims=[
+            noisy_claim("noisy-s-0001", role="sink"),
+            noisy_claim("noisy-t-0001", role="sender",
+                        **{agg._NOISY_LABEL_SINK: "noisy-s-0001"}),
+            noisy_claim("noisy-t-0002", role="sender",
+                        **{agg._NOISY_LABEL_SINK: "noisy-s-0009"}),
+        ])
+        code, res = agg.noisy_delete("noisy-s-0001")
+        self.assertEqual(code, 200)
+        self.assertIsNone(res["error"])
+        self.assertEqual(k8s.deleted(), ["noisy-s-0001", "noisy-t-0001"])
+
+    def test_releasing_a_sender_leaves_its_sink(self):
+        k8s = self.cluster(claims=[
+            noisy_claim("noisy-s-0001", role="sink"),
+            noisy_claim("noisy-t-0001", role="sender",
+                        **{agg._NOISY_LABEL_SINK: "noisy-s-0001"})])
+        agg.noisy_delete("noisy-t-0001")
+        self.assertEqual(k8s.deleted(), ["noisy-t-0001"])
+
+
+class NoisyListing(NoisyBase):
+    def test_a_row_carries_node_readiness_and_the_ui_link(self):
+        claim = noisy_claim("noisy-a-0001")
+        claim["metadata"]["creationTimestamp"] = "2026-01-01T00:00:00Z"
+        claim["status"] = {"phase": "Bound", "handle": {"ready": True, "endpoints": [
+            {"name": "ui", "url": "http://noisy-a-0001.ns:8080/",
+             "externalUrl": "https://noisy-a-0001-ns.example/"},
+            {"name": "status", "url": "http://noisy-a-0001.ns:8080/api/v1/status"}]}}
+        self.cluster(claims=[claim, {"metadata": {"name": "writer-mxl-1"}, "spec": {}}],
+                     pods=[{"metadata": {"labels": {agg._INSTANCE_LABEL: "noisy-a-0001"}},
+                            "spec": {"nodeName": "worker-2"}}])
+        self.k8s.publish = False
+        res = agg.noisy()
+        row = res["noisy"][0]
+        self.assertEqual(row["node"], "worker-2")
+        self.assertTrue(row["ready"])
+        self.assertEqual(row["uiUrl"], "https://noisy-a-0001-ns.example/")
+        self.assertEqual([e["name"] for e in row["endpoints"]], ["ui"])
+        self.assertEqual(row["placement"], "any node")
+        self.assertEqual(res["nodes"], ["worker-1", "worker-2"])
+        # A noisy neighbour is not offered as a victim.
+        self.assertEqual(res["victims"], ["writer-mxl-1"])
+
+    def test_no_link_before_the_handle_is_ready(self):
+        claim = noisy_claim("noisy-a-0001")
+        claim["status"] = {"handle": {"ready": False, "endpoints": [
+            {"name": "ui", "url": "u", "externalUrl": "https://x.example/"}]}}
+        self.assertIsNone(agg._noisy_row(claim)["uiUrl"])
+
+    def test_off_lists_nothing_and_refuses_writes(self):
+        with mock.patch.object(agg, "NOISY_ENABLED", False), \
+                mock.patch.object(agg, "safe_k8s", lambda *a: self.fail("read while off")):
+            self.assertEqual(agg.noisy()["noisy"], [])
+            self.assertEqual(agg.noisy_create({"role": "sink"})[0], 403)
+            self.assertEqual(agg.noisy_pair_create({})[0], 403)
+            self.assertEqual(agg.noisy_delete("noisy-a-0001")[0], 403)

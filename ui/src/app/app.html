@@ -22,6 +22,9 @@
   </a>
   <a class="tab" routerLink="/gen" routerLinkActive="active">Generators</a>
   <a class="tab" routerLink="/book" routerLinkActive="active">Bookings</a>
+  @if (noisy()) {
+    <a class="tab" routerLink="/noisy" routerLinkActive="active">Noisy neighbour</a>
+  }
 </nav>
 
 <router-outlet />

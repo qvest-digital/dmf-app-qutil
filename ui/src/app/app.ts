@@ -1,5 +1,8 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { catchError, map, of } from 'rxjs';
+import { MetricsApi } from './core/api/metrics-api';
 import { QutilLogo } from './shared/qutil-logo';
 import { QvestLogo } from './shared/qvest-logo';
 
@@ -24,6 +27,19 @@ function wallClock(): string {
 })
 export class App {
   protected readonly clock = signal(wallClock());
+
+  /** The Noisy neighbour tab only where the install turned the page on: it
+   *  books load onto nodes others measure on, and most installs leave it off.
+   *  Asked once; the route itself still says so when reached directly. */
+  protected readonly noisy = toSignal(
+    inject(MetricsApi)
+      .noisy()
+      .pipe(
+        map((res) => res.enabled === true),
+        catchError(() => of(false)),
+      ),
+    { initialValue: false },
+  );
 
   constructor() {
     const tick = setInterval(() => this.clock.set(wallClock()), CLOCK_MS);
