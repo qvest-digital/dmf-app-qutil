@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.63](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.62...v1.0.0-rc.63) (2026-11-14)
+
+
+### Features
+
+* **ui:** book noisy-neighbour load beside a booking from a new tab ([#243](https://github.com/qvest-digital/dmf-app-qutil/issues/243)) ([a77a7a9](https://github.com/qvest-digital/dmf-app-qutil/commit/a77a7a9b7b0bd5a31cea36b0d3a00674e9716d41))
+
+
+### Bug Fixes
+
+* **chart:** report a booking ready from its handle's ready flag ([#242](https://github.com/qvest-digital/dmf-app-qutil/issues/242)) ([18e60e6](https://github.com/qvest-digital/dmf-app-qutil/commit/18e60e681c7b93c971d5f2f48d4b6733067447f3))
+* **chart:** write one audio PES per AAC frame in the Ross source ([#239](https://github.com/qvest-digital/dmf-app-qutil/issues/239)) ([557acce](https://github.com/qvest-digital/dmf-app-qutil/commit/557acce25bc959ad266fe3a15c69ce833f0381a0))
+
 ## [1.0.0-rc.62](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.61...v1.0.0-rc.62) (2026-11-12)
 
 
