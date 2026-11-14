@@ -2277,6 +2277,19 @@ class ClientHangUp(unittest.TestCase):
             get("/api/flows", wfile=Reset())
 
 
+class BookingRow(unittest.TestCase):
+    # The lifecycle plane publishes readiness as handle.ready and no handle
+    # name, so a row that read the name reported every booking as not ready.
+    def test_ready_follows_the_handle(self):
+        claim = {"metadata": {"name": "booked-x"}, "spec": {"className": "c"},
+                 "status": {"phase": "Bound", "handle": {"ready": True, "endpoints": []}}}
+        self.assertTrue(agg._booking_row(claim)["ready"])
+        claim["status"]["handle"]["ready"] = False
+        self.assertFalse(agg._booking_row(claim)["ready"])
+        self.assertFalse(agg._booking_row({"metadata": {"name": "booked-y"}})["ready"])
+
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -2362,3 +2375,4 @@ class BookedServices(unittest.TestCase):
             got = agg.booked_services()
 
         self.assertEqual(got[0]["claim"], "mcm")
+
