@@ -41,8 +41,9 @@ describe('App', () => {
       'Diagnostics',
       'Generators',
       'Bookings',
+      'Monitor',
     ]);
-    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book']);
+    expect(tabs.map((t) => t.getAttribute('href'))).toEqual(['/', '/gen', '/book', '/mon']);
   });
 
   /** The page books load onto shared nodes, so its tab appears only where the
