@@ -2593,7 +2593,7 @@ def _booking_row(claim):
         "className": spec.get("className"),
         "created": meta.get("creationTimestamp"),
         "phase": status.get("phase") or "",
-        "ready": bool(handle.get("name")),
+        "ready": bool(handle.get("ready")),
         "endpoints": [{"name": e.get("name"), "url": e.get("url")}
                       for e in (handle.get("endpoints") or [])],
         "flowIds": _claim_flow_ids(claim),
