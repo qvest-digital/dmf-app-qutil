@@ -45,6 +45,28 @@ function hex(value: number): string {
             }
           </div>
         }
+        <!-- Captions read as text like a screen shows them; the packets that
+             carry them stay below with the rest. -->
+        @for (screen of screens(); track screen.key) {
+          <div class="anc-cc">
+            <div class="anc-cc-head">
+              <span class="anc-tc-k">{{ screen.label }}</span>
+              @if (screen.language) {
+                <span class="anc-tc-k">{{ screen.language }}</span>
+              }
+            </div>
+            <div class="anc-cc-screen">
+              @for (row of screen.rows; track $index) {
+                <div class="anc-cc-row">{{ row }}</div>
+              } @empty {
+                <div class="anc-cc-blank">no caption on screen</div>
+              }
+            </div>
+          </div>
+        }
+        @if (captionFaults(); as faults) {
+          <div class="anc-note">{{ faults }}</div>
+        }
         <div class="anc-head">
           <span class="anc-k">grain</span>
           <span class="anc-v">{{ g.index }}</span>
@@ -94,6 +116,42 @@ export class AncGrainView {
       if (tc) return tc;
     }
     return null;
+  });
+
+  /** CEA-708 services first: a sender writing both carries the same text twice. */
+  protected readonly screens = computed(() => {
+    const c = this.grain()?.captions;
+    if (!c) return [];
+    return [
+      ...(c.cea708 ?? []).map((s) => ({
+        key: `708-${s.service}`,
+        label: `CEA-708 service ${s.service}`,
+        language: s.language,
+        rows: s.rows,
+      })),
+      ...(c.cea608 ?? []).map((s) => ({
+        key: `608-${s.channel}`,
+        label: `CEA-608 ${s.channel}`,
+        language: s.language,
+        rows: s.rows,
+      })),
+    ];
+  });
+
+  /** Only the counters that say the text may be wrong, and only when they do. */
+  protected readonly captionFaults = computed(() => {
+    const c = this.grain()?.captions;
+    if (!c) return '';
+    const faults: [number, string][] = [
+      [c.badCdps, 'bad CDPs'],
+      [c.parityErrors, 'parity errors'],
+      [c.droppedPackets, 'dropped 708 packets'],
+      [c.resets, 'screen resets'],
+    ];
+    return faults
+      .filter(([n]) => n > 0)
+      .map(([n, what]) => `${n} ${what}`)
+      .join(', ');
   });
 
   protected readonly countMismatch = computed(() => {

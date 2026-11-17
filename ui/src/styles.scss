@@ -646,6 +646,34 @@ main {
   color: var(--qv-orange);
   opacity: 1;
 }
+/* A caption screen: white on black like a decoder draws it, so it reads as
+   subtitles at a glance rather than as one more field. */
+.anc-cc {
+  padding-bottom: 10px;
+}
+.anc-cc-head {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+.anc-cc-screen {
+  background: #000;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 1.4em;
+}
+.anc-cc-row {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #fff;
+}
+.anc-cc-blank {
+  font-size: 12px;
+  opacity: 0.5;
+  line-height: 1.4;
+}
 .anc-pkt {
   background: rgba(255, 255, 255, 0.06);
   border-radius: 12px;
