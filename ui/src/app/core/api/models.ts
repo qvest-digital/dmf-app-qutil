@@ -298,7 +298,33 @@ export interface AncGrain {
   declaredCount?: number;
   ancCount?: number;
   elements?: AncElement[];
+  /** Absent until the flow has carried a caption distribution packet. */
+  captions?: AncCaptions;
   error?: string;
+}
+
+/** One caption channel or service: what is on screen now, top row first. */
+export interface AncCaptionScreen {
+  /** ISO 639-2 code from the packets' service information, when they carry one. */
+  language?: string;
+  rows: string[];
+  updated?: string;
+}
+
+/**
+ * The caption text the reader decodes by following every grain of the flow,
+ * which no single grain holds: roll-up rows scroll and pop-on captions are
+ * built out of sight over many frames.
+ */
+export interface AncCaptions {
+  cdps: number;
+  badCdps: number;
+  parityErrors: number;
+  droppedPackets: number;
+  missedGrains: number;
+  resets: number;
+  cea608?: (AncCaptionScreen & { channel: string })[];
+  cea708?: (AncCaptionScreen & { service: number })[];
 }
 
 /** What the aggregator reports about a preview path's readiness. */
