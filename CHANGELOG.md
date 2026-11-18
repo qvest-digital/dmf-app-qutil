@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.66](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.65...v1.0.0-rc.66) (2026-11-18)
+
+
+### Features
+
+* **preview:** show the caption text of an ANC data flow ([#248](https://github.com/qvest-digital/dmf-app-qutil/issues/248)) ([97ed6b8](https://github.com/qvest-digital/dmf-app-qutil/commit/97ed6b82a2644207abe6c4be9572f66194f352e1))
+
 ## [1.0.0-rc.65](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.64...v1.0.0-rc.65) (2026-11-14)
 
 
