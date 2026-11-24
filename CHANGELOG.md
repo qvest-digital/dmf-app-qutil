@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.67](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.66...v1.0.0-rc.67) (2026-11-24)
+
+
+### Bug Fixes
+
+* **aggregator:** take mirror grainAge from the target heartbeat Lease ([#250](https://github.com/qvest-digital/dmf-app-qutil/issues/250)) ([3249bfe](https://github.com/qvest-digital/dmf-app-qutil/commit/3249bfebcb6d1792cb07beb790bd85ddcb18112a))
+
 ## [1.0.0-rc.66](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.65...v1.0.0-rc.66) (2026-11-18)
 
 
