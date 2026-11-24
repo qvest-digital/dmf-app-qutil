@@ -54,6 +54,21 @@ describe('OperatorFlowList grouping', () => {
     expect(labelsIn(groups()[1])).toEqual([LONE.label]);
   });
 
+  /** A source with two flows of one kind shows both in its box, not one
+   *  inside and one as an unrelated flow. */
+  it('keeps every member of a group in its box', () => {
+    const second: OperatorFlow = {
+      ...AUDIO,
+      id: 'aea7b9e9-0000-0000-0000-000000000002',
+      label: 'srt-ingest-1-audio-2',
+    };
+    mount([second, LONE, VIDEO, AUDIO]);
+
+    expect(groups()).toHaveLength(2);
+    expect(labelsIn(groups()[0])).toEqual([VIDEO.label, second.label, AUDIO.label]);
+    expect(labelsIn(groups()[1])).toEqual([LONE.label]);
+  });
+
   it('gives an ungrouped flow a group of its own, so its box keeps every corner', () => {
     mount([LONE]);
 

@@ -113,7 +113,10 @@ export function inventoryRows(
     const others = grouped.filter((f) => !taken.has(f.id));
     for (const flow of others) taken.add(flow.id);
 
-    const outputs: FlowGroup = { name: bundled.map((v) => v.set.name).join(' + ') };
+    const outputs: FlowGroup = {
+      name: bundled.map((v) => v.set.name).join(' + '),
+      members: bundled.map((v) => v.output),
+    };
     for (const view of bundled) {
       const track = flowTrack(view.output);
       if (track && !outputs[track]) outputs[track] = view.output;
