@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.68](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.67...v1.0.0-rc.68) (2026-11-24)
+
+
+### Features
+
+* **ui:** keep every flow of an NMOS group in its box ([#254](https://github.com/qvest-digital/dmf-app-qutil/issues/254)) ([b5d7aa8](https://github.com/qvest-digital/dmf-app-qutil/commit/b5d7aa8b5e4805c28788a7fb5d55038de1b5c684))
+
+
+### Bug Fixes
+
+* **aggregator:** share one Lease list and flag unreadable heartbeats ([#252](https://github.com/qvest-digital/dmf-app-qutil/issues/252)) ([6569595](https://github.com/qvest-digital/dmf-app-qutil/commit/65695951eedc76f05da5ee969fc8860f0ce6cbde))
+
 ## [1.0.0-rc.67](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.66...v1.0.0-rc.67) (2026-11-24)
 
 
