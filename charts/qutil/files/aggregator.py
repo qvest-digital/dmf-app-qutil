@@ -622,6 +622,40 @@ def origin_leases():
     return out
 
 
+MIRROR_SIDE_LABEL = "mxl.qvest-digital.com/mirror-side"
+MIRROR_ANNOTATION = "mxl.qvest-digital.com/mirror"
+
+
+def mirror_heartbeats():
+    """Heartbeat Lease renewTime per mirror side, keyed by
+    ("<namespace>/<name>", "source" | "target").
+
+    A Ready mirror's status.lastGrainAt only moves on phase transitions; the
+    live progress time is the renewTime of the side's Lease (last committed
+    grain for the target, last completed transfer for the source). One list by
+    label covers every mirror. Returns {} when the Leases are unreadable or
+    absent, so callers fall back to the status field alone.
+    """
+    res = safe_k8s(
+        f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases"
+        f"?labelSelector={urllib.parse.quote(MIRROR_SIDE_LABEL)}")
+    out = {}
+    for ls in res.get("items", []) or []:
+        md = ls.get("metadata", {}) or {}
+        side = (md.get("labels") or {}).get(MIRROR_SIDE_LABEL)
+        mirror = (md.get("annotations") or {}).get(MIRROR_ANNOTATION)
+        renew = (ls.get("spec") or {}).get("renewTime")
+        if side and mirror and renew:
+            out[(mirror, side)] = renew
+    return out
+
+
+def _later(*stamps):
+    """The most recent of several RFC3339 stamps, as written; None if none parse."""
+    parsed = [(t, s) for s in stamps if (t := _renew_time(s)) is not None]
+    return max(parsed, key=lambda p: p[0])[1] if parsed else None
+
+
 def origin_health(fl, leases):
     """Three-state origin health for one MxlFlow.
 
@@ -730,15 +764,15 @@ def flow_media(d):
             out["grainBytes"] = gbytes
             # Nominal, not observed -- see the note in build()'s media block.
             # There is no live per-flow throughput anywhere in the control
-            # plane to report instead: mirrors expose lastGrainAt but no byte
-            # counters, so "last grain" is the only live delivery signal a
-            # non-compositor flow has.
+            # plane to report instead: mirrors expose a last-grain time but no
+            # byte counters, so "last grain" is the only live delivery signal
+            # a non-compositor flow has.
             out["nominalMbps"] = round(
                 gbytes * (out.get("fps") or GRAIN_RATE) * 8 / 1e6)
     return out
 
 
-def flow_detail(fl, d, uuid, receivers, mirrors):
+def flow_detail(fl, d, uuid, receivers, mirrors, heartbeats=None):
     """Everything the control plane knows about one flow, for the expandable
     row: the full definition, every condition (not just OriginFresh), and the
     receivers and mirrors wired to it -- including each mirror's Source/Target
@@ -754,11 +788,13 @@ def flow_detail(fl, d, uuid, receivers, mirrors):
                              or {}).get("name")}
             for r in receivers if (r.get("spec") or {}).get("flowID") == uuid]
 
+    heartbeats = heartbeats or {}
     mirs = []
     for m in mirrors:
         ms, mst = (m.get("spec") or {}), (m.get("status") or {})
         if ms.get("flowID") != uuid:
             continue
+        ref = f"{m['metadata'].get('namespace')}/{m['metadata']['name']}"
         mirs.append({
             "name": m["metadata"]["name"],
             "namespace": m["metadata"].get("namespace"),
@@ -769,7 +805,8 @@ def flow_detail(fl, d, uuid, receivers, mirrors):
             "attempts": mst.get("attemptCount"),
             # Empty string means "no error", which reads as a blank row.
             "lastError": mst.get("lastError") or None,
-            "grainAge": _age_secs(mst.get("lastGrainAt")),
+            "grainAge": _age_secs(_later(mst.get("lastGrainAt"),
+                                         heartbeats.get((ref, "target")))),
             "requestor": (ms.get("requestor") or {}).get("name"),
             "conditions": _conditions(m),
         })
@@ -831,6 +868,7 @@ def operator_flows():
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlreceivers").get("items", [])
     mirrors = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", [])
+    heartbeats = mirror_heartbeats()
     out = []
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
@@ -860,7 +898,7 @@ def operator_flows():
             **_definition_summary(d),
             "grouphint": grouphint,
             "locations": locations,
-            "detail": flow_detail(fl, d, uuid, receivers, mirrors),
+            "detail": flow_detail(fl, d, uuid, receivers, mirrors, heartbeats),
         }
         row.update(origin)
         out.append(row)
@@ -2486,6 +2524,7 @@ def monitor():
     flows = {}
     if wanted:
         leases = origin_leases()
+        heartbeats = mirror_heartbeats()
         mirrors = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", []) or []
         for fl in safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []) or []:
             d = (fl.get("spec") or {}).get("definition") or {}
@@ -2498,7 +2537,7 @@ def monitor():
                 "mediaType": d.get("media_type"),
                 "originNode": origin.get("originNode"),
                 "originFresh": origin.get("originFresh"),
-                "mirrors": flow_detail(fl, d, uuid, [], mirrors)["mirrors"],
+                "mirrors": flow_detail(fl, d, uuid, [], mirrors, heartbeats)["mirrors"],
             }
     return {"readerClass": READER_CLASS, "readers": readers, "flows": flows, "error": None}
 

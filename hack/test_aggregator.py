@@ -1670,6 +1670,72 @@ class ReaderExpectations(unittest.TestCase):
                          "checkValues must be true or false")
 
 
+class MirrorGrainAge(unittest.TestCase):
+    """grainAge follows the target heartbeat Lease: a Ready mirror's
+    status.lastGrainAt only moves on phase transitions, so on its own it
+    reports a healthy transfer as hours stale."""
+
+    FLOW = "d4d00000-0000-4000-8000-000000000002"
+
+    @staticmethod
+    def stamp(age_s):
+        t = agg.datetime.now(agg.timezone.utc) - agg.timedelta(seconds=age_s)
+        return t.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    def mirror(self, last_grain_age=None):
+        status = {"phase": "Ready"}
+        if last_grain_age is not None:
+            status["lastGrainAt"] = self.stamp(last_grain_age)
+        return {"metadata": {"name": "m1", "namespace": "p-a"},
+                "spec": {"flowID": self.FLOW, "sourceNode": "n1", "targetNode": "n2"},
+                "status": status}
+
+    def lease(self, side, age_s, mirror="p-a/m1"):
+        return {"metadata": {"labels": {agg.MIRROR_SIDE_LABEL: side},
+                             "annotations": {agg.MIRROR_ANNOTATION: mirror}},
+                "spec": {"renewTime": self.stamp(age_s)}}
+
+    def grain_age(self, mirror, leases):
+        paths = []
+
+        def safe_k8s(path):
+            paths.append(path)
+            return {"items": leases}
+
+        with mock.patch.object(agg, "safe_k8s", safe_k8s):
+            heartbeats = agg.mirror_heartbeats()
+        fl = video_flow(self.FLOW)
+        out = agg.flow_detail(fl, fl["spec"]["definition"], self.FLOW, [], [mirror], heartbeats)
+        return out["mirrors"][0]["grainAge"], paths
+
+    def test_target_lease_newer_than_status_wins(self):
+        age, paths = self.grain_age(self.mirror(last_grain_age=7200), [self.lease("target", 3)])
+        self.assertLessEqual(age, 4)
+        self.assertEqual(len(paths), 1)
+        self.assertIn("labelSelector=", paths[0])
+
+    def test_status_newer_than_lease_wins(self):
+        age, _ = self.grain_age(self.mirror(last_grain_age=2), [self.lease("target", 60)])
+        self.assertLessEqual(age, 3)
+
+    def test_status_alone_without_leases(self):
+        age, _ = self.grain_age(self.mirror(last_grain_age=90), [])
+        self.assertGreaterEqual(age, 90)
+        age, _ = self.grain_age(self.mirror(), [])
+        self.assertIsNone(age)
+
+    def test_source_lease_and_other_mirrors_do_not_count(self):
+        # The source side renews on transfers, not on committed grains, and a
+        # Lease of another mirror says nothing about this one.
+        leases = [self.lease("source", 1), self.lease("target", 1, "p-b/other")]
+        age, _ = self.grain_age(self.mirror(last_grain_age=600), leases)
+        self.assertGreaterEqual(age, 600)
+
+    def test_unreadable_leases_yield_no_heartbeats(self):
+        with mock.patch.object(agg, "safe_k8s", lambda path: {"_error": "forbidden"}):
+            self.assertEqual(agg.mirror_heartbeats(), {})
+
+
 class Monitor(unittest.TestCase):
     """Every reader claim in the namespace, whoever booked it, with what it
     reports, where its pod runs, and the replication behind each flow."""
