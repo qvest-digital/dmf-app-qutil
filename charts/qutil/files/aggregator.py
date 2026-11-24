@@ -591,7 +591,14 @@ def _renew_time(ts):
         return None
 
 
-def origin_leases():
+def list_leases():
+    """Every Lease in LEASE_NS, or {"_error": ...}. Origin and mirror heartbeat
+    Leases share the namespace, so one list serves origin_leases() and
+    mirror_heartbeats()."""
+    return safe_k8s(f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases")
+
+
+def origin_leases(res=None):
     """Per-flow origin Leases, keyed by "<flowID>-<nodeName>".
 
     That is exactly the name LeaseName() builds, so a (flow, node) lookup is a
@@ -601,7 +608,7 @@ def origin_leases():
     RBAC without the coordination.k8s.io read) so the caller can fall back to
     the condition instead of declaring every flow stale.
     """
-    res = safe_k8s(f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases")
+    res = list_leases() if res is None else res
     if "_error" in res:
         return None
     now = datetime.now(timezone.utc)
@@ -626,19 +633,19 @@ MIRROR_SIDE_LABEL = "mxl.qvest-digital.com/mirror-side"
 MIRROR_ANNOTATION = "mxl.qvest-digital.com/mirror"
 
 
-def mirror_heartbeats():
+def mirror_heartbeats(res=None):
     """Heartbeat Lease renewTime per mirror side, keyed by
     ("<namespace>/<name>", "source" | "target").
 
     A Ready mirror's status.lastGrainAt only moves on phase transitions; the
     live progress time is the renewTime of the side's Lease (last committed
-    grain for the target, last completed transfer for the source). One list by
-    label covers every mirror. Returns {} when the Leases are unreadable or
-    absent, so callers fall back to the status field alone.
+    grain for the target, last completed transfer for the source). Returns None
+    when the Leases are unreadable, {} when no mirror has one; either way
+    callers fall back to the status field alone.
     """
-    res = safe_k8s(
-        f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases"
-        f"?labelSelector={urllib.parse.quote(MIRROR_SIDE_LABEL)}")
+    res = list_leases() if res is None else res
+    if "_error" in res:
+        return None
     out = {}
     for ls in res.get("items", []) or []:
         md = ls.get("metadata", {}) or {}
@@ -772,7 +779,7 @@ def flow_media(d):
     return out
 
 
-def flow_detail(fl, d, uuid, receivers, mirrors, heartbeats=None):
+def flow_detail(fl, d, uuid, receivers, mirrors, heartbeats):
     """Everything the control plane knows about one flow, for the expandable
     row: the full definition, every condition (not just OriginFresh), and the
     receivers and mirrors wired to it -- including each mirror's Source/Target
@@ -788,6 +795,7 @@ def flow_detail(fl, d, uuid, receivers, mirrors, heartbeats=None):
                              or {}).get("name")}
             for r in receivers if (r.get("spec") or {}).get("flowID") == uuid]
 
+    unreadable = heartbeats is None
     heartbeats = heartbeats or {}
     mirs = []
     for m in mirrors:
@@ -805,6 +813,9 @@ def flow_detail(fl, d, uuid, receivers, mirrors, heartbeats=None):
             "attempts": mst.get("attemptCount"),
             # Empty string means "no error", which reads as a blank row.
             "lastError": mst.get("lastError") or None,
+            # True when the heartbeat Leases could not be read, so grainAge
+            # is the status field alone and may read stale.
+            "heartbeatsUnreadable": unreadable,
             "grainAge": _age_secs(_later(mst.get("lastGrainAt"),
                                          heartbeats.get((ref, "target")))),
             "requestor": (ms.get("requestor") or {}).get("name"),
@@ -860,7 +871,8 @@ def _definition_summary(d):
 def operator_flows():
     items = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", [])
-    leases = origin_leases()
+    lease_res = list_leases()
+    leases = origin_leases(lease_res)
     # All namespaces (no namespace segment): MxlFlow is cluster-scoped, so the
     # receivers and mirrors wired to one can live anywhere -- not only in this
     # aggregator's own namespace, which is all build() needs to look at.
@@ -868,7 +880,7 @@ def operator_flows():
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlreceivers").get("items", [])
     mirrors = safe_k8s(
         "/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", [])
-    heartbeats = mirror_heartbeats()
+    heartbeats = mirror_heartbeats(lease_res)
     out = []
     for fl in items:
         d = fl.get("spec", {}).get("definition", {}) or {}
@@ -2523,8 +2535,9 @@ def monitor():
 
     flows = {}
     if wanted:
-        leases = origin_leases()
-        heartbeats = mirror_heartbeats()
+        lease_res = list_leases()
+        leases = origin_leases(lease_res)
+        heartbeats = mirror_heartbeats(lease_res)
         mirrors = safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflowmirrors").get("items", []) or []
         for fl in safe_k8s("/apis/mxl.qvest-digital.com/v1alpha1/mxlflows").get("items", []) or []:
             d = (fl.get("spec") or {}).get("definition") or {}

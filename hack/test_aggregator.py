@@ -1409,7 +1409,7 @@ class RedundancySets(unittest.TestCase):
         patches = [
             mock.patch.object(agg, "redundancy_sets", lambda: (self.sets, None)),
             mock.patch.object(agg, "safe_k8s", self.safe_k8s),
-            mock.patch.object(agg, "origin_leases", lambda: {}),
+            mock.patch.object(agg, "origin_leases", lambda *a: {}),
         ]
         for p in patches:
             p.start()
@@ -1704,6 +1704,8 @@ class MirrorGrainAge(unittest.TestCase):
 
         with mock.patch.object(agg, "safe_k8s", safe_k8s):
             heartbeats = agg.mirror_heartbeats()
+            self.assertEqual(len(paths), 1)
+            self.assertNotIn("labelSelector", paths[0])
         fl = video_flow(self.FLOW)
         out = agg.flow_detail(fl, fl["spec"]["definition"], self.FLOW, [], [mirror], heartbeats)
         return out["mirrors"][0]["grainAge"], paths
@@ -1711,8 +1713,6 @@ class MirrorGrainAge(unittest.TestCase):
     def test_target_lease_newer_than_status_wins(self):
         age, paths = self.grain_age(self.mirror(last_grain_age=7200), [self.lease("target", 3)])
         self.assertLessEqual(age, 4)
-        self.assertEqual(len(paths), 1)
-        self.assertIn("labelSelector=", paths[0])
 
     def test_status_newer_than_lease_wins(self):
         age, _ = self.grain_age(self.mirror(last_grain_age=2), [self.lease("target", 60)])
@@ -1731,9 +1731,30 @@ class MirrorGrainAge(unittest.TestCase):
         age, _ = self.grain_age(self.mirror(last_grain_age=600), leases)
         self.assertGreaterEqual(age, 600)
 
-    def test_unreadable_leases_yield_no_heartbeats(self):
+    def test_one_lease_list_serves_origin_and_heartbeats(self):
+        calls = []
+
+        def safe_k8s(path):
+            calls.append(path)
+            return {"items": [self.lease("target", 3)]}
+
+        with mock.patch.object(agg, "safe_k8s", safe_k8s):
+            res = agg.list_leases()
+            agg.origin_leases(res)
+            heartbeats = agg.mirror_heartbeats(res)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(list(heartbeats), [("p-a/m1", "target")])
+
+    def test_unreadable_leases_are_flagged_on_each_mirror(self):
+        # Without the flag a failed list is indistinguishable from a mirror
+        # whose grain age really is hours.
         with mock.patch.object(agg, "safe_k8s", lambda path: {"_error": "forbidden"}):
-            self.assertEqual(agg.mirror_heartbeats(), {})
+            self.assertIsNone(agg.mirror_heartbeats())
+        fl = video_flow(self.FLOW)
+        for heartbeats, flagged in ((None, True), ({}, False)):
+            out = agg.flow_detail(fl, fl["spec"]["definition"], self.FLOW, [],
+                                  [self.mirror(5)], heartbeats)
+            self.assertEqual(out["mirrors"][0]["heartbeatsUnreadable"], flagged)
 
 
 class Monitor(unittest.TestCase):
@@ -1780,7 +1801,7 @@ class Monitor(unittest.TestCase):
                                   __exit__=lambda *a: False)
 
         for p in (mock.patch.object(agg, "safe_k8s", safe_k8s),
-                  mock.patch.object(agg, "origin_leases", lambda: {}),
+                  mock.patch.object(agg, "origin_leases", lambda *a: {}),
                   mock.patch.object(agg, "origin_health", lambda fl, l: {"originNode": "worker-1",
                                                                          "originFresh": True}),
                   mock.patch.object(agg.urllib.request, "urlopen", urlopen)):
