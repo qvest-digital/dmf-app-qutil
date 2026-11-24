@@ -57,6 +57,7 @@ describe('inventoryRows', () => {
     ]);
     expect(bundle.outputs).toEqual({
       name: 'p.prog-video + p.prog-audio',
+      members: [C1, C2],
       video: C1,
       audio: C2,
     });

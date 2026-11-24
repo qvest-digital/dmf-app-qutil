@@ -19,16 +19,24 @@ import { OperatorFlow } from '../../core/api/models';
  * A group resolves only inside its scope, and the default scope is one device.
  * Nothing in the flow inventory names the device a flow came from, so the scope
  * cannot be honoured: two devices of one model are meant to carry one group
- * name, and their flows merge into a single group here. Where that happens the
- * first flow of each track wins, which at least keeps the result stable against
- * a reordered poll.
+ * name, and their flows merge into a single group here.
+ *
+ * `members` is every flow the group names, by kind and then by role. The three
+ * tracks are what a combined preview plays: one flow each, picked from the
+ * members as `groupFlows` describes.
  */
 export interface FlowGroup {
   name: string;
+  members: OperatorFlow[];
   video?: OperatorFlow;
   audio?: OperatorFlow;
   data?: OperatorFlow;
 }
+
+const TRACKS = ['video', 'audio', 'data'] as const;
+
+/** The tracks a combined preview plays, in the order a group lists them. */
+export type Track = (typeof TRACKS)[number];
 
 export interface GroupHint {
   group: string;
@@ -64,7 +72,7 @@ export function parseGroupHint(hint: string | null | undefined): GroupHint | nul
  * member carries. The format does say, the aggregator already keys its preview
  * endpoints on it, and it is the same string a flow's badge shows.
  */
-export function flowTrack(flow: OperatorFlow): keyof Omit<FlowGroup, 'name'> | null {
+export function flowTrack(flow: OperatorFlow): Track | null {
   switch ((flow.format ?? '').trim().toLowerCase()) {
     case 'video':
       return 'video';
@@ -92,39 +100,48 @@ function byRole(a: string, b: string): number {
  * left out entirely: a group exists to say two flows belong together, and one
  * that cannot say so is not worth offering.
  *
+ * Every other flow is a member of its group, whatever else the group holds:
+ * an output written by several replicas names one group and one role for all
+ * of them, and they are one source however many there are.
+ *
  * A group may hold several flows of one track -- the register's own example is
- * a camera with two audio senders -- and a track has room for one. The lowest
- * role wins it, because that is what the register gives a role for: an index
- * into the group that sorts. Picking on the role rather than on the order the
- * flows arrived in also survives a reordered poll, and it is the difference
- * between `Audio 1` reaching a preview and whichever of `Audio 1` and `Audio 2`
- * happens to hold the lower uuid.
+ * a camera with two audio senders -- and the track a preview plays has room
+ * for one. The lowest role wins it, because that is what the register gives a
+ * role for: an index into the group that sorts. Picking on the role rather
+ * than on the order the flows arrived in also survives a reordered poll, and
+ * it is the difference between `Audio 1` reaching a preview and whichever of
+ * `Audio 1` and `Audio 2` happens to hold the lower uuid.
  */
 export function groupFlows(flows: readonly OperatorFlow[]): FlowGroup[] {
   const groups = new Map<string, FlowGroup>();
   const roles = new Map<string, string>();
-  for (const flow of flows) {
+  const rank = new Map<OperatorFlow, [number, string, number]>();
+  flows.forEach((flow, i) => {
     const hint = parseGroupHint(flow.grouphint);
-    if (!hint) continue;
+    if (!hint) return;
     const track = flowTrack(flow);
-    if (!track) continue;
+    if (!track) return;
     let group = groups.get(hint.group);
     if (!group) {
-      group = { name: hint.group };
+      group = { name: hint.group, members: [] };
       groups.set(hint.group, group);
     }
+    group.members.push(flow);
+    rank.set(flow, [TRACKS.indexOf(track), hint.role, i]);
     const held = group[track];
     const key = `${hint.group}:${track}`;
-    if (held && byRole(roles.get(key)!, hint.role) <= 0) continue;
+    if (held && byRole(roles.get(key)!, hint.role) <= 0) return;
     group[track] = flow;
     roles.set(key, hint.role);
+  });
+  for (const group of groups.values()) {
+    group.members.sort((a, b) => {
+      const [ta, ra, ia] = rank.get(a)!;
+      const [tb, rb, ib] = rank.get(b)!;
+      return ta - tb || byRole(ra, rb) || ia - ib;
+    });
   }
   return [...groups.values()];
-}
-
-/** The flows a group published, picture first, in the order a row shows them. */
-function groupMembers(group: FlowGroup): OperatorFlow[] {
-  return [group.video, group.audio, group.data].filter((f): f is OperatorFlow => !!f);
 }
 
 /**
@@ -143,19 +160,19 @@ export interface FlowRow {
 
 /**
  * The inventory as a list renders it: every flow exactly once, with the flows
- * one producer tagged into a single group adjacent and in track order.
+ * one producer tagged into a single group adjacent, picture, then sound, then
+ * data.
  *
  * A group takes the position of its first member, so a poll that returns the
  * inventory in another order does not move a group somebody is reading.
- * Everything `groupFlows` leaves out -- no hint, a role nothing plays, the
- * second flow of a track a group named twice -- comes back as a row of its own,
- * because the list still has to show it.
+ * Everything `groupFlows` leaves out -- no hint, a format nothing plays --
+ * comes back as a row of its own, because the list still has to show it.
  */
 export function groupedFlowRows(flows: readonly OperatorFlow[]): FlowRow[] {
   const byName = new Map(groupFlows(flows).map((g) => [g.name, g]));
   const groupOf = new Map<string, string>();
   for (const [name, group] of byName) {
-    for (const member of groupMembers(group)) groupOf.set(member.id, name);
+    for (const member of group.members) groupOf.set(member.id, name);
   }
 
   const rows: FlowRow[] = [];
@@ -169,7 +186,7 @@ export function groupedFlowRows(flows: readonly OperatorFlow[]): FlowRow[] {
     if (taken.has(name)) continue;
     taken.add(name);
     const group = byName.get(name)!;
-    rows.push({ group, flows: groupMembers(group) });
+    rows.push({ group, flows: group.members });
   }
   return rows;
 }

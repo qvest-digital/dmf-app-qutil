@@ -155,6 +155,41 @@ describe('groupFlows', () => {
 
     expect(groups[0].audio?.id).toBe('a1');
   });
+
+  /**
+   * An output written by several replicas names one group and one role on
+   * each of them; every one is a member, though one track holds the first.
+   */
+  it('keeps every flow of a track as a member', () => {
+    const groups = groupFlows([
+      flow('r2', 'mixer-out:Audio', 'audio'),
+      flow('r0', 'mixer-out:Audio', 'audio'),
+      flow('r1', 'mixer-out:Audio', 'audio'),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].members.map((f) => f.id)).toEqual(['r2', 'r0', 'r1']);
+    expect(groups[0].audio?.id).toBe('r2');
+  });
+
+  it('orders members by kind, then by role', () => {
+    const groups = groupFlows([
+      flow('d1', 'Camera:Ancillary Data', 'data'),
+      flow('a10', 'Camera:Audio 10', 'audio'),
+      flow('v1', 'Camera:Primary'),
+      flow('a2', 'Camera:Audio 2', 'audio'),
+    ]);
+
+    expect(groups[0].members.map((f) => f.id)).toEqual(['v1', 'a2', 'a10', 'd1']);
+  });
+
+  /** The group name ends at the first colon; role and scope are not part of it. */
+  it('groups members whose hints differ only in role or scope', () => {
+    const groups = groupFlows([flow('v1', 'cam:Video:node'), flow('a1', 'cam:Audio', 'audio')]);
+
+    expect(groups.map((g) => g.name)).toEqual(['cam']);
+    expect(groups[0].members.map((f) => f.id)).toEqual(['v1', 'a1']);
+  });
 });
 
 /**
@@ -212,22 +247,35 @@ describe('groupedFlowRows', () => {
   it.each([
     ['a flow with no hint', flow('x1', null)],
     ['a format nothing plays', flow('m1', 'srt-ingest-1:Mux', 'mux')],
-    ['the second flow of a track a group named twice', flow('a2', 'srt-ingest-1:Audio', 'audio')],
   ])('gives %s a row of its own', (_name, extra) => {
     expect(
       ids([flow('v1', 'srt-ingest-1:Video'), flow('a1', 'srt-ingest-1:Audio', 'audio'), extra]),
     ).toEqual([['v1', 'a1'], [extra.id]]);
   });
 
+  /** A source with several flows of one kind is still one box. */
+  it('puts every flow of a group in its row', () => {
+    expect(
+      ids([
+        flow('a1', 'srt-ingest-1:Audio', 'audio'),
+        flow('x1', null),
+        flow('v1', 'srt-ingest-1:Video'),
+        flow('a2', 'srt-ingest-1:Audio', 'audio'),
+      ]),
+    ).toEqual([['v1', 'a1', 'a2'], ['x1']]);
+  });
+
   it('shows every flow exactly once', () => {
     const flows = [
       flow('v1', 'srt-ingest-1:Video'),
       flow('a1', 'srt-ingest-1:Audio', 'audio'),
+      flow('a2', 'srt-ingest-1:Audio', 'audio'),
       flow('x1', null),
       flow('m1', 'srt-ingest-1:Mux', 'mux'),
     ];
 
-    expect(groupedFlowRows(flows).flatMap((r) => r.flows)).toHaveLength(flows.length);
+    const shown = groupedFlowRows(flows).flatMap((r) => r.flows.map((f) => f.id));
+    expect(shown.sort()).toEqual(flows.map((f) => f.id).sort());
   });
 
   /**

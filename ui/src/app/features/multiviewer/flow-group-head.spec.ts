@@ -34,9 +34,11 @@ describe('FlowGroupHead', () => {
   let fixture: ComponentFixture<FlowGroupHead>;
   let controller: PreviewController;
 
-  function mount(group: FlowGroup): void {
+  /** The head reads only the tracks; members default to them. */
+  function mount(group: Omit<FlowGroup, 'members'> & Partial<FlowGroup>): void {
+    const members = [group.video, group.audio, group.data].filter((f) => !!f) as OperatorFlow[];
     fixture = TestBed.createComponent(FlowGroupHead);
-    fixture.componentRef.setInput('group', group);
+    fixture.componentRef.setInput('group', { members, ...group });
     fixture.detectChanges();
   }
 
