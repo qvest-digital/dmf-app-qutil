@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-rc.69](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.68...v1.0.0-rc.69) (2026-11-26)
+
+
+### Features
+
+* **flows:** draw every MXL flow from writer to readers in a Flows tab ([#256](https://github.com/qvest-digital/dmf-app-qutil/issues/256)) ([38a4dd2](https://github.com/qvest-digital/dmf-app-qutil/commit/38a4dd217bbd837b93b79af42455e987da59552a))
+
+
+### Reverts
+
+* watch every reader, its flows and their replication ([#255](https://github.com/qvest-digital/dmf-app-qutil/issues/255)) ([09809ea](https://github.com/qvest-digital/dmf-app-qutil/commit/09809ea57a06bd41da3bdfbfe44de9de0c4f46e6))
+
+
+### Miscellaneous
+
+* **deps:** bump fast-uri from 3.1.7 to 3.1.9 in /ui ([#230](https://github.com/qvest-digital/dmf-app-qutil/issues/230)) ([6a73749](https://github.com/qvest-digital/dmf-app-qutil/commit/6a73749f8566ca87c8f16920c1cc70369e46b80b))
+* **deps:** bump undici from 7.29.0 to 7.30.1 in /ui ([#203](https://github.com/qvest-digital/dmf-app-qutil/issues/203)) ([36cae17](https://github.com/qvest-digital/dmf-app-qutil/commit/36cae17d94cfff0e86d6f05f48b7343014d3c2bc))
+
 ## [1.0.0-rc.68](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.67...v1.0.0-rc.68) (2026-11-24)
 
 
