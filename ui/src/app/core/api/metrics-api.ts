@@ -11,6 +11,7 @@ import {
   FlowReaderRequest,
   GeneratorBatch,
   MonitorResponse,
+  MxlGraph,
   GeneratorRequest,
   ReaderBatch,
   ReaderRequest,
@@ -51,6 +52,11 @@ export class MetricsApi {
    *  and the redundancy sets over them. */
   operatorFlows(): Observable<OperatorFlowsResponse> {
     return this.http.get<OperatorFlowsResponse>('/api/operator-flows');
+  }
+
+  /** Who writes each flow, who reads it, and on which node. */
+  mxlGraph(): Observable<MxlGraph> {
+    return this.http.get<MxlGraph>('/api/mxl-graph');
   }
 
   /**

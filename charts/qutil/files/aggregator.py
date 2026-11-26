@@ -15,6 +15,8 @@
 #   GET    /api/flows              -> the demo writer set, merged as above
 #   GET    /api/operator-flows     -> every MxlFlow the operator knows, and the
 #                                    MxlFlowRedundancySets over them
+#   GET    /api/mxl-graph          -> who writes and who reads each flow, on
+#                                    which node, and the legs of every set
 #   GET    /api/booking            -> the per-booking instances and their story
 #   POST   /api/preview/<uuid>     -> provision a mediamtx path for a flow
 #   GET    /api/preview/<uuid>     -> whether an audio preview is producing yet
@@ -1048,6 +1050,554 @@ def _unknown_flow(what):
     where the sets could not be read to tell."""
     _, err = redundancy_sets()
     return f"{what} not known to the operator" + (f" ({err})" if err else "")
+
+
+# -- Flow graph ---------------------------------------------------------------
+# Who writes each MXL flow, who reads it, and whether the read crosses a node
+# boundary. A reader on the writer's node opens the flow out of shared memory;
+# a reader anywhere else needs the gateway to mirror it first, and that hop is
+# the only part of the path a network carries. A flow list shows neither, so
+# the Flows tab draws it from this.
+#
+# A flow carries no owner. Which function writes it is read off the functions
+# that name it: in their claim's spec.io, in the output keys of their
+# parameters, as the flows of the receive session an ST 2110 booking becomes,
+# and failing all of those off a class name that says it writes.
+_MXL_API = "/apis/mxl.qvest-digital.com/v1alpha1"
+_FUNCTIONS_API = "/apis/dmf.qvest-digital.com/v1alpha1/mediafunctions"
+_ALL_CLAIMS_API = "/apis/dmf.qvest-digital.com/v1alpha1/mediafunctionclaims"
+_SESSIONS_API = "/apis/mtl.qvest-digital.com/v1alpha1/mtlsessions"
+_PODS_API = "/api/v1/pods"
+# A flow id wherever a chart's parameters put it. Matching the shape rather
+# than the key lists the flows of a chart whose keys this file never heard of.
+_FLOW_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+# Leg phases a mirror does not report: a member read on its own producer's
+# node needs no mirror, one with a producer elsewhere has none yet, one nothing
+# produces cannot have one, and one whose mirrors could not be listed is
+# unknown.
+LEG_LOCAL, LEG_NO_MIRROR, LEG_NO_ORIGIN, LEG_UNKNOWN = "Local", "NoMirror", "NoOrigin", "Unknown"
+# Mirror phases by how close each is to carrying grains.
+_PHASE_RANK = {"Ready": 0, "Materializing": 1, "Pending": 2, "Degraded": 3, "Failed": 4}
+
+
+def _graph_list(path, degraded):
+    """The items of one list, or None when it cannot be read, with the error
+    recorded in degraded. A 404 is a CRD this cluster does not install: no
+    items, and nothing failing."""
+    try:
+        return k8s(path).get("items", []) or []
+    except urllib.error.HTTPError as e:
+        e.close()
+        if e.code == 404:
+            return []
+        degraded[path] = str(e)
+    except Exception as e:
+        degraded[path] = str(e)
+    return None
+
+
+def _class_writes(cls):
+    """Whether a class name says it writes a flow rather than reads one. The
+    last resort: parameters name the flows a function touches, not which way."""
+    c = (cls or "").lower()
+    return any(w in c for w in ("writer", "src", "ingest"))
+
+
+def _function_nodes(pods):
+    """Where the pods that run functions are scheduled.
+
+    A bare pod carries the claim's name; a chart's pods carry it as their Helm
+    release in app.kubernetes.io/instance. The pod name alone does not say
+    which claim a chart's pod belongs to: a claim "x" would match the pods of
+    "x-2" by prefix. Of several pods of one release the first by name gives
+    the node, so two reads of the same pods agree. A pod being deleted still
+    reports Running while a rollout replaces it, so it gives the node only to
+    a release with no other pod, and is never one of the nodes a release runs
+    on. A Matrox service's pod carries its MediaService instead.
+    """
+    by_ns, every, by_ms = {}, {}, {}
+    released, dying, live = {}, {}, {}
+
+    def order(p):
+        md = p.get("metadata") or {}
+        return md.get("name") or "", md.get("namespace") or ""
+
+    for p in sorted(pods, key=order):
+        md = p.get("metadata") or {}
+        node = (p.get("spec") or {}).get("nodeName")
+        if (p.get("status") or {}).get("phase") != "Running" or not node:
+            continue
+        ns, name = md.get("namespace") or "", md.get("name") or ""
+        labels = md.get("labels") or {}
+        by_ns.setdefault(ns, {})[name] = node
+        every.setdefault(ns, {})[name] = [node]
+        rel = labels.get(_INSTANCE_LABEL)
+        if rel:
+            if md.get("deletionTimestamp"):
+                dying.setdefault(ns, {}).setdefault(rel, node)
+            else:
+                released.setdefault(ns, {}).setdefault(rel, node)
+                nodes = live.setdefault(ns, {}).setdefault(rel, [])
+                if node not in nodes:
+                    nodes.append(node)
+        ms = labels.get("origin.matrox.com/media-service")
+        if ms:
+            by_ms.setdefault(ms, node)
+    for ns, rels in dying.items():
+        for rel, node in rels.items():
+            released.setdefault(ns, {}).setdefault(rel, node)
+    # A bare pod named after the claim is the claim's own; a release only
+    # fills in names no pod carries.
+    for ns, rels in released.items():
+        for rel, node in rels.items():
+            if rel not in by_ns.setdefault(ns, {}):
+                by_ns[ns][rel] = node
+                every.setdefault(ns, {})[rel] = live.get(ns, {}).get(rel, [])
+    return {"byNamespace": by_ns, "all": every, "byMediaService": by_ms}
+
+
+def _mtl_sessions(items):
+    """Each ST 2110 booking's session, per namespace.
+
+    The gateway is a platform: a booking runs no pod of its own but becomes an
+    MtlSession, which the gateway on one node claims in status.nodeName. A
+    receiver or sender names its session after the claim; an NMOS booking's
+    session carries the claim's name in a label. A Failed session is placed
+    nowhere, but an rx one still names the flows its booking writes.
+    """
+    out = {}
+    for s in items:
+        md, spec, st = s.get("metadata") or {}, s.get("spec") or {}, s.get("status") or {}
+        flows = []
+        for essence in ("video", "audio", "data"):
+            flow_id = (spec.get(essence) or {}).get("flowID")
+            if flow_id:
+                flows.append(flow_id.lower())
+        booking = (md.get("labels") or {}).get("mtl.qvest-digital.com/nmos-io") or md.get("name")
+        out.setdefault(md.get("namespace") or "", {})[booking] = {
+            "node": "" if st.get("phase") == "Failed" else (st.get("nodeName") or ""),
+            "direction": spec.get("direction") or "",
+            "flows": flows,
+        }
+    return out
+
+
+def _node_for(nodes, sessions, ns, name, cls):
+    """The node a function runs on. Its claim's own namespace first, since
+    claim names repeat across productions. A Matrox service's pod runs in the
+    OriginSystem's namespace and is found by its MediaService; an ST 2110
+    booking runs no pod and is placed on its session's node. Only those classes
+    are looked up that way, so no other function takes a node not its own."""
+    node = nodes["byNamespace"].get(ns, {}).get(name)
+    if node:
+        return node
+    if cls.startswith("matrox-"):
+        return nodes["byMediaService"].get(name, "")
+    if cls.startswith("st2110-"):
+        return sessions.get(ns, {}).get(name, {}).get("node", "")
+    return ""
+
+
+def _nodes_of(nodes, ns, name, node):
+    """Every node the function's pods run on, node first. A redundant booking
+    runs an engine on each of two."""
+    if not node:
+        return []
+    every = nodes["all"].get(ns, {}).get(name) or []
+    if node not in every:
+        return [node]
+    return [node] + [n for n in every if n != node]
+
+
+def _switchframe_outputs(cls, params):
+    """The flows a switchframe's parameters name as its program outputs, engine
+    b's only with redundancy on. Its inputs name peers' flows, so these are
+    what it writes even without spec.io. The redundant ids name a set's output,
+    which the gateway builds, and are left out."""
+    if cls != "switchframe" or not isinstance(params, dict):
+        return []
+    out = []
+    redundant = (params.get("redundancy") or {}).get("enabled") is True
+    for o in params.get("outputs") or []:
+        mxl = (o or {}).get("mxl") if isinstance(o, dict) else None
+        if not isinstance(mxl, dict):
+            continue
+        sides = [mxl] + ([mxl["engineB"]] if redundant and isinstance(mxl.get("engineB"), dict) else [])
+        for side in sides:
+            for key in ("videoFlowId", "audioFlowId"):
+                flow_id = (side.get(key) or "").lower() if isinstance(side.get(key), str) else ""
+                if _FLOW_ID_RE.fullmatch(flow_id) and flow_id not in out:
+                    out.append(flow_id)
+    return out
+
+
+def _graph_functions(items, wiring, nodes, sessions):
+    """Every MediaFunction with what the graph needs of it."""
+    out = []
+    for item in items:
+        md, spec = item.get("metadata") or {}, item.get("spec") or {}
+        ref = spec.get("claimRef") or {}
+        ns = ref.get("namespace") or ""
+        name = ref.get("name") or md.get("name") or ""
+        cls = spec.get("className") or ""
+        params = spec.get("parameters") or {}
+        io = wiring.get(f"{ns}/{name}") or []
+        node = _node_for(nodes, sessions, ns, name, cls)
+        session = sessions.get(ns, {}).get(name) if cls.startswith("st2110-") else None
+
+        flows = set(_FLOW_ID_RE.findall(json.dumps(params)))
+        flows.update((b.get("id") or "").lower() for b in io
+                     if b.get("type") == "MxlFlow" and b.get("id"))
+        flows = sorted(flows)
+
+        writes = []
+
+        def add(flow_id):
+            flow_id = (flow_id or "").lower()
+            if flow_id and flow_id not in writes:
+                writes.append(flow_id)
+
+        for b in io:
+            if b.get("direction") == "Output" and b.get("type") == "MxlFlow":
+                add(b.get("id"))
+        for flow_id in _claim_flow_ids(item):
+            add(flow_id)
+        # The 2110 receiver names the flow it writes as its video essence's;
+        # the sender reads the same key, so this goes by class.
+        if cls == "st2110-receiver" and isinstance(params, dict):
+            add(((params.get("video") or {}).get("flow") or {}).get("id"))
+        for flow_id in _switchframe_outputs(cls, params):
+            add(flow_id)
+        if session and session["direction"] == "rx":
+            for flow_id in session["flows"]:
+                add(flow_id)
+
+        read = list(flows)
+        for flow_id in (session or {}).get("flows", []):
+            if flow_id not in read:
+                read.append(flow_id)
+
+        out.append({
+            "name": name,
+            # A function with no claim is deployed by hand and still drawn.
+            "production": ns or "unassigned",
+            "class": cls,
+            "ready": bool((item.get("status") or {}).get("workloadReady")),
+            "node": node or "",
+            "nodes": _nodes_of(nodes, ns, name, node),
+            # The flow ids in its parameters and spec.io: what setProducers
+            # compares a set's members against.
+            "flows": flows,
+            # Those plus its session's: every flow it is drawn against.
+            "read": read,
+            "writes": writes,
+        })
+    return out
+
+
+def _fn_key(fn):
+    return f"{fn['production']}/{fn['name']}"
+
+
+def _runs_on(fn, node):
+    return bool(node) and (fn["node"] == node or node in fn["nodes"])
+
+
+def _graph_end(fn, node=None):
+    """One end of a flow: the function on node where a pod of it runs there,
+    where it is listed otherwise."""
+    end = {"function": fn["name"], "production": fn["production"], "ready": fn["ready"]}
+    if fn["class"]:
+        end["class"] = fn["class"]
+    where = node if node and _runs_on(fn, node) else fn["node"]
+    if where:
+        end["node"] = where
+    return end
+
+
+def _graph_ends(fn):
+    """The function once per node its pods run on, so each engine of a
+    redundant booking reads where it runs."""
+    if len(fn["nodes"]) < 2:
+        return [_graph_end(fn)]
+    return [_graph_end(fn, n) for n in fn["nodes"]]
+
+
+def _best_writer(fns, origin):
+    """One of the functions saying they write a flow. Catalog defaults give
+    several bookings the same flow id, and an expired booking still declares
+    it, so the one on the node holding the flow comes first, then a ready one,
+    then the lowest production and name, whatever order the API lists them in."""
+    if not fns:
+        return None
+    return min(fns, key=lambda f: (0 if _runs_on(f, origin) else 1, 0 if f["ready"] else 1, _fn_key(f)))
+
+
+def _writes_flow(fn, flow_id):
+    return flow_id.lower() in fn["writes"] or _class_writes(fn["class"])
+
+
+def _member_ids(rs):
+    return [(m.get("flowID") or "").lower() for m in (rs.get("spec") or {}).get("members") or []]
+
+
+def _set_output_id(rs):
+    return (((rs.get("spec") or {}).get("output") or {}).get("flowID") or "").lower()
+
+
+def _set_producers(rs, by_flow):
+    """Of every function naming a set's output, whether it produces the set
+    rather than reads it. The producer names the output to declare it. It says
+    it writes a member, or failing that names every member: a switcher declares
+    each of its engines' outputs, a reader of the output needs none of them."""
+    output, ids = _set_output_id(rs), _member_ids(rs)
+    out = {}
+    for fn in by_flow.get(output, []):
+        produces = output in fn["writes"] or any(_writes_flow(fn, i) for i in ids)
+        if not produces:
+            produces = bool(ids) and all(i in fn["flows"] for i in ids)
+        out[_fn_key(fn)] = produces
+    return out
+
+
+def _set_writers(sets, by_flow):
+    """Each member flow to the functions producing a set it is a member of."""
+    out = {}
+    for rs in sets:
+        producers = _set_producers(rs, by_flow)
+        for fn in by_flow.get(_set_output_id(rs), []):
+            if not producers[_fn_key(fn)]:
+                continue
+            for i in _member_ids(rs):
+                if any(_fn_key(p) == _fn_key(fn) for p in by_flow.get(i, [])):
+                    out.setdefault(i, []).append(fn)
+    return out
+
+
+def _mirror_phases(mirrors):
+    """The phase of the mirror carrying each flow from one node to another,
+    keyed <flow id>/<source>/<target>. A set's member mirror and a receiver's
+    mirror along the same path carry the same grains, so of several the one
+    closest to carrying grains serves the leg. One that has not reported yet
+    counts as Pending."""
+    out = {}
+    for m in mirrors:
+        spec = m.get("spec") or {}
+        key = f"{(spec.get('flowID') or '').lower()}/{spec.get('sourceNode')}/{spec.get('targetNode')}"
+        phase = (m.get("status") or {}).get("phase") or "Pending"
+        rank = _PHASE_RANK.get(phase, len(_PHASE_RANK))
+        prev = out.get(key)
+        if prev is not None and prev in _PHASE_RANK and _PHASE_RANK[prev] <= rank:
+            continue
+        out[key] = phase
+    return out
+
+
+def _graph_sets(sets, flows, by_flow, writers, mirrors):
+    """Every set joined to the flows, mirrors and functions around it. mirrors
+    is None when they could not be listed."""
+    by_id = {f["id"].lower(): f for f in flows}
+    phases = _mirror_phases(mirrors or [])
+    out = []
+    for rs in sets:
+        md, st = rs.get("metadata") or {}, rs.get("status") or {}
+        gen = md.get("generation") or 0
+        out_id = _set_output_id(rs)
+        entry = {"name": md.get("name") or "", "output": out_id, "kind": "",
+                 "members": [], "nodes": sorted(st.get("nodes") or []), "legs": [], "readers": []}
+        for c in st.get("conditions") or []:
+            # A condition written for an older spec says nothing about this one.
+            observed = c.get("observedGeneration") or 0
+            if observed and observed < gen:
+                continue
+            key = {"Valid": "valid", "MembersReady": "membersReady",
+                   "OutputReady": "outputReady"}.get(c.get("type"))
+            if key:
+                cond = {"status": c.get("status") or ""}
+                for field in ("reason", "message"):
+                    if c.get(field):
+                        cond[field] = c[field]
+                entry[key] = cond
+
+        ids = _member_ids(rs)
+        producers = _set_producers(rs, by_flow)
+        for i in ids:
+            f = by_id.get(i)
+            member = {"id": i, "label": f["label"] if f else i,
+                      "originNode": f["originNode"] if f else "", "exists": f is not None}
+            if f and not entry["kind"]:
+                entry["kind"] = f["kind"]
+            # Picked as a flow's producer is. Only a member none declares, as
+            # one booked by hand, falls back to a function naming it with a pod
+            # on its origin node: of a redundant booking, the engine there.
+            p = _best_writer(writers.get(i, []), member["originNode"])
+            if p is None:
+                p = next((fn for fn in by_flow.get(i, [])
+                          if _runs_on(fn, member["originNode"])
+                          and (producers.get(_fn_key(fn)) or _writes_flow(fn, i))), None)
+            if p is not None:
+                member["producer"], member["production"] = p["name"], p["production"]
+            entry["members"].append(member)
+
+        for fn in by_flow.get(out_id, []):
+            if not producers[_fn_key(fn)]:
+                entry["readers"].extend(_graph_ends(fn))
+        entry["readers"].sort(key=lambda e: (e["function"], e["production"], e.get("node", "")))
+
+        for node in entry["nodes"]:
+            for m in entry["members"]:
+                leg = {"member": m["id"], "node": node, "source": m["originNode"], "local": False}
+                if not m["originNode"]:
+                    leg["phase"] = LEG_NO_ORIGIN
+                elif m["originNode"] == node:
+                    leg["local"], leg["phase"] = True, LEG_LOCAL
+                elif mirrors is None:
+                    leg["phase"] = LEG_UNKNOWN
+                else:
+                    leg["phase"] = phases.get(f"{m['id']}/{m['originNode']}/{node}") or LEG_NO_MIRROR
+                entry["legs"].append(leg)
+        out.append(entry)
+    out.sort(key=lambda s: s["name"])
+    return out
+
+
+def _graph_flows(items, leases):
+    """The MxlFlows as the graph reads them."""
+    out = []
+    for fl in items:
+        md, spec, st = fl.get("metadata") or {}, fl.get("spec") or {}, fl.get("status") or {}
+        d = spec.get("definition") or {}
+        flow_id = d.get("id") or spec.get("id") or md.get("name") or ""
+        hints = (d.get("tags") or {}).get("urn:x-nmos:tag:grouphint/v1.0") or []
+        gr = d.get("grain_rate") or {}
+        num, den = gr.get("numerator") or 0, gr.get("denominator") or 1
+        out.append({
+            "id": flow_id,
+            "label": d.get("label") or flow_id,
+            "kind": (d.get("format") or "").rsplit(":", 1)[-1],
+            # NMOS carries the hint as "<source>:<role>"; the source groups.
+            "group": hints[0].split(":", 1)[0] if hints else "",
+            # The operator leaves status.originNode unset and records the
+            # writer as a location holding Origin; origin_health picks the one
+            # whose Lease is freshest where several claim it.
+            "originNode": st.get("originNode") or origin_health(fl, leases)["originNode"] or "",
+            "locations": [l.get("nodeName") for l in st.get("locations") or [] if l.get("nodeName")],
+            "rate": num / den if num else 0,
+            "channels": d.get("channel_count") or 0,
+        })
+    return out
+
+
+def mxl_graph():
+    """GET /api/mxl-graph: every flow with its producer, its consumers and
+    whether each read stays on the writer's node, the redundancy sets with a
+    leg per member and merge node, and the reads that are failing."""
+    degraded = {}
+    flow_items = _graph_list(f"{_MXL_API}/mxlflows", degraded)
+    if flow_items is None:
+        raise RuntimeError(f"cannot list MxlFlows: {degraded[f'{_MXL_API}/mxlflows']}")
+    fn_items = _graph_list(_FUNCTIONS_API, degraded)
+    if fn_items is None:
+        raise RuntimeError(f"cannot list MediaFunctions: {degraded[_FUNCTIONS_API]}")
+    # Each of these costs what it carries and nothing else.
+    mirrors = _graph_list(f"{_MXL_API}/mxlflowmirrors", degraded)
+    claims = _graph_list(_ALL_CLAIMS_API, degraded) or []
+    pods = _graph_list(_PODS_API, degraded) or []
+    sessions = _mtl_sessions(_graph_list(_SESSIONS_API, degraded) or [])
+    lease_res = list_leases()
+    if "_error" in lease_res:
+        degraded[f"/apis/coordination.k8s.io/v1/namespaces/{LEASE_NS}/leases"] = lease_res["_error"]
+    sets, sets_err = redundancy_sets()
+    if sets_err:
+        degraded[_SETS_API] = sets_err
+
+    wiring = {}
+    for c in claims:
+        md = c.get("metadata") or {}
+        io = (c.get("spec") or {}).get("io") or []
+        if io:
+            wiring[f"{md.get('namespace')}/{md.get('name')}"] = io
+    functions = _graph_functions(fn_items, wiring, _function_nodes(pods), sessions)
+    flows = _graph_flows(flow_items, origin_leases(lease_res))
+
+    by_flow, writers = {}, {}
+    for fn in functions:
+        for flow_id in fn["read"]:
+            by_flow.setdefault(flow_id, []).append(fn)
+        for flow_id in fn["writes"]:
+            writers.setdefault(flow_id, []).append(fn)
+
+    # Of a release with pods on several nodes only a redundant booking's
+    # engines each write and read where they run; a server's read replicas may
+    # never open a flow. Every other function keeps the one node it is listed on.
+    engines = {k for rs in sets or [] for k, p in _set_producers(rs, by_flow).items() if p}
+    for fn in functions:
+        if _fn_key(fn) not in engines:
+            fn["nodes"] = []
+    by_set = _set_writers(sets or [], by_flow)
+
+    nodes = set()
+    out_flows = []
+    for f in flows:
+        g = {"id": f["id"], "label": f["label"], "kind": f["kind"], "group": f["group"],
+             "originNode": f["originNode"], "consumers": [], "mirrors": []}
+        if f["rate"]:
+            g["rate"] = f["rate"]
+        if f["channels"]:
+            g["channels"] = f["channels"]
+        if f["originNode"]:
+            nodes.add(f["originNode"])
+        for n in f["locations"]:
+            nodes.add(n)
+            if n != f["originNode"] and n not in g["mirrors"]:
+                g["mirrors"].append(n)
+        mirrored = set(g["mirrors"])
+
+        # A function saying it writes the flow, then one producing a set the
+        # flow is a member of with a pod on the node holding it, and only
+        # failing both the first naming it whose class says it writes.
+        fid = f["id"].lower()
+        producer = _best_writer(writers.get(fid, []), f["originNode"])
+        if producer is None:
+            producer = _best_writer([fn for fn in by_set.get(fid, []) if _runs_on(fn, f["originNode"])],
+                                    f["originNode"])
+        if producer is None:
+            producer = next((fn for fn in by_flow.get(fid, []) if _class_writes(fn["class"])), None)
+        if producer is not None:
+            p = _graph_end(producer, f["originNode"])
+            # The writer's node is where the flow lives. Not so for a function
+            # on several nodes none of which holds the flow: which engine wrote
+            # it is not known, and it is still drawn where a pod of it runs.
+            if p.get("node"):
+                nodes.add(p["node"])
+                if len(producer["nodes"]) < 2 or not f["originNode"] or _runs_on(producer, f["originNode"]):
+                    g["originNode"] = p["node"]
+            g["producer"] = p
+        for fn in by_flow.get(fid, []):
+            is_producer = producer is not None and _fn_key(fn) == _fn_key(producer)
+            for end in _graph_ends(fn):
+                node = end.get("node", "")
+                if node:
+                    nodes.add(node)
+                if is_producer:
+                    continue
+                g["consumers"].append({**end, "local": bool(node) and node == g["originNode"],
+                                       "mirrored": node in mirrored})
+        g["consumers"].sort(key=lambda c: (c["function"], c["production"], c.get("node", "")))
+        g["mirrors"].sort()
+        out_flows.append(g)
+
+    out_sets = [] if sets is None else _graph_sets(sets, flows, by_flow, writers, mirrors)
+    for s in out_sets:
+        nodes.update(s["nodes"])
+        nodes.update(r["node"] for r in s["readers"] if r.get("node"))
+
+    out_flows.sort(key=lambda g: (g["group"], g["label"]))
+    graph = {"flows": out_flows, "nodes": sorted(nodes), "sets": out_sets}
+    if degraded:
+        graph["degraded"] = degraded
+    return graph
 
 
 # -- Per-flow preview (mediamtx control API) ---------------------------------
@@ -3988,6 +4538,11 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/operator-flows"):
             try:
                 self._send_body(200, snapshot("operator-flows", operator_flows))
+            except Exception as e:
+                self._send(500, {"error": str(e)})
+        elif self.path.startswith("/api/mxl-graph"):
+            try:
+                self._send_body(200, snapshot("mxl-graph", mxl_graph))
             except Exception as e:
                 self._send(500, {"error": str(e)})
         elif self.path.startswith("/api/monitor"):
