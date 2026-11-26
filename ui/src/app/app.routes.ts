@@ -37,10 +37,5 @@ export const routes: Routes = [
     title: 'Qutil - Flows',
     loadComponent: () => import('./features/flows/flows-page').then((m) => m.FlowsPage),
   },
-  {
-    path: 'mon',
-    title: 'Qutil - Monitor',
-    loadComponent: () => import('./features/monitor/monitor-page').then((m) => m.MonitorPage),
-  },
   { path: '**', redirectTo: '' },
 ];

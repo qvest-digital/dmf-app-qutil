@@ -123,21 +123,6 @@ import { validateFlowReaders } from './generator-validation';
       </div>
 
       <div class="gen-field">
-        <label class="gen-check">
-          <input
-            type="checkbox"
-            [checked]="checkValues()"
-            (change)="checkValues.set(checked($event))"
-          />
-          Check sample values
-        </label>
-        <div class="gen-hint">
-          SMPTE bars write super-black as luma code 0, which v210 reserves, so this flags every
-          grain of that pattern.
-        </div>
-      </div>
-
-      <div class="gen-field">
         <label class="gen-label" for="rd-ttl">Expires</label>
         <select id="rd-ttl" class="gen-select" [value]="ttl()" (change)="ttl.set(value($event))">
           @for (choice of limits()?.ttls ?? []; track choice) {
@@ -175,7 +160,6 @@ export class ReaderForm {
   protected readonly count = signal(1);
   protected readonly node = signal('');
   protected readonly provider = signal('auto');
-  protected readonly checkValues = signal(false);
   protected readonly ttl = signal('1h');
   protected readonly busy = signal(false);
   protected readonly serverError = signal('');
@@ -253,7 +237,6 @@ export class ReaderForm {
     count: this.count(),
     node: this.node().trim(),
     provider: this.provider(),
-    checkValues: this.checkValues(),
     ttl: this.ttl(),
   }));
 
