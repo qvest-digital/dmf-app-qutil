@@ -93,7 +93,7 @@ describe('GeneratorForm', () => {
       ttl: '1h',
       count: 1,
       node: '',
-      readers: { count: 0, node: '', provider: 'auto', checkValues: false },
+      readers: { count: 0, node: '', provider: 'auto' },
       video: {
         enabled: true,
         id: VIDEO_ID,
@@ -135,12 +135,7 @@ describe('GeneratorForm', () => {
     bookButton().click();
 
     const req = http.expectOne((r) => r.method === 'POST' && r.url === '/api/generators');
-    expect(req.request.body.readers).toEqual({
-      count: 2,
-      node: 'worker-7',
-      provider: 'tcp',
-      checkValues: false,
-    });
+    expect(req.request.body.readers).toEqual({ count: 2, node: 'worker-7', provider: 'tcp' });
     req.flush({ generators: [], error: null });
   });
 
