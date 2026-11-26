@@ -2514,9 +2514,6 @@ class BookingRow(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ServiceEndpoints(unittest.TestCase):
     """What a booked function publishes, as the page shows it.
@@ -3080,3 +3077,7 @@ class NoisyFabricPerNode(NoisyBase):
         p = self.params(row["name"])
         self.assertNotIn("fabric", p)
         self.assertNotIn("network", p)
+
+
+if __name__ == "__main__":
+    unittest.main()
