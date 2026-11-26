@@ -1201,6 +1201,15 @@ footer {
 }
 
 /* The reader monitor: tiles across the top, readers beside the event feed. */
+.flows-main {
+  display: flex;
+  flex-direction: column;
+}
+.flows-lead {
+  font-size: 13px;
+  opacity: 0.8;
+  max-width: 72ch;
+}
 .mon-main {
   display: flex;
   flex-direction: column;

@@ -790,3 +790,105 @@ export interface AudioSnapshot {
   channels: ChannelStats[];
   error?: string | null;
 }
+
+/** One end of a flow's path: a function, and the node it runs on. */
+export interface GraphEnd {
+  readonly function: string;
+  /** The namespace of the function's claim. Claim names repeat across
+   *  productions, so the name alone does not say which function this is. */
+  readonly production?: string;
+  readonly class?: string;
+  /** The node this end runs on. A function with pods on several nodes, as a
+   *  redundant booking's engines are, is one end per node. */
+  readonly node?: string;
+  /** The function's own readiness. Not a claim that it is reading: libmxl
+   *  records one last-read time per flow rather than one per reader. */
+  readonly ready: boolean;
+}
+
+/** One reader of a flow. */
+export interface GraphEdge extends GraphEnd {
+  /** A read that stays inside the writer's node, served out of shared memory.
+   *  False means the gateway mirrors the flow to reach this reader. */
+  readonly local: boolean;
+  /** Whether a copy has actually been materialised on the reader's node. */
+  readonly mirrored: boolean;
+}
+
+export interface GraphFlow {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: string;
+  readonly group: string;
+  readonly originNode: string;
+  readonly producer?: GraphEnd;
+  readonly consumers: readonly GraphEdge[];
+  readonly mirrors: readonly string[];
+  /** Grains per second, a frame rate for video. Absent where the flow's
+   *  definition carries none, as an audio flow's does not. */
+  readonly rate?: number;
+  /** An audio flow's channel count, absent for any other kind. */
+  readonly channels?: number;
+}
+
+/** A condition the operator wrote for a set's current generation. */
+export interface SetCondition {
+  readonly status: string;
+  readonly reason?: string;
+  readonly message?: string;
+}
+
+/** One member of a redundancy set, and where it is written. */
+export interface SetMember {
+  readonly id: string;
+  readonly label: string;
+  /** Empty while nothing produces the member. */
+  readonly originNode: string;
+  /** False while the member has no MxlFlow at all. */
+  readonly exists: boolean;
+  /** The function whose claim declares the member as an output. Where no
+   *  claim does, a function naming it with a pod on its origin node. */
+  readonly producer?: string;
+  /** The namespace of the producer's claim. */
+  readonly production?: string;
+}
+
+/**
+ * How one member reaches one node the output is merged on. `phase` is the
+ * mirror's phase for a remote leg, else `Local`, `NoMirror`, `NoOrigin` or
+ * `Unknown`.
+ */
+export interface SetLeg {
+  readonly member: string;
+  readonly node: string;
+  readonly source: string;
+  readonly local: boolean;
+  readonly phase: string;
+}
+
+/** An MxlFlowRedundancySet: one output merged from several member flows on
+ *  every node in `nodes`. */
+export interface GraphSet {
+  readonly name: string;
+  readonly output: string;
+  readonly kind: string;
+  readonly valid?: SetCondition;
+  readonly membersReady?: SetCondition;
+  /** Whether a gateway is up to merge the output on every node in `nodes`.
+   *  Absent from an mxl-k8s older than the condition. */
+  readonly outputReady?: SetCondition;
+  /** In order of preference. */
+  readonly members: readonly SetMember[];
+  readonly nodes: readonly string[];
+  readonly legs: readonly SetLeg[];
+  readonly readers: readonly GraphEnd[];
+}
+
+/** GET /api/mxl-graph: who writes each flow, who reads it, and where. */
+export interface MxlGraph {
+  readonly flows: readonly GraphFlow[];
+  readonly nodes: readonly string[];
+  readonly sets?: readonly GraphSet[];
+  /** Each list the graph reads that is failing, by API path, with its error. */
+  readonly degraded?: Readonly<Record<string, string>>;
+}
