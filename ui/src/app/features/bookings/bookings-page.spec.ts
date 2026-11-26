@@ -119,4 +119,23 @@ describe('BookingsPage', () => {
     expect(button.disabled).toBe(true);
     expect(text()).toContain('Release one first');
   });
+
+  it('prunes outdated bookings and lists what is left without a wait', async () => {
+    await load(
+      response({
+        bookings: [
+          { name: 'booked-a-1111', className: 'mxl-writer', phase: 'Expired', outdated: true },
+          { name: 'booked-b-2222', className: 'mediamtx', phase: 'Bound' },
+        ],
+      }),
+    );
+    const button = (fixture.nativeElement as HTMLElement).querySelector(
+      'mv-prune-outdated button',
+    ) as HTMLButtonElement;
+    expect(button.textContent).toContain('Prune 1 outdated');
+
+    button.click();
+    http.expectOne('/api/prune').flush({ removed: ['booked-a-1111'], failed: [] });
+    expect(http.match((req) => req.url === '/api/bookings')).toHaveLength(1);
+  });
 });

@@ -24,6 +24,7 @@ import {
   OperatorFlowsResponse,
   PreviewSession,
   PreviewStatus,
+  PruneResult,
   RingCapture,
   ServicesResponse,
 } from './models';
@@ -162,6 +163,14 @@ export class MetricsApi {
   /** Release one. The aggregator refuses any name it did not book. */
   deleteGenerator(name: string): Observable<unknown> {
     return this.http.delete(`/api/generators/${encodeURIComponent(name)}`);
+  }
+
+  /**
+   * Release every claim a page here booked whose function has ended, whichever
+   * page booked it. The server decides what is outdated.
+   */
+  prune(): Observable<PruneResult> {
+    return this.http.post<PruneResult>('/api/prune', null);
   }
 
   /**

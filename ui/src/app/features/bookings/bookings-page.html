@@ -76,6 +76,7 @@
         Booked here
         <span class="of-count">{{ bookings().length ? '(' + bookings().length + ')' : '' }}</span>
       </h2>
+      <mv-prune-outdated [count]="outdated()" (pruned)="refresh.next()" />
       @if (deleteError(); as text) {
         <div class="gen-errors" aria-live="polite">{{ text }}</div>
       }

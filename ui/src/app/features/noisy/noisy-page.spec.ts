@@ -158,4 +158,21 @@ describe('NoisyPage', () => {
     expect(button.disabled).toBe(true);
     expect(text()).toContain('Release one first');
   });
+
+  it('prunes outdated noisy neighbours and lists what is left without a wait', async () => {
+    await load(
+      response({
+        noisy: [
+          { name: 'noisy-a-0001', role: 'aggressor', phase: 'Expired', outdated: true },
+          { name: 'noisy-a-0002', role: 'aggressor', phase: 'Bound' },
+        ],
+      }),
+    );
+    const button = el().querySelector('mv-prune-outdated button') as HTMLButtonElement;
+    expect(button.textContent).toContain('Prune 1 outdated');
+
+    button.click();
+    http.expectOne('/api/prune').flush({ removed: ['noisy-a-0001'], failed: [] });
+    expect(http.match((req) => req.url === '/api/noisy')).toHaveLength(1);
+  });
 });

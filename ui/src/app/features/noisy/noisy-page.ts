@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { Subject } from 'rxjs';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
 import {
@@ -8,6 +9,7 @@ import {
   NoisyShared,
   NoisySide,
 } from '../../core/api/models';
+import { PruneOutdated } from '../../shared/prune-outdated';
 import { validateNoisy, validateNoisyPair } from './noisy-validation';
 
 /** Where one claim goes and what it reserves. */
@@ -41,13 +43,16 @@ const PAIR = 'pair';
 @Component({
   selector: 'mv-noisy-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [PruneOutdated],
   templateUrl: './noisy-page.html',
 })
 export class NoisyPage {
   private readonly api = inject(MetricsApi);
+  /** Polls at once, so what a prune released leaves the list without a wait. */
+  protected readonly refresh = new Subject<void>();
 
   /** Same cadence as the other booking pages: a claim's phase moves in seconds. */
-  protected readonly data = poll(3000, () => this.api.noisy());
+  protected readonly data = poll(3000, () => this.api.noisy(), this.refresh);
 
   protected readonly enabled = computed(() => this.data()?.enabled !== false);
   protected readonly listError = computed(() => this.data()?.error ?? '');
@@ -99,6 +104,8 @@ export class NoisyPage {
     const names = new Set(polled.map((n) => n.name));
     return [...this.fresh().filter((n) => !names.has(n.name)), ...polled];
   });
+
+  protected readonly outdated = computed(() => this.booked().filter((n) => n.outdated).length);
 
   /** Sinks a sender may target. */
   protected readonly sinks = computed(() =>

@@ -7,9 +7,11 @@ import {
   signal,
   untracked,
 } from '@angular/core';
+import { Subject } from 'rxjs';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
 import { Generator, GeneratorReader } from '../../core/api/models';
+import { PruneOutdated } from '../../shared/prune-outdated';
 import { GeneratorForm } from './generator-form';
 import { AddReaders, GeneratorRow } from './generator-row';
 import { ReaderForm } from './reader-form';
@@ -26,14 +28,16 @@ import { ReaderRow } from './reader-row';
 @Component({
   selector: 'mv-generators-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [GeneratorForm, GeneratorRow, ReaderForm, ReaderRow],
+  imports: [GeneratorForm, GeneratorRow, PruneOutdated, ReaderForm, ReaderRow],
   templateUrl: './generators-page.html',
 })
 export class GeneratorsPage {
   private readonly api = inject(MetricsApi);
+  /** Polls at once, so what a prune released leaves the list without a wait. */
+  protected readonly refresh = new Subject<void>();
 
   /** Same cadence as the operator flow list: a claim's phase moves in seconds. */
-  private readonly data = poll(3000, () => this.api.generators());
+  private readonly data = poll(3000, () => this.api.generators(), this.refresh);
 
   protected readonly limits = computed(() => this.data());
   protected readonly enabled = computed(() => this.data()?.enabled !== false);
@@ -71,6 +75,17 @@ export class GeneratorsPage {
 
   /** Readers whose generator is gone: listed so they can still be released. */
   protected readonly orphans = computed(() => this.data()?.orphanReaders ?? []);
+
+  /** Outdated generators and readers of every kind this page lists. */
+  protected readonly outdated = computed(
+    () =>
+      [
+        ...this.generators(),
+        ...this.generators().flatMap((g) => g.readers ?? []),
+        ...this.flowReaders(),
+        ...this.orphans(),
+      ].filter((c) => c.outdated).length,
+  );
 
   protected readonly count = computed(() =>
     this.generators().length ? `(${this.generators().length})` : '',

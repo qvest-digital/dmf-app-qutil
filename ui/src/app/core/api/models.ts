@@ -416,6 +416,9 @@ export interface GeneratorReader {
   phase?: string | null;
   ready?: boolean | null;
   deleting?: boolean;
+  /** Ended (an ended phase, or past its window) and not yet being deleted:
+   *  what a prune releases. */
+  outdated?: boolean;
   /** The binder's condition: whether the reader's workload serves at all. */
   reachable?: FlowCondition | null;
   /**
@@ -441,6 +444,9 @@ export interface Generator {
   ready?: boolean | null;
   /** The claim has a deletionTimestamp and is on its way out. */
   deleting?: boolean;
+  /** Ended (an ended phase, or past its window) and not yet being deleted:
+   *  what a prune releases. */
+  outdated?: boolean;
   /**
    * The binder's own condition. A writer publishes no endpoints, so this reason
    * (WaitingForProvisioner, WorkloadProgressing, ProvisionFailed) is the only
@@ -473,6 +479,9 @@ export interface Booking {
   /** Planned | Pending | Bound | Expired | Released | Failed. */
   phase?: string | null;
   ready?: boolean | null;
+  /** Ended (an ended phase, or past its window) and not yet being deleted:
+   *  what a prune releases. */
+  outdated?: boolean;
   /** Published by the claim once bound. A writer publishes none. */
   endpoints?: { name: string; url: string }[];
   /** Any *_output.id the parameters carried, so a booked flow can be spotted. */
@@ -502,11 +511,21 @@ export interface NoisyNeighbour {
   phase?: string | null;
   ready?: boolean | null;
   deleting?: boolean;
+  /** Ended (an ended phase, or past its window) and not yet being deleted:
+   *  what a prune releases. */
+  outdated?: boolean;
   endpoints?: { name: string; url: string; externalUrl?: string | null }[];
   /** The function's own UI, set only once the handle is ready and routed. */
   uiUrl?: string | null;
   created?: string | null;
   expiresAt?: string | null;
+}
+
+/** What a prune released, and what it could not. A claim gone already counts
+ *  as released. */
+export interface PruneResult {
+  removed: string[];
+  failed: { name: string; error: string }[];
 }
 
 export interface NoisyResponse {
