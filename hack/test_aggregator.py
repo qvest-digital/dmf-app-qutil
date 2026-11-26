@@ -2996,7 +2996,7 @@ class Prune(unittest.TestCase):
             page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Released"),
             page_claim("booked-b-0001", agg._BOOKING_COMPONENT, phase="Failed"),
             page_claim("noisy-n-0001", agg._NOISY_COMPONENT, phase="Expired"))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual(code, 200)
         want = ["generator-a-0001", "generator-r-0001", "booked-b-0001", "noisy-n-0001"]
         self.assertEqual(sorted(res["removed"]), sorted(want))
@@ -3005,7 +3005,7 @@ class Prune(unittest.TestCase):
 
     def test_a_bound_claim_past_its_window_is_outdated(self):
         k8s = self.cluster(page_claim("generator-a-0001", agg._GEN_COMPONENT, end=-60))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual(code, 200)
         self.assertEqual(res["removed"], ["generator-a-0001"])
         self.assertEqual(k8s.deleted(), ["generator-a-0001"])
@@ -3016,7 +3016,7 @@ class Prune(unittest.TestCase):
             page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Pending"),
             page_claim("booked-b-0001", agg._BOOKING_COMPONENT, end=None),
             page_claim("noisy-n-0001", agg._NOISY_COMPONENT))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
         self.assertEqual(k8s.deleted(), [])
 
@@ -3026,14 +3026,14 @@ class Prune(unittest.TestCase):
             page_claim("generator-x-0001", agg._GEN_COMPONENT, phase="Expired",
                        manager="someone-else"),
             page_claim("generator-y-0001", "something-else", phase="Expired"))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
         self.assertEqual(k8s.deleted(), [])
 
     def test_a_claim_already_being_deleted_is_skipped(self):
         k8s = self.cluster(
             page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired", deleting=True))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
         self.assertEqual(k8s.deleted(), [])
 
@@ -3042,7 +3042,7 @@ class Prune(unittest.TestCase):
             page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
             page_claim("booked-b-0001", agg._BOOKING_COMPONENT, phase="Expired"),
             fail=("generator-a-0001",))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual(code, 200)
         self.assertEqual(res["removed"], ["booked-b-0001"])
         self.assertEqual(res["failed"], [{"name": "generator-a-0001",
@@ -3053,7 +3053,7 @@ class Prune(unittest.TestCase):
             page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
             page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Expired",
                        **{agg._READER_LABEL_GENERATOR: "generator-a-0001"}))
-        code, res = agg.prune()
+        code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual(code, 200)
         self.assertEqual(sorted(res["removed"]), ["generator-a-0001", "generator-r-0001"])
         self.assertEqual(res["failed"], [])
@@ -3062,17 +3062,50 @@ class Prune(unittest.TestCase):
     def test_a_disabled_page_is_skipped(self):
         k8s = self.cluster(page_claim("noisy-n-0001", agg._NOISY_COMPONENT, phase="Expired"))
         with mock.patch.object(agg, "NOISY_ENABLED", False):
-            code, res = agg.prune()
+            code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
         self.assertEqual(k8s.deleted(), [])
 
     def test_a_failed_listing_is_an_error_not_an_empty_prune(self):
         self.cluster(page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"))
         with mock.patch.object(agg, "safe_k8s", lambda *a, **k: {"_error": "timed out"}):
-            code, res = agg.prune()
+            code, res = agg.prune({"pages": ["generators", "bookings", "noisy"]})
         self.assertEqual(code, 503)
         self.assertIn("timed out", res["error"])
         self.assertEqual(self.k8s.deleted(), [])
+
+    def test_prunes_only_the_pages_it_names(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
+            page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Expired"),
+            page_claim("booked-b-0001", agg._BOOKING_COMPONENT, phase="Expired"),
+            page_claim("noisy-n-0001", agg._NOISY_COMPONENT, phase="Expired"))
+        code, res = agg.prune({"pages": ["generators"]})
+        self.assertEqual(code, 200)
+        self.assertEqual(sorted(res["removed"]), ["generator-a-0001", "generator-r-0001"])
+        self.assertEqual(sorted(k8s.deleted()), ["generator-a-0001", "generator-r-0001"])
+        code, res = agg.prune({"pages": ["bookings"]})
+        self.assertEqual(res["removed"], ["booked-b-0001"])
+        self.assertIn("noisy-n-0001", k8s.claims)
+        code, res = agg.prune({"pages": ["noisy"]})
+        self.assertEqual(res["removed"], ["noisy-n-0001"])
+
+    def test_a_bookings_prune_leaves_outdated_generators(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
+            page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Expired"))
+        code, res = agg.prune({"pages": ["bookings"]})
+        self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_refuses_a_missing_or_unknown_scope(self):
+        k8s = self.cluster(page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"))
+        for req in ({}, {"pages": []}, {"pages": "generators"}, {"pages": ["everything"]},
+                    {"pages": ["generators", "chart"]}, {"pages": [None]}):
+            code, _ = agg.prune(req)
+            self.assertEqual(code, 400, req)
+        self.assertEqual(k8s.deleted(), [])
+        self.assertEqual([c for c in k8s.calls if c[0] == "GET"], [])
 
     def test_every_listing_row_flags_what_a_prune_would_release(self):
         rows = (agg._gen_row, agg._reader_row, agg._booking_row, agg._noisy_row)

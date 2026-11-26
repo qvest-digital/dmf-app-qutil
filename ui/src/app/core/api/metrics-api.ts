@@ -24,6 +24,7 @@ import {
   OperatorFlowsResponse,
   PreviewSession,
   PreviewStatus,
+  PrunePage,
   PruneResult,
   RingCapture,
   ServicesResponse,
@@ -166,11 +167,11 @@ export class MetricsApi {
   }
 
   /**
-   * Release every claim a page here booked whose function has ended, whichever
-   * page booked it. The server decides what is outdated.
+   * Release every claim the named pages booked whose function has ended. The
+   * server decides what is outdated.
    */
-  prune(): Observable<PruneResult> {
-    return this.http.post<PruneResult>('/api/prune', null);
+  prune(pages: PrunePage[]): Observable<PruneResult> {
+    return this.http.post<PruneResult>('/api/prune', { pages });
   }
 
   /**

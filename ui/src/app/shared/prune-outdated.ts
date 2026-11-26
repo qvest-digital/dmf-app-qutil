@@ -8,17 +8,16 @@ import {
   signal,
 } from '@angular/core';
 import { MetricsApi } from '../core/api/metrics-api';
-import { PruneResult } from '../core/api/models';
+import { PrunePage, PruneResult } from '../core/api/models';
 
 /** How long the count of released claims stays up. Failures stay until the next press. */
 const DONE_MS = 5000;
 
 /**
- * Releases every outdated claim the pages here booked, in one press.
+ * Releases every outdated claim the host page booked, in one press.
  *
- * `count` is how many outdated claims the host page lists. The server prunes
- * whatever it finds outdated on every page, so the count names what this page
- * will lose, not everything that goes.
+ * `count` is how many outdated claims the host page lists, and the prune is
+ * scoped to `page`, so the count names what goes.
  */
 @Component({
   selector: 'mv-prune-outdated',
@@ -42,6 +41,7 @@ const DONE_MS = 5000;
 export class PruneOutdated {
   private readonly api = inject(MetricsApi);
 
+  readonly page = input.required<PrunePage>();
   readonly count = input.required<number>();
   /** Emitted once the server answered, so the host can refresh its listing. */
   readonly pruned = output<PruneResult>();
@@ -61,7 +61,7 @@ export class PruneOutdated {
     this.done.set('');
     this.error.set('');
     clearTimeout(this.doneTimer);
-    this.api.prune().subscribe({
+    this.api.prune([this.page()]).subscribe({
       next: (res) => {
         this.busy.set(false);
         const n = res.removed.length;

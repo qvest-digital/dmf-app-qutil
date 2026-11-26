@@ -7,7 +7,11 @@ import { PruneOutdated } from './prune-outdated';
 
 @Component({
   imports: [PruneOutdated],
-  template: `<mv-prune-outdated [count]="count()" (pruned)="results.push($event)" />`,
+  template: `<mv-prune-outdated
+    page="bookings"
+    [count]="count()"
+    (pruned)="results.push($event)"
+  />`,
 })
 class Host {
   readonly count = signal(0);
@@ -68,6 +72,7 @@ describe('PruneOutdated', () => {
     press();
     const req = http.expectOne('/api/prune');
     expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ pages: ['bookings'] });
     expect(button().disabled).toBe(true);
     expect(button().textContent).toContain('Pruning...');
     press();

@@ -562,7 +562,10 @@ describe('GeneratorsPage', () => {
     expect(button.textContent).toContain('Prune 4 outdated');
 
     button.click();
-    http.expectOne('/api/prune').flush({ removed: ['a', 'b', 'c', 'd'], failed: [] });
+    const req = http.expectOne('/api/prune');
+    // Only what this page lists: the count on the button is what goes.
+    expect(req.request.body).toEqual({ pages: ['generators'] });
+    req.flush({ removed: ['a', 'b', 'c', 'd'], failed: [] });
     expect(http.match((req) => req.url === '/api/generators')).toHaveLength(1);
   });
 });

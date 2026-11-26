@@ -521,6 +521,9 @@ export interface NoisyNeighbour {
   expiresAt?: string | null;
 }
 
+/** The pages a prune can be scoped to: each prunes only the claims it lists. */
+export type PrunePage = 'generators' | 'bookings' | 'noisy';
+
 /** What a prune released, and what it could not. A claim gone already counts
  *  as released. */
 export interface PruneResult {

@@ -135,7 +135,10 @@ describe('BookingsPage', () => {
     expect(button.textContent).toContain('Prune 1 outdated');
 
     button.click();
-    http.expectOne('/api/prune').flush({ removed: ['booked-a-1111'], failed: [] });
+    const req = http.expectOne('/api/prune');
+    // Only what this page lists: the count on the button is what goes.
+    expect(req.request.body).toEqual({ pages: ['bookings'] });
+    req.flush({ removed: ['booked-a-1111'], failed: [] });
     expect(http.match((req) => req.url === '/api/bookings')).toHaveLength(1);
   });
 });

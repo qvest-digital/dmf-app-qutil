@@ -172,7 +172,10 @@ describe('NoisyPage', () => {
     expect(button.textContent).toContain('Prune 1 outdated');
 
     button.click();
-    http.expectOne('/api/prune').flush({ removed: ['noisy-a-0001'], failed: [] });
+    const req = http.expectOne('/api/prune');
+    // Only what this page lists: the count on the button is what goes.
+    expect(req.request.body).toEqual({ pages: ['noisy'] });
+    req.flush({ removed: ['noisy-a-0001'], failed: [] });
     expect(http.match((req) => req.url === '/api/noisy')).toHaveLength(1);
   });
 });

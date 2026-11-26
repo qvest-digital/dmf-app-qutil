@@ -39,8 +39,8 @@
 #   POST   /api/noisy              -> book one noisy neighbour
 #   POST   /api/noisy/pair         -> book a sink and a sender targeting it
 #   DELETE /api/noisy/<name>       -> release one, and the senders of a sink
-#   POST   /api/prune              -> release every page-booked claim whose
-#                                    function has ended
+#   POST   /api/prune              -> release every claim the named pages
+#                                    booked whose function has ended
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
@@ -4249,8 +4249,10 @@ def noisy_delete(name):
 
 
 # -- Pruning -----------------------------------------------------------------
-def prune():
-    """Release every claim a page here booked whose function has ended.
+def prune(req):
+    """Release every claim the pages named in req["pages"] booked whose
+    function has ended. A page prunes only what it lists, so the count its
+    button shows is what goes.
 
     Each goes through its page's own delete, so the ownership check and what a
     release takes with it -- a generator's readers, a sink's senders, the
@@ -4258,15 +4260,23 @@ def prune():
     disabled on this install is skipped, as its delete would refuse. A claim
     already being deleted is on its way out and is not counted.
 
-    200 with {"removed": [...], "failed": [{"name", "error"}]}; 503 only when a
-    listing fails, since then what is outdated is not known.
+    200 with {"removed": [...], "failed": [{"name", "error"}]}; 400 on a missing
+    or unknown page; 503 only when a listing fails, since then what is outdated
+    is not known.
     """
-    pages = ((_GEN_COMPONENT, GEN_ENABLED, generator_delete),
-             (_READER_COMPONENT, GEN_ENABLED, reader_delete),
-             (_BOOKING_COMPONENT, BOOKING_ENABLED, booking_delete),
-             (_NOISY_COMPONENT, NOISY_ENABLED, noisy_delete))
+    pages = {
+        "generators": ((_GEN_COMPONENT, GEN_ENABLED, generator_delete),
+                       (_READER_COMPONENT, GEN_ENABLED, reader_delete)),
+        "bookings": ((_BOOKING_COMPONENT, BOOKING_ENABLED, booking_delete),),
+        "noisy": ((_NOISY_COMPONENT, NOISY_ENABLED, noisy_delete),),
+    }
+    scope = req.get("pages")
+    if (not isinstance(scope, list) or not scope
+            or not all(isinstance(page, str) and page in pages for page in scope)):
+        return 400, {"error": "pages must name one or more of " + ", ".join(pages)}
     outdated = []
-    for component, enabled, release in pages:
+    for component, enabled, release in (part for page in dict.fromkeys(scope)
+                                        for part in pages[page]):
         if not enabled:
             continue
         claims, err = _page_claims(component)
@@ -4619,8 +4629,11 @@ class H(BaseHTTPRequestHandler):
         if self.path.startswith("/api/grains/"):
             return self._do_capture()
         if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/prune":
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
             try:
-                code, res = prune()
+                code, res = prune(body)
             except Exception as e:
                 code, res = 500, {"error": str(e)}
             return self._send(code, res)
