@@ -3079,5 +3079,444 @@ class NoisyFabricPerNode(NoisyBase):
         self.assertNotIn("network", p)
 
 
+class FakeLists:
+    """Stands in for k8s(): a list per API path, an exception where a list is
+    refused, and a 404 for any path the cluster does not serve."""
+
+    def __init__(self, lists):
+        self.lists = lists
+
+    def __call__(self, path, method="GET"):
+        found = self.lists.get(path)
+        if isinstance(found, Exception):
+            raise found
+        if found is None:
+            raise urllib.error.HTTPError(agg.API + path, 404, "Not Found", {}, io.BytesIO())
+        return {"items": found}
+
+
+def mxl_flow(flow_id, origin=None, locations=(), fmt="video", rate=None, channels=None, label=None):
+    d = {"id": flow_id, "format": f"urn:x-nmos:format:{fmt}", "label": label or flow_id}
+    if rate:
+        d["grain_rate"] = {"numerator": rate[0], "denominator": rate[1]}
+    if channels:
+        d["channel_count"] = channels
+    return {"metadata": {"name": flow_id}, "spec": {"definition": d},
+            "status": {**({"originNode": origin} if origin else {}),
+                       "locations": [{"nodeName": n, "phase": p} for n, p in locations]}}
+
+
+def media_function(ns, name, cls, params=None, ready=True):
+    return {"metadata": {"name": f"mf-{name}"},
+            "spec": {"className": cls, "claimRef": {"namespace": ns, "name": name},
+                     "parameters": params or {}},
+            "status": {"workloadReady": ready}}
+
+
+def running_pod(ns, name, node, release=None, deleting=False, **labels):
+    md = {"namespace": ns, "name": name, "labels": dict(labels)}
+    if release:
+        md["labels"][agg._INSTANCE_LABEL] = release
+    if deleting:
+        md["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+    return {"metadata": md, "spec": {"nodeName": node}, "status": {"phase": "Running"}}
+
+
+class MxlGraph(unittest.TestCase):
+    """GET /api/mxl-graph: who writes each flow, who reads it, and whether the
+    read crosses a node boundary. Which reads stay in shared memory and which
+    the gateway carries across the fabric is the whole point of the picture,
+    so it is asserted rather than left to the eye."""
+
+    FLOW = "5fbec3b1-1b0f-417d-9059-8b94a47197ed"
+    OTHER = "5fbec3b1-1b0f-417d-9059-8b94a47197ee"
+    MXL = agg._MXL_API
+    LEASES = f"/apis/coordination.k8s.io/v1/namespaces/{agg.LEASE_NS}/leases"
+
+    def setUp(self):
+        self.lists = {
+            f"{self.MXL}/mxlflows": [mxl_flow(self.FLOW, locations=[("worker", "Origin"), ("worker2", "Ready")],
+                                              rate=(60000, 1001), label="Test Flow")],
+            f"{self.MXL}/mxlflowmirrors": [],
+            agg._FUNCTIONS_API: [
+                media_function("p", "demo-writer", "mxl-writer", {"video_output": {"id": self.FLOW}}),
+                media_function("p", "demo-reader", "mxl-reader", {"flows": [self.FLOW]}),
+            ],
+            agg._ALL_CLAIMS_API: [],
+            agg._PODS_API: [running_pod("p", "demo-writer", "worker"),
+                            running_pod("p", "demo-reader", "worker2")],
+            self.LEASES: [],
+            agg._SETS_API: [],
+        }
+        p = mock.patch.object(agg, "k8s", FakeLists(self.lists))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def graph(self):
+        return agg.mxl_graph()
+
+    def flow(self, flow_id=None):
+        return next(f for f in self.graph()["flows"] if f["id"] == (flow_id or self.FLOW))
+
+    def consumer(self, flow, name):
+        return [c for c in flow["consumers"] if c["function"] == name]
+
+    # -- reads and writers ----------------------------------------------------
+
+    def test_a_reader_on_another_node_is_mirrored_not_local(self):
+        f = self.flow()
+        [reader] = self.consumer(f, "demo-reader")
+        self.assertEqual(reader["node"], "worker2")
+        self.assertFalse(reader["local"])
+        self.assertTrue(reader["mirrored"])
+        self.assertEqual(f["mirrors"], ["worker2"])
+
+    def test_a_reader_on_the_writers_node_is_local(self):
+        self.lists[agg._PODS_API][1] = running_pod("p", "demo-reader", "worker")
+        [reader] = self.consumer(self.flow(), "demo-reader")
+        self.assertTrue(reader["local"])
+
+    def test_a_remote_reader_without_a_copy_is_not_mirrored(self):
+        self.lists[f"{self.MXL}/mxlflows"][0]["status"]["locations"] = [{"nodeName": "worker", "phase": "Origin"}]
+        [reader] = self.consumer(self.flow(), "demo-reader")
+        self.assertFalse(reader["mirrored"])
+
+    def test_the_writer_is_the_producer_and_no_consumer(self):
+        f = self.flow()
+        self.assertEqual(f["producer"], {"function": "demo-writer", "production": "p",
+                                         "class": "mxl-writer", "node": "worker", "ready": True})
+        self.assertEqual(self.consumer(f, "demo-writer"), [])
+        self.assertEqual(self.graph()["nodes"], ["worker", "worker2"])
+
+    def test_the_origin_comes_from_the_locations_when_the_field_is_empty(self):
+        self.lists[agg._FUNCTIONS_API] = []
+        self.assertEqual(self.flow()["originNode"], "worker")
+
+    def test_a_flow_carries_its_rate_label_and_kind(self):
+        f = self.flow()
+        self.assertAlmostEqual(f["rate"], 60000 / 1001)
+        self.assertEqual((f["label"], f["kind"]), ("Test Flow", "video"))
+
+    def test_an_audio_flow_carries_its_channels_and_no_rate(self):
+        self.lists[f"{self.MXL}/mxlflows"] = [mxl_flow(self.FLOW, "worker", fmt="audio", channels=8)]
+        f = self.flow()
+        self.assertEqual(f["channels"], 8)
+        self.assertNotIn("rate", f)
+
+    def test_a_function_declaring_a_flow_as_output_is_its_producer(self):
+        """A class name that says nothing still writes what its claim declares."""
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "conv", "converter", {"in": self.OTHER}),
+                                          media_function("p", "demo-reader", "mxl-reader", {"f": self.FLOW})]
+        self.lists[agg._ALL_CLAIMS_API] = [{"metadata": {"namespace": "p", "name": "conv"},
+                                            "spec": {"io": [{"direction": "Output", "type": "MxlFlow",
+                                                             "id": self.FLOW.upper()}]}}]
+        self.lists[agg._PODS_API].append(running_pod("p", "conv", "worker"))
+        self.assertEqual(self.flow()["producer"]["function"], "conv")
+
+    def test_a_declared_writer_outranks_a_class_named_like_one(self):
+        self.lists[agg._FUNCTIONS_API] = [
+            media_function("p", "a-writer-reader", "mxl-writer", {"flows": [self.FLOW]}),
+            media_function("p", "ingest", "converter", {"anc_output": {"id": self.FLOW}}),
+        ]
+        self.assertEqual(self.flow()["producer"]["function"], "ingest")
+
+    def test_the_declarer_on_the_flows_node_is_its_producer(self):
+        """Catalog defaults give several bookings one flow id; the one on the
+        node holding the flow writes it, whatever the listing order."""
+        self.lists[agg._FUNCTIONS_API] = [
+            media_function("a", "w", "mxl-writer", {"video_output": {"id": self.FLOW}}),
+            media_function("b", "w", "mxl-writer", {"video_output": {"id": self.FLOW}}),
+        ]
+        self.lists[agg._PODS_API] = [running_pod("a", "w", "worker2"), running_pod("b", "w", "worker")]
+        f = self.flow()
+        self.assertEqual((f["producer"]["production"], f["producer"]["node"]), ("b", "worker"))
+        # The other booking still names the flow, so it is drawn reading it.
+        self.assertEqual([c["production"] for c in f["consumers"]], ["a"])
+
+    def test_without_a_declared_writer_the_class_name_decides(self):
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "src", "ross-testsrc", {"flow": self.FLOW}),
+                                          media_function("p", "viewer", "mxl-reader", {"flow": self.FLOW})]
+        self.assertEqual(self.flow()["producer"]["function"], "src")
+
+    # -- placement ------------------------------------------------------------
+
+    def test_a_same_named_function_in_another_production_lends_no_node(self):
+        self.lists[agg._FUNCTIONS_API].append(media_function("q", "demo-reader", "mxl-reader", {"f": self.FLOW}))
+        ends = self.consumer(self.flow(), "demo-reader")
+        self.assertEqual({(c["production"], c.get("node")) for c in ends}, {("p", "worker2"), ("q", None)})
+
+    def test_a_claim_named_like_the_start_of_another_takes_not_its_node(self):
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "mtx", "mediamtx", {"f": self.FLOW}),
+                                          media_function("p", "mtx-2", "mediamtx", {"f": self.FLOW})]
+        self.lists[agg._PODS_API] = [running_pod("p", "mtx-2-origin-abc", "worker2", release="mtx-2"),
+                                     running_pod("p", "mtx-origin-abc", "worker", release="mtx")]
+        nodes = {c["function"]: c["node"] for c in self.flow()["consumers"]}
+        self.assertEqual(nodes, {"mtx": "worker", "mtx-2": "worker2"})
+
+    def test_a_function_with_pods_on_several_nodes_keeps_one_node(self):
+        """A server's read replicas may never open a flow; only a set's
+        engines read on every node they run on."""
+        self.lists[agg._PODS_API][1:] = [running_pod("p", "demo-reader-b", "worker3", release="demo-reader"),
+                                         running_pod("p", "demo-reader-a", "worker2", release="demo-reader")]
+        [reader] = self.consumer(self.flow(), "demo-reader")
+        self.assertEqual(reader["node"], "worker2")
+
+    def test_a_pod_being_deleted_gives_way_to_its_replacement(self):
+        self.lists[agg._PODS_API][1:] = [running_pod("p", "demo-reader-a", "worker3", release="demo-reader",
+                                                     deleting=True),
+                                         running_pod("p", "demo-reader-b", "worker2", release="demo-reader")]
+        [reader] = self.consumer(self.flow(), "demo-reader")
+        self.assertEqual(reader["node"], "worker2")
+
+    def test_a_release_with_only_a_deleting_pod_keeps_its_node(self):
+        self.lists[agg._PODS_API][1:] = [running_pod("p", "demo-reader-a", "worker3", release="demo-reader",
+                                                     deleting=True)]
+        [reader] = self.consumer(self.flow(), "demo-reader")
+        self.assertEqual(reader["node"], "worker3")
+
+    def test_a_matrox_service_runs_where_its_media_service_pod_runs(self):
+        self.lists[agg._FUNCTIONS_API].append(media_function("p", "tx", "matrox-network-ts-transmitter",
+                                                             {"f": self.FLOW}))
+        self.lists[agg._FUNCTIONS_API].append(media_function("p", "plain", "mxl-reader", {"f": self.FLOW}))
+        self.lists[agg._PODS_API].append(running_pod("origin-system", "svc-xyz", "worker3",
+                                                     **{"origin.matrox.com/media-service": "tx"}))
+        self.lists[agg._PODS_API].append(running_pod("origin-system", "svc-abc", "worker3",
+                                                     **{"origin.matrox.com/media-service": "plain"}))
+        nodes = {c["function"]: c.get("node") for c in self.flow()["consumers"]}
+        self.assertEqual(nodes["tx"], "worker3")
+        self.assertIsNone(nodes["plain"])
+
+    def test_functions_survive_pods_that_cannot_be_read(self):
+        self.lists[agg._PODS_API] = RuntimeError("forbidden")
+        g = self.graph()
+        [reader] = self.consumer(g["flows"][0], "demo-reader")
+        self.assertNotIn("node", reader)
+        self.assertEqual(g["degraded"], {agg._PODS_API: "forbidden"})
+
+    # -- ST 2110 --------------------------------------------------------------
+
+    def session(self, name, node, direction="rx", phase="Running", nmos_io=None):
+        labels = {"mtl.qvest-digital.com/nmos-io": nmos_io} if nmos_io else {}
+        return {"metadata": {"namespace": "p", "name": name, "labels": labels},
+                "spec": {"direction": direction, "video": {"flowID": self.FLOW.upper()}},
+                "status": {"nodeName": node, "phase": phase}}
+
+    def test_an_st2110_booking_writes_what_its_session_receives_where_it_is_served(self):
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "rx", "st2110-nmos-receiver"),
+                                          media_function("p", "demo-reader", "mxl-reader", {"f": self.FLOW})]
+        self.lists[agg._SESSIONS_API] = [self.session("rx-session-1", "worker", nmos_io="rx")]
+        p = self.flow()["producer"]
+        self.assertEqual((p["function"], p["node"]), ("rx", "worker"))
+
+    def test_a_failed_session_places_its_booking_nowhere(self):
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "rx", "st2110-receiver")]
+        self.lists[agg._SESSIONS_API] = [self.session("rx", "worker", phase="Failed")]
+        p = self.flow()["producer"]
+        self.assertEqual(p["function"], "rx")
+        self.assertNotIn("node", p)
+
+    def test_only_an_st2110_class_takes_a_sessions_node(self):
+        self.lists[agg._FUNCTIONS_API] = [media_function("p", "rx", "mxl-reader", {"f": self.FLOW})]
+        self.lists[agg._SESSIONS_API] = [self.session("rx", "worker3", direction="tx")]
+        [reader] = self.consumer(self.flow(), "rx")
+        self.assertNotIn("node", reader)
+
+    # -- failing reads --------------------------------------------------------
+
+    def test_a_crd_the_cluster_does_not_serve_is_not_degraded(self):
+        self.assertNotIn(agg._SESSIONS_API, self.lists)
+        self.assertNotIn("degraded", self.graph())
+
+    def test_a_refused_list_is_named_and_the_rest_still_drawn(self):
+        self.lists[agg._ALL_CLAIMS_API] = RuntimeError("HTTP Error 403: Forbidden")
+        g = self.graph()
+        self.assertEqual(g["degraded"], {agg._ALL_CLAIMS_API: "HTTP Error 403: Forbidden"})
+        self.assertEqual(g["flows"][0]["producer"]["function"], "demo-writer")
+
+    def test_without_flows_there_is_no_graph(self):
+        self.lists[f"{self.MXL}/mxlflows"] = RuntimeError("down")
+        with self.assertRaises(RuntimeError):
+            self.graph()
+
+    def test_the_route_serves_the_graph(self):
+        with agg._snapshot_guard:
+            agg._snapshots.clear()
+        self.addCleanup(agg.snapshot_drop, "mxl-graph")
+        status, body = get("/api/mxl-graph")
+        self.assertEqual(status, 200)
+        self.assertEqual([f["id"] for f in body["flows"]], [self.FLOW])
+
+
+class MxlGraphSets(unittest.TestCase):
+    """A redundancy set merges one output from members written on different
+    nodes. Each member reaches each merge node by a leg: local where it is
+    written there, through a mirror otherwise."""
+
+    A = "aaaaaaaa-0000-4000-8000-00000000000a"
+    B = "bbbbbbbb-0000-4000-8000-00000000000b"
+    OUT = "cccccccc-0000-4000-8000-00000000000c"
+    MXL = agg._MXL_API
+
+    def setUp(self):
+        self.set = {"metadata": {"name": "prog", "generation": 2},
+                    "spec": {"members": [{"flowID": self.A}, {"flowID": self.B}], "output": {"flowID": self.OUT}},
+                    "status": {"nodes": ["n1"], "conditions": [
+                        {"type": "Valid", "status": "True", "observedGeneration": 2},
+                        {"type": "MembersReady", "status": "False", "reason": "MemberStale",
+                         "message": "b is stale", "observedGeneration": 2}]}}
+        self.lists = {
+            f"{self.MXL}/mxlflows": [mxl_flow(self.A, "n1", rate=(50, 1)), mxl_flow(self.B, "n2", rate=(50, 1))],
+            f"{self.MXL}/mxlflowmirrors": [
+                {"spec": {"flowID": self.B, "sourceNode": "n2", "targetNode": "n1"}, "status": {"phase": "Failed"}},
+                {"spec": {"flowID": self.B, "sourceNode": "n2", "targetNode": "n1"}, "status": {"phase": "Ready"}},
+            ],
+            agg._FUNCTIONS_API: [
+                media_function("p", "cam-a", "mxl-writer", {"video_output": {"id": self.A}, "set": self.OUT}),
+                media_function("p", "cam-b", "mxl-writer", {"video_output": {"id": self.B}, "set": self.OUT}),
+                media_function("p", "viewer", "mxl-reader", {"flows": [self.OUT]}),
+            ],
+            agg._ALL_CLAIMS_API: [],
+            agg._PODS_API: [running_pod("p", "cam-a", "n1"), running_pod("p", "cam-b", "n2"),
+                            running_pod("p", "viewer", "n1")],
+            agg._SETS_API: [self.set],
+        }
+        p = mock.patch.object(agg, "k8s", FakeLists(self.lists))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def only_set(self):
+        [s] = agg.mxl_graph()["sets"]
+        return s
+
+    def leg(self, s, member):
+        return next(l for l in s["legs"] if l["member"] == member)
+
+    def test_a_member_on_the_merge_node_is_a_local_leg(self):
+        leg = self.leg(self.only_set(), self.A)
+        self.assertEqual((leg["local"], leg["phase"], leg["source"]), (True, "Local", "n1"))
+
+    def test_a_remote_leg_takes_the_mirror_closest_to_carrying_grains(self):
+        leg = self.leg(self.only_set(), self.B)
+        self.assertEqual((leg["local"], leg["phase"]), (False, "Ready"))
+
+    def test_a_remote_leg_without_a_mirror_says_so(self):
+        self.lists[f"{self.MXL}/mxlflowmirrors"] = []
+        self.assertEqual(self.leg(self.only_set(), self.B)["phase"], "NoMirror")
+
+    def test_a_leg_without_the_mirror_list_is_unknown(self):
+        self.lists[f"{self.MXL}/mxlflowmirrors"] = RuntimeError("refused")
+        self.assertEqual(self.leg(self.only_set(), self.B)["phase"], "Unknown")
+        self.assertEqual(self.leg(self.only_set(), self.A)["phase"], "Local")
+
+    def test_a_member_without_an_mxlflow_has_no_origin(self):
+        self.lists[f"{self.MXL}/mxlflows"].pop()
+        s = self.only_set()
+        member = next(m for m in s["members"] if m["id"] == self.B)
+        self.assertFalse(member["exists"])
+        self.assertEqual(self.leg(s, self.B)["phase"], "NoOrigin")
+
+    def test_each_member_names_its_producer(self):
+        members = {m["id"]: m.get("producer") for m in self.only_set()["members"]}
+        self.assertEqual(members, {self.A: "cam-a", self.B: "cam-b"})
+
+    def test_the_sets_producers_are_not_its_readers(self):
+        readers = self.only_set()["readers"]
+        self.assertEqual(readers, [{"function": "viewer", "production": "p", "class": "mxl-reader",
+                                    "node": "n1", "ready": True}])
+
+    def test_a_degraded_member_says_how_and_a_stale_condition_is_dropped(self):
+        self.set["status"]["conditions"].append({"type": "OutputReady", "status": "False",
+                                                 "observedGeneration": 1})
+        s = self.only_set()
+        self.assertEqual(s["valid"], {"status": "True"})
+        self.assertEqual(s["membersReady"], {"status": "False", "reason": "MemberStale", "message": "b is stale"})
+        self.assertNotIn("outputReady", s)
+
+    def test_a_current_output_ready_is_reported(self):
+        self.set["status"]["conditions"].append({"type": "OutputReady", "status": "False",
+                                                 "reason": "NoGateway", "observedGeneration": 2})
+        self.assertEqual(self.only_set()["outputReady"], {"status": "False", "reason": "NoGateway"})
+
+    def test_the_graph_survives_sets_that_cannot_be_read(self):
+        self.lists[agg._SETS_API] = RuntimeError("refused")
+        g = agg.mxl_graph()
+        self.assertEqual(g["sets"], [])
+        self.assertIn(agg._SETS_API, g["degraded"])
+        self.assertEqual(len(g["flows"]), 2)
+
+    def test_the_kind_comes_from_the_members(self):
+        self.assertEqual(self.only_set()["kind"], "video")
+
+
+class MxlGraphEngines(unittest.TestCase):
+    """A redundant switchframe runs engine a on one node and engine b on
+    another. Each engine writes its own program flows and reads its inputs
+    where it runs; a set per essence merges the two engines' programs."""
+
+    INPUT = "11111111-0000-4000-8000-000000000001"
+    PROG_A = "aaaaaaaa-0000-4000-8000-0000000000a1"
+    PROG_B = "bbbbbbbb-0000-4000-8000-0000000000b1"
+    OUT = "cccccccc-0000-4000-8000-0000000000c1"
+    MXL = agg._MXL_API
+
+    def setUp(self):
+        params = {"inputs": [{"mxl": {"videoFlowId": self.INPUT}}],
+                  "outputs": [{"mxl": {"videoFlowId": self.PROG_A, "redundantVideoFlowId": self.OUT,
+                                       "engineB": {"videoFlowId": self.PROG_B}}}],
+                  "redundancy": {"enabled": True}}
+        self.lists = {
+            f"{self.MXL}/mxlflows": [mxl_flow(self.INPUT, "n04"), mxl_flow(self.PROG_A, "n01"),
+                                     mxl_flow(self.PROG_B, "n06")],
+            f"{self.MXL}/mxlflowmirrors": [],
+            agg._FUNCTIONS_API: [
+                media_function("p", "sf", "switchframe", params),
+                media_function("p", "ingest", "srt-mxl-ingest", {"video_output": {"id": self.INPUT}}),
+                media_function("p", "viewer", "mxl-reader", {"flows": [self.OUT]}),
+            ],
+            agg._ALL_CLAIMS_API: [],
+            agg._PODS_API: [running_pod("p", "sf-a-0", "n01", release="sf"),
+                            running_pod("p", "sf-b-0", "n06", release="sf"),
+                            running_pod("p", "ingest", "n04"), running_pod("p", "viewer", "n06")],
+            agg._SETS_API: [{"metadata": {"name": "sf.video", "generation": 1},
+                             "spec": {"members": [{"flowID": self.PROG_A}, {"flowID": self.PROG_B}],
+                                      "output": {"flowID": self.OUT}},
+                             "status": {"nodes": ["n06"]}}],
+        }
+        p = mock.patch.object(agg, "k8s", FakeLists(self.lists))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def flow(self, g, flow_id):
+        return next(f for f in g["flows"] if f["id"] == flow_id)
+
+    def test_each_engine_writes_its_program_on_its_own_node(self):
+        g = agg.mxl_graph()
+        for flow_id, node in ((self.PROG_A, "n01"), (self.PROG_B, "n06")):
+            f = self.flow(g, flow_id)
+            self.assertEqual((f["producer"]["function"], f["producer"]["node"], f["originNode"]),
+                             ("sf", node, node))
+
+    def test_each_engine_reads_its_input_on_its_own_node(self):
+        ends = self.flow(agg.mxl_graph(), self.INPUT)["consumers"]
+        self.assertEqual(sorted((c["function"], c["node"]) for c in ends), [("sf", "n01"), ("sf", "n06")])
+
+    def test_every_member_is_produced_by_its_switchframe(self):
+        [s] = agg.mxl_graph()["sets"]
+        self.assertEqual({m["producer"] for m in s["members"]}, {"sf"})
+        self.assertEqual(s["readers"][0]["function"], "viewer")
+
+    def test_an_engine_being_deleted_is_no_reader(self):
+        self.lists[agg._PODS_API][1] = running_pod("p", "sf-b-0", "n06", release="sf", deleting=True)
+        ends = self.flow(agg.mxl_graph(), self.INPUT)["consumers"]
+        self.assertEqual([(c["function"], c["node"]) for c in ends], [("sf", "n01")])
+
+    def test_engine_b_counts_only_with_redundancy(self):
+        params = self.lists[agg._FUNCTIONS_API][0]["spec"]["parameters"]
+        self.assertEqual(agg._switchframe_outputs("switchframe", params), [self.PROG_A, self.PROG_B])
+        params["redundancy"]["enabled"] = False
+        self.assertEqual(agg._switchframe_outputs("switchframe", params), [self.PROG_A])
+        self.assertEqual(agg._switchframe_outputs("compositor", params), [])
+
+
 if __name__ == "__main__":
     unittest.main()
