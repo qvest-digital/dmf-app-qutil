@@ -2942,6 +2942,149 @@ class NoisyFabricPerNode(NoisyBase):
         self.assertNotIn("network", p)
 
 
+def _rfc3339(offset_secs):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset_secs))
+
+
+def page_claim(name, component, phase="Bound", end=3600, deleting=False,
+               manager=None, **labels):
+    """A claim one of the pages booked: phase, window end in seconds from now
+    (None for no window), and whether it is being deleted."""
+    meta = {"name": name, "labels": {
+        agg._GEN_LABEL_MANAGED: manager or agg.GEN_MANAGER,
+        agg._GEN_LABEL_COMPONENT: component, **labels}}
+    if deleting:
+        meta["deletionTimestamp"] = _rfc3339(-10)
+    spec = {"className": "x", "parameters": {}}
+    if end is not None:
+        spec["booking"] = {"window": {"end": _rfc3339(end)}}
+    return {"metadata": meta, "spec": spec, "status": {"phase": phase}}
+
+
+class Prune(unittest.TestCase):
+    """POST /api/prune releases every page-booked claim whose function has
+    ended, so weeks of Expired generators and readers do not have to be
+    released one row at a time -- and nothing that still runs, nor anything
+    this app did not book, is in its reach."""
+
+    def cluster(self, *claims, fail=()):
+        self.k8s = FakeClaims(claims=claims)
+        real_json = self.k8s.k8s_json
+
+        def k8s_json(path, method="GET", body=None):
+            if method == "DELETE" and path.rsplit("/", 1)[1] in fail:
+                self.k8s.calls.append((method, path))
+                return 500, {"error": "the server is on fire"}
+            return real_json(path, method, body)
+
+        patches = [
+            mock.patch.object(agg, "GEN_ENABLED", True),
+            mock.patch.object(agg, "BOOKING_ENABLED", True),
+            mock.patch.object(agg, "NOISY_ENABLED", True),
+            mock.patch.object(agg, "safe_k8s", self.k8s.safe_k8s),
+            mock.patch.object(agg, "k8s_json", k8s_json),
+            mock.patch.object(agg, "snapshot_drop", lambda *a, **k: None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return self.k8s
+
+    def test_releases_every_component_in_an_ended_phase(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
+            page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Released"),
+            page_claim("booked-b-0001", agg._BOOKING_COMPONENT, phase="Failed"),
+            page_claim("noisy-n-0001", agg._NOISY_COMPONENT, phase="Expired"))
+        code, res = agg.prune()
+        self.assertEqual(code, 200)
+        want = ["generator-a-0001", "generator-r-0001", "booked-b-0001", "noisy-n-0001"]
+        self.assertEqual(sorted(res["removed"]), sorted(want))
+        self.assertEqual(res["failed"], [])
+        self.assertEqual(sorted(k8s.deleted()), sorted(want))
+
+    def test_a_bound_claim_past_its_window_is_outdated(self):
+        k8s = self.cluster(page_claim("generator-a-0001", agg._GEN_COMPONENT, end=-60))
+        code, res = agg.prune()
+        self.assertEqual(code, 200)
+        self.assertEqual(res["removed"], ["generator-a-0001"])
+        self.assertEqual(k8s.deleted(), ["generator-a-0001"])
+
+    def test_leaves_live_claims_alone(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT),
+            page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Pending"),
+            page_claim("booked-b-0001", agg._BOOKING_COMPONENT, end=None),
+            page_claim("noisy-n-0001", agg._NOISY_COMPONENT))
+        code, res = agg.prune()
+        self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_never_reaches_a_claim_this_app_did_not_book(self):
+        k8s = self.cluster(
+            page_claim("writer-mxl-1", agg._GEN_COMPONENT, phase="Expired", manager="Helm"),
+            page_claim("generator-x-0001", agg._GEN_COMPONENT, phase="Expired",
+                       manager="someone-else"),
+            page_claim("generator-y-0001", "something-else", phase="Expired"))
+        code, res = agg.prune()
+        self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_a_claim_already_being_deleted_is_skipped(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired", deleting=True))
+        code, res = agg.prune()
+        self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_reports_a_failed_release_and_releases_the_rest(self):
+        self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
+            page_claim("booked-b-0001", agg._BOOKING_COMPONENT, phase="Expired"),
+            fail=("generator-a-0001",))
+        code, res = agg.prune()
+        self.assertEqual(code, 200)
+        self.assertEqual(res["removed"], ["booked-b-0001"])
+        self.assertEqual(res["failed"], [{"name": "generator-a-0001",
+                                          "error": "the server is on fire"}])
+
+    def test_a_reader_released_with_its_generator_counts_as_removed(self):
+        k8s = self.cluster(
+            page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"),
+            page_claim("generator-r-0001", agg._READER_COMPONENT, phase="Expired",
+                       **{agg._READER_LABEL_GENERATOR: "generator-a-0001"}))
+        code, res = agg.prune()
+        self.assertEqual(code, 200)
+        self.assertEqual(sorted(res["removed"]), ["generator-a-0001", "generator-r-0001"])
+        self.assertEqual(res["failed"], [])
+        self.assertEqual(sorted(k8s.deleted()), ["generator-a-0001", "generator-r-0001"])
+
+    def test_a_disabled_page_is_skipped(self):
+        k8s = self.cluster(page_claim("noisy-n-0001", agg._NOISY_COMPONENT, phase="Expired"))
+        with mock.patch.object(agg, "NOISY_ENABLED", False):
+            code, res = agg.prune()
+        self.assertEqual((code, res), (200, {"removed": [], "failed": []}))
+        self.assertEqual(k8s.deleted(), [])
+
+    def test_a_failed_listing_is_an_error_not_an_empty_prune(self):
+        self.cluster(page_claim("generator-a-0001", agg._GEN_COMPONENT, phase="Expired"))
+        with mock.patch.object(agg, "safe_k8s", lambda *a, **k: {"_error": "timed out"}):
+            code, res = agg.prune()
+        self.assertEqual(code, 503)
+        self.assertIn("timed out", res["error"])
+        self.assertEqual(self.k8s.deleted(), [])
+
+    def test_every_listing_row_flags_what_a_prune_would_release(self):
+        rows = (agg._gen_row, agg._reader_row, agg._booking_row, agg._noisy_row)
+        for row in rows:
+            name = row.__name__
+            self.assertTrue(row(page_claim("a", "c", phase="Expired"))["outdated"], name)
+            self.assertTrue(row(page_claim("a", "c", end=-60))["outdated"], name)
+            self.assertFalse(row(page_claim("a", "c"))["outdated"], name)
+            self.assertFalse(
+                row(page_claim("a", "c", phase="Expired", deleting=True))["outdated"], name)
+
+
 class FakeLists:
     """Stands in for k8s(): a list per API path, an exception where a list is
     refused, and a 404 for any path the cluster does not serve."""
