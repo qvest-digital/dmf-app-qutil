@@ -538,4 +538,34 @@ describe('GeneratorsPage', () => {
     expect(fixture.nativeElement.querySelector('#gen-label')).toBeNull();
     expect(text()).toContain('Booking is switched off on this install');
   });
+
+  /** Expired generators and readers pile up for weeks; the page counts them all
+   *  and one press releases them, then lists what is left without a wait. */
+  it('prunes every outdated generator and reader it lists', async () => {
+    await load(
+      response({
+        generators: [
+          generator({
+            phase: 'Expired',
+            outdated: true,
+            readers: [{ name: 'generator-r-0001', outdated: true }],
+          }),
+          generator({ name: 'generator-live-0001', readers: [{ name: 'generator-r-0002' }] }),
+        ],
+        readers: [{ name: 'generator-r-flow-0001', outdated: true }],
+        orphanReaders: [{ name: 'generator-r-orphan', outdated: true }],
+      }),
+    );
+    const button = fixture.nativeElement.querySelector(
+      'mv-prune-outdated button',
+    ) as HTMLButtonElement;
+    expect(button.textContent).toContain('Prune 4 outdated');
+
+    button.click();
+    const req = http.expectOne('/api/prune');
+    // Only what this page lists: the count on the button is what goes.
+    expect(req.request.body).toEqual({ pages: ['generators'] });
+    req.flush({ removed: ['a', 'b', 'c', 'd'], failed: [] });
+    expect(http.match((req) => req.url === '/api/generators')).toHaveLength(1);
+  });
 });

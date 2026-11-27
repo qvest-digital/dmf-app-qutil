@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subject } from 'rxjs';
 import { MetricsApi } from '../../core/api/metrics-api';
 import { poll } from '../../core/api/poll';
 import { Booking } from '../../core/api/models';
+import { PruneOutdated } from '../../shared/prune-outdated';
 import { classError, parseParams } from './booking-params';
 
 /**
@@ -23,14 +25,16 @@ import { classError, parseParams } from './booking-params';
 @Component({
   selector: 'mv-bookings-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, PruneOutdated],
   templateUrl: './bookings-page.html',
 })
 export class BookingsPage {
   private readonly api = inject(MetricsApi);
+  /** Polls at once, so what a prune released leaves the list without a wait. */
+  protected readonly refresh = new Subject<void>();
 
   /** Same cadence as the generators list: a claim's phase moves in seconds. */
-  private readonly data = poll(3000, () => this.api.bookings());
+  private readonly data = poll(3000, () => this.api.bookings(), this.refresh);
 
   protected readonly enabled = computed(() => this.data()?.enabled !== false);
   protected readonly namespace = computed(() => this.data()?.namespace ?? '');
@@ -54,6 +58,8 @@ export class BookingsPage {
     const names = new Set(polled.map((b) => b.name));
     return [...this.fresh().filter((b) => !names.has(b.name)), ...polled];
   });
+
+  protected readonly outdated = computed(() => this.bookings().filter((b) => b.outdated).length);
 
   protected readonly full = computed(() => {
     const max = this.data()?.max ?? 0;

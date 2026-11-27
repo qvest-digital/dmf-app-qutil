@@ -39,6 +39,8 @@
 #   POST   /api/noisy              -> book one noisy neighbour
 #   POST   /api/noisy/pair         -> book a sink and a sender targeting it
 #   DELETE /api/noisy/<name>       -> release one, and the senders of a sink
+#   POST   /api/prune              -> release every claim the named pages
+#                                    booked whose function has ended
 #   POST   /api/kill/<n>           -> delete the writer-mxl-<n> pod (watch it recover)
 #
 # Runs in-cluster with a scoped ServiceAccount; talks to the API server with the
@@ -2989,18 +2991,29 @@ def _ring_forget(keep):
             del _ring_cache[name]
 
 
+def _claim_ended(claim):
+    """Whether a claim's function is gone or going: being deleted, in an ended
+    phase, or past its window end (or holding one that does not parse)."""
+    meta = claim.get("metadata") or {}
+    status = claim.get("status") or {}
+    if meta.get("deletionTimestamp") or status.get("phase") in _ENDED_PHASES:
+        return True
+    end = (((claim.get("spec") or {}).get("booking") or {}).get("window") or {}).get("end")
+    past = _age_secs(end) if end else -1
+    return past is None or past >= 0
+
+
+def _claim_outdated(claim):
+    """Ended but not yet being deleted: what POST /api/prune releases, and what
+    each listing row flags so a page can say how many there are."""
+    return not (claim.get("metadata") or {}).get("deletionTimestamp") and _claim_ended(claim)
+
+
 def _ring_url(claim):
     """The externalUrl of a claim's ring page while the page is up, or None."""
     meta = claim.get("metadata") or {}
-    status = claim.get("status") or {}
-    handle = status.get("handle") or {}
-    if meta.get("deletionTimestamp") or status.get("phase") in _ENDED_PHASES:
-        return None
-    if not handle.get("ready"):
-        return None
-    end = (((claim.get("spec") or {}).get("booking") or {}).get("window") or {}).get("end")
-    past = _age_secs(end) if end else -1
-    if past is None or past >= 0:
+    handle = (claim.get("status") or {}).get("handle") or {}
+    if _claim_ended(claim) or not handle.get("ready"):
         return None
     ep = next((e for e in handle.get("endpoints") or [] if e.get("name") == "ring"), None)
     if not ep or not ep.get("url") or not ep.get("externalUrl"):
@@ -3021,6 +3034,7 @@ def _reader_row(claim):
         "phase": status.get("phase"),
         "ready": (status.get("handle") or {}).get("ready"),
         "deleting": bool(meta.get("deletionTimestamp")),
+        "outdated": _claim_outdated(claim),
         "reachable": {"status": reachable.get("status"), "reason": reachable.get("reason"),
                       "message": reachable.get("message")} if reachable else None,
         "node": _gen_node(parameters),
@@ -3067,6 +3081,7 @@ def _gen_row(claim):
         "ready": handle.get("ready"),
         # A claim being deleted keeps answering GETs until its finalizers run.
         "deleting": bool(meta.get("deletionTimestamp")),
+        "outdated": _claim_outdated(claim),
         "reachable": {"status": reachable.get("status"), "reason": reachable.get("reason"),
                       "message": reachable.get("message")} if reachable else None,
         "expiresAt": ((claim.get("spec") or {}).get("booking") or {})
@@ -3198,6 +3213,7 @@ def _booking_row(claim):
         "created": meta.get("creationTimestamp"),
         "phase": status.get("phase") or "",
         "ready": bool(handle.get("ready")),
+        "outdated": _claim_outdated(claim),
         "endpoints": [{"name": e.get("name"), "url": e.get("url")}
                       for e in (handle.get("endpoints") or [])],
         "flowIds": _claim_flow_ids(claim),
@@ -4080,6 +4096,7 @@ def _noisy_row(claim, pods=None):
         "phase": status.get("phase"),
         "ready": bool(handle.get("ready")),
         "deleting": bool(meta.get("deletionTimestamp")),
+        "outdated": _claim_outdated(claim),
         "endpoints": endpoints,
         "uiUrl": ui if handle.get("ready") else None,
         "created": meta.get("creationTimestamp"),
@@ -4229,6 +4246,60 @@ def noisy_delete(name):
     snapshot_drop("noisy")
     return 200, {"deleted": name,
                  "error": "senders left behind: " + "; ".join(left) if left else None}
+
+
+# -- Pruning -----------------------------------------------------------------
+def prune(req):
+    """Release every claim the pages named in req["pages"] booked whose
+    function has ended. A page prunes only what it lists, so the count its
+    button shows is what goes.
+
+    Each goes through its page's own delete, so the ownership check and what a
+    release takes with it -- a generator's readers, a sink's senders, the
+    preview paths of its flows -- are the same as for a single row. A page
+    disabled on this install is skipped, as its delete would refuse. A claim
+    already being deleted is on its way out and is not counted.
+
+    200 with {"removed": [...], "failed": [{"name", "error"}]}; 400 on a missing
+    or unknown page; 503 only when a listing fails, since then what is outdated
+    is not known.
+    """
+    pages = {
+        "generators": ((_GEN_COMPONENT, GEN_ENABLED, generator_delete),
+                       (_READER_COMPONENT, GEN_ENABLED, reader_delete)),
+        "bookings": ((_BOOKING_COMPONENT, BOOKING_ENABLED, booking_delete),),
+        "noisy": ((_NOISY_COMPONENT, NOISY_ENABLED, noisy_delete),),
+    }
+    scope = req.get("pages")
+    if (not isinstance(scope, list) or not scope
+            or not all(isinstance(page, str) and page in pages for page in scope)):
+        return 400, {"error": "pages must name one or more of " + ", ".join(pages)}
+    outdated = []
+    for component, enabled, release in (part for page in dict.fromkeys(scope)
+                                        for part in pages[page]):
+        if not enabled:
+            continue
+        claims, err = _page_claims(component)
+        if err:
+            return 503, {"error": f"cannot list claims in {CLAIM_NS}: {err}"}
+        outdated += [((c.get("metadata") or {}).get("name"), release)
+                     for c in claims if _claim_outdated(c)]
+    removed, failed = [], []
+    for name, release in outdated:
+        try:
+            code, res = release(name)
+        except Exception as e:
+            code, res = 500, {"error": str(e)}
+        # 404: released already, by the release of its generator or sink.
+        if code in (200, 404):
+            removed.append(name)
+            # A 200 can still name what its release left behind.
+            error = res.get("error") if code == 200 else None
+        else:
+            error = res.get("error") or f"delete answered {code}"
+        if error:
+            failed.append({"name": name, "error": error})
+    return 200, {"removed": removed, "failed": failed}
 
 
 # -- Serving under load ------------------------------------------------------
@@ -4557,6 +4628,15 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/api/grains/"):
             return self._do_capture()
+        if urllib.parse.urlsplit(self.path).path.rstrip("/") == "/api/prune":
+            body = self._json_body()
+            if body is None:
+                return self._send(400, {"error": "body must be a JSON object of at most 8 KiB"})
+            try:
+                code, res = prune(body)
+            except Exception as e:
+                code, res = 500, {"error": str(e)}
+            return self._send(code, res)
         for route, create in (("/api/noisy", noisy_create),
                               ("/api/noisy/pair", noisy_pair_create)):
             if urllib.parse.urlsplit(self.path).path.rstrip("/") == route:
