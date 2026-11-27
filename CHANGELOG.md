@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.70](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.69...v1.0.0-rc.70) (2026-11-27)
+
+
+### Features
+
+* **ui:** prune outdated claims from the booking pages ([#258](https://github.com/qvest-digital/dmf-app-qutil/issues/258)) ([f499bba](https://github.com/qvest-digital/dmf-app-qutil/commit/f499bba7fd89dbbc0d4f500b89aad227a4599371))
+
 ## [1.0.0-rc.69](https://github.com/qvest-digital/dmf-app-qutil/compare/v1.0.0-rc.68...v1.0.0-rc.69) (2026-11-26)
 
 
